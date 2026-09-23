@@ -184,6 +184,77 @@ PYEOF
   fi
 fi
 
+# --- live-Ollama embeddings (skip-guarded: only when an Ollama daemon with
+# an embed-capable model actually runs on 127.0.0.1:11434) ---
+if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 && curl -s --max-time 2 http://127.0.0.1:11434/api/tags > "$T/ollama_tags.json" 2>/dev/null
+then
+  OLLAMA_MODEL="$(python3 - "$T/ollama_tags.json" <<'PYEOF'
+import json, sys
+tags = json.load(open(sys.argv[1])).get('models', [])
+pref = ['nomic-embed-text', 'bge-m3', 'snowflake-arctic-embed', 'all-minilm', 'mxbai-embed-large', 'qwen3-embedding']
+names = [m.get('name', '') for m in tags]
+for p in pref:
+    if any(n == p or n.startswith(p + ':') for n in names):
+        print(p + ':latest'); break
+else:
+    for n in names:
+        if 'embed' in n:
+            print(n); break
+PYEOF
+)"
+  if [ -n "$OLLAMA_MODEL" ]; then
+    pass=$((pass+1)); printf 'ok   live-ollama-present (%s)\n' "$OLLAMA_MODEL"
+    check live-ollama-enable 0 $TK_BIN config set embedding.enabled true
+    check live-ollama-endpoint 0 $TK_BIN config set embedding.endpoint "http://127.0.0.1:11434"
+    check live-ollama-model 0 $TK_BIN config set embedding.model "$OLLAMA_MODEL"
+    check live-ollama-timeout 0 $TK_BIN config set embedding.timeout_ms 60000
+    $TK_BIN note save "accelerator graph fusion" --text "xla clusters fuse the computation graph across accelerator worker nodes so fused kernels cross device boundaries with minimal host sync" --project demo >/dev/null
+    oid=$("$TK_BIN" note review list --json | python3 -c "import json,sys; print([r['id'] for r in json.load(sys.stdin)['reviews'] if r['title']=='accelerator graph fusion'][0])")
+    check live-ollama-approve 0 $TK_BIN note review approve "$oid"
+    check live-ollama-reindex 0 $TK_BIN note reindex
+    if $TK_BIN note search "fusion across accelerator worker nodes xla" --project demo | grep -q 'accelerator graph fusion'; then
+      pass=$((pass+1)); printf 'ok   live-ollama-search-works\n'
+    else
+      fail=$((fail+1)); printf 'FAIL live-ollama-search-works\n'
+    fi
+    vstored=$(python3 - "$TK_HOME/data/notes/index.db" "$OLLAMA_MODEL" <<'PYEOF'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+print(c.execute('SELECT COUNT(*) FROM notes WHERE embed_model = ? AND embedding IS NOT NULL', (sys.argv[2],)).fetchone()[0])
+PYEOF
+)
+    if [ "$vstored" -ge 1 ]; then
+      pass=$((pass+1)); printf 'ok   live-ollama-vectors-stored (%s)\n' "$vstored"
+    else
+      fail=$((fail+1)); printf 'FAIL live-ollama-vectors-stored\n'
+    fi
+    # incremental cache: unchanged bodies reindexed against a dead endpoint
+    # must keep their vectors (fail-open BM25 still serves, never blocks)
+    check live-ollama-deadendpoint 0 $TK_BIN config set embedding.endpoint "http://127.0.0.1:9"
+    check live-ollama-reindex-cached 0 $TK_BIN note reindex
+    vcached=$(python3 - "$TK_HOME/data/notes/index.db" "$OLLAMA_MODEL" <<'PYEOF'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+print(c.execute('SELECT COUNT(*) FROM notes WHERE embed_model = ? AND embedding IS NOT NULL', (sys.argv[2],)).fetchone()[0])
+PYEOF
+)
+    if [ "$vcached" = "$vstored" ]; then
+      pass=$((pass+1)); printf 'ok   live-ollama-cache-survives (%s)\n' "$vcached"
+    else
+      fail=$((fail+1)); printf 'FAIL live-ollama-cache-survives (%s != %s)\n' "$vcached" "$vstored"
+    fi
+    check live-ollama-search-bm25 0 $TK_BIN note search letsencrypt --project demo
+  else
+    pass=$((pass+1)); printf 'ok   live-ollama-absent (no embed-capable model on daemon)\n'
+  fi
+  check live-ollama-restore-enabled 0 $TK_BIN config set embedding.enabled false
+  check live-ollama-restore-model 0 $TK_BIN config set embedding.model ""
+  check live-ollama-restore-endpoint 0 $TK_BIN config set embedding.endpoint ""
+  check live-ollama-restore-timeout 0 $TK_BIN config set embedding.timeout_ms 3000
+else
+  pass=$((pass+1)); printf 'ok   live-ollama-skipped (no daemon on 127.0.0.1:11434)\n'
+fi
+
 # --- ledger layer ---
 check ledger-update 0 $TK_BIN ledger update demo "demo serves the public API; deploys weekly."
 check ledger-get 0 $TK_BIN ledger get demo

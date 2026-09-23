@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/true-knowledge/tk/internal/cbmexec"
+	"github.com/true-knowledge/tk/internal/trace"
 )
 
 type rpcReq struct {
@@ -78,6 +80,8 @@ type Server struct {
 	// In/Out override stdio (tests). Nil = os.Stdin/os.Stdout.
 	In   io.Reader
 	OutW io.Writer
+	// LogPath is <state>/logs/tk.log ("": no per-call records).
+	LogPath string
 }
 
 // Serve loops on stdin NDJSON; EOF exits 0 immediately.
@@ -134,32 +138,77 @@ func (s *Server) handle(ctx context.Context, req rpcReq) rpcResp {
 		if err := json.Unmarshal(req.Params, &p); err != nil {
 			return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32602, "invalid params"}}
 		}
-		if p.Name == "source_search" {
-			return s.callSourceSearch(ctx, id, p.Arguments)
-		}
-		cbmTool, ok := toolToCBM[p.Name]
-		if !ok {
-			return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32601, fmt.Sprintf("unknown tool %q (tk exposes scout + snippet + source_search)", p.Name)}}
-		}
-		if s.Run == nil {
-			return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, "cbm not installed; run `tk install` (fail-open: continue without graph)"}}
-		}
-		if p.Arguments == nil {
-			p.Arguments = map[string]any{}
-		}
-		out, err := s.Run.Run(ctx, cbmTool, p.Arguments)
-		if err != nil {
-			return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, err.Error()}}
-		}
-		out = cbmexec.Truncate(out, s.Budget)
-		return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{
-			"content": []map[string]any{{"type": "text", "text": out}},
-		}}
+		t0 := time.Now()
+		resp := s.callTool(ctx, id, p.Name, p.Arguments)
+		s.logCall(req.Method, p.Name, p.Arguments, t0, resp)
+		return resp
 	case "ping":
 		return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{}}
 	default:
 		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32601, "method not found: " + req.Method}}
 	}
+}
+
+// callTool dispatches one tool invocation (extracted for timing/records).
+func (s *Server) callTool(ctx context.Context, id any, name string, args map[string]any) rpcResp {
+	if name == "source_search" {
+		return s.callSourceSearch(ctx, id, args)
+	}
+	cbmTool, ok := toolToCBM[name]
+	if !ok {
+		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32601, fmt.Sprintf("unknown tool %q (tk exposes scout + snippet + source_search)", name)}}
+	}
+	if s.Run == nil {
+		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, "cbm not installed; run `tk install` (fail-open: continue without graph)"}}
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	out, err := s.Run.Run(ctx, cbmTool, args)
+	if err != nil {
+		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, err.Error()}}
+	}
+	out = cbmexec.Truncate(out, s.Budget)
+	return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{
+		"content": []map[string]any{{"type": "text", "text": out}},
+	}}
+}
+
+// logCall appends one MCP record to tk.log (best-effort, never fails calls).
+// Coarser than CLI records by design: tool + timing + outcome, no backend
+// breakdown (the single CBM/zoekt call per tool is unambiguous).
+func (s *Server) logCall(method, tool string, args map[string]any, t0 time.Time, resp rpcResp) {
+	if s.LogPath == "" {
+		return
+	}
+	rec := map[string]any{
+		"v":      1,
+		"ts":     t0.Unix(),
+		"dur_ms": time.Since(t0).Milliseconds(),
+		"mcp":    map[string]any{"method": method, "tool": tool, "params": args},
+		"exit":   0,
+	}
+	if resp.Error != nil {
+		rec["exit"] = 1
+		rec["error"] = trace.Redact(resp.Error.Message)
+	} else if text := resultText(resp.Result); text != "" {
+		text = trace.Redact(text)
+		rec["output"] = map[string]any{"chars": len(text), "text": text}
+	}
+	trace.Append(s.LogPath, rec)
+}
+
+func resultText(result any) string {
+	m, ok := result.(map[string]any)
+	if !ok {
+		return ""
+	}
+	content, ok := m["content"].([]map[string]any)
+	if !ok || len(content) == 0 {
+		return ""
+	}
+	text, _ := content[0]["text"].(string)
+	return text
 }
 
 // callSourceSearch serves the zoekt-backed tool (in-process library —

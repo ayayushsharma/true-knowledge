@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -15,7 +15,12 @@ import (
 	"github.com/true-knowledge/tk/internal/gitx"
 	"github.com/true-knowledge/tk/internal/paths"
 	"github.com/true-knowledge/tk/internal/store"
+	"github.com/true-knowledge/tk/internal/trace"
 )
+
+// currentCtx is the invocation under trace. Set by load, read by finalize.
+// Single-threaded CLI path only; MCP records are built inline in handle().
+var currentCtx *Ctx
 
 // Globals are bound to persistent flags.
 type Globals struct {
@@ -26,12 +31,13 @@ type Globals struct {
 
 // Ctx carries resolved state for one invocation.
 type Ctx struct {
-	G     Globals
-	Paths paths.Paths
-	Cfg   config.Config
-	Reg   store.Registry
-	Run   *cbmexec.Runner // nil when CBM binary missing (fail-open)
-	CBMOK bool
+	G      Globals
+	Paths  paths.Paths
+	Cfg    config.Config
+	Reg    store.Registry
+	Run    *cbmexec.Runner // nil when CBM binary missing (fail-open)
+	CBMOK  bool
+	Events []trace.Event // backend operations, recorded into tk.log
 }
 
 // out renders human text or stable JSON envelope.
@@ -54,6 +60,14 @@ func fail(format string, args ...any) error {
 	return errors.New("[tk] " + fmt.Sprintf(format, args...))
 }
 
+// firstLine clips multi-line diagnostics for event records.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
 // load resolves paths + config + registry + optional runner.
 func load(g Globals) (*Ctx, error) {
 	p := paths.Resolve(g.Home)
@@ -73,24 +87,8 @@ func load(g Globals) (*Ctx, error) {
 		c.Run = r
 		c.CBMOK = true
 	}
-	appendHistory(p)
+	currentCtx = c
 	return c, nil
-}
-
-// appendHistory records one JSON line per invocation (ts + argv) for
-// debugging agent sessions. Best-effort: never fails the command.
-// Exit codes and durations are deferred (needs main-level plumbing).
-func appendHistory(p paths.Paths) {
-	line, _ := json.Marshal(map[string]any{"ts": time.Now().Unix(), "argv": os.Args[1:]})
-	if len(os.Args) < 2 {
-		return // bare `tk` (help) is noise; skip it
-	}
-	f, err := os.OpenFile(p.HistoryFile(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	_, _ = f.Write(append(line, '\n'))
 }
 
 func (c *Ctx) saveReg() error {
@@ -117,6 +115,50 @@ func (c *Ctx) needCBM(ctx context.Context) (*cbmexec.Runner, context.Context, er
 		return c.Run, ctx, nil
 	}
 	return nil, ctx, fail("codebase-memory-mcp not installed; run `tk install` (or set TK_CBM_BIN). Facts/graph unavailable — agent may continue without them.")
+}
+
+// record appends a backend event for the unified trace log.
+func (c *Ctx) record(e trace.Event) {
+	c.Events = append(c.Events, e)
+}
+
+func sinceMs(t time.Time) int64 { return time.Since(t).Milliseconds() }
+
+// cbmCall runs one graph tool through the single spawn wrapper,
+// recording timing for tk.log. Use everywhere instead of r.Run.
+func (c *Ctx) cbmCall(ctx context.Context, tool string, payload map[string]any) (string, error) {
+	t0 := time.Now()
+	out, err := c.Run.Run(ctx, tool, payload)
+	ev := trace.Event{Backend: "cbm", Op: tool, Ms: sinceMs(t0), OK: err == nil}
+	if err != nil {
+		ev.Error = firstLine(err.Error())
+	}
+	c.record(ev)
+	return out, err
+}
+
+// cbmRaw runs raw `cbm cli` argv (tk cbm passthrough), recorded.
+func (c *Ctx) cbmRaw(ctx context.Context, argv ...string) (string, error) {
+	t0 := time.Now()
+	out, err := c.Run.RunRaw(ctx, argv...)
+	ev := trace.Event{Backend: "cbm", Op: "cli:" + strings.Join(argv, " "), Ms: sinceMs(t0), OK: err == nil}
+	if err != nil {
+		ev.Error = firstLine(err.Error())
+	}
+	c.record(ev)
+	return out, err
+}
+
+// cbmDaemon runs `cbm daemon ...` (tk daemon, CLI-only), recorded.
+func (c *Ctx) cbmDaemon(ctx context.Context, argv ...string) (string, error) {
+	t0 := time.Now()
+	out, err := c.Run.RunDaemon(ctx, argv...)
+	ev := trace.Event{Backend: "cbm", Op: "daemon:" + strings.Join(argv, " "), Ms: sinceMs(t0), OK: err == nil}
+	if err != nil {
+		ev.Error = firstLine(err.Error())
+	}
+	c.record(ev)
+	return out, err
 }
 
 // projectNames for completion (registry is the source; no live merge,

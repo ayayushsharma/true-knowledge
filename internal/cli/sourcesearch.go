@@ -3,11 +3,13 @@ package cli
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/true-knowledge/tk/internal/cbmexec"
 	"github.com/true-knowledge/tk/internal/gitx"
 	"github.com/true-knowledge/tk/internal/mcp"
+	"github.com/true-knowledge/tk/internal/trace"
 	"github.com/true-knowledge/tk/internal/zoekttext"
 )
 
@@ -20,17 +22,27 @@ import (
 func ensureZoektIndex(ctx context.Context, c *Ctx, name, repoPath string) (string, error) {
 	shards := c.Paths.ZoektShards(name)
 	if head := gitx.Head(repoPath); head != "" {
+		t0 := time.Now()
 		updated, err := zoekttext.IndexRepo(shards, repoPath, name)
+		ms := time.Since(t0).Milliseconds()
+		ev := trace.Event{Backend: "zoekt", Op: "index", Ms: ms, OK: err == nil, Detail: fmt.Sprintf("updated=%v", updated && err == nil)}
+		if err != nil {
+			ev.Error = firstLine(err.Error())
+		}
+		c.record(ev)
 		if err != nil {
 			return "", fmt.Errorf("zoekt index %q: %w", name, err)
 		}
-		if !updated {
-			// Incremental no-op — still record HEAD (shards provably cover it).
-			return head, nil
-		}
 		return head, nil
 	}
-	if err := zoekttext.IndexDir(shards, repoPath, name); err != nil {
+	t0 := time.Now()
+	err := zoekttext.IndexDir(shards, repoPath, name)
+	ev := trace.Event{Backend: "zoekt", Op: "index", Ms: time.Since(t0).Milliseconds(), OK: err == nil, Detail: "plain-dir"}
+	if err != nil {
+		ev.Error = firstLine(err.Error())
+	}
+	c.record(ev)
+	if err != nil {
 		return "", fmt.Errorf("zoekt index %q: %w", name, err)
 	}
 	return "files", nil
@@ -60,7 +72,13 @@ func cmdSourceSearch(g *Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			t0 := time.Now()
 			text, err := mcp.QueryZoekt(cmd.Context(), ctx.Paths.ZoektShards(proj), args[0], files, limit)
+			ev := trace.Event{Backend: "zoekt", Op: "search", Ms: time.Since(t0).Milliseconds(), OK: err == nil}
+			if err != nil {
+				ev.Error = firstLine(err.Error())
+			}
+			ctx.record(ev)
 			if err != nil {
 				return fail("source-search: %v (shards missing? run `tk index %s`)", err, proj)
 			}

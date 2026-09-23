@@ -23,6 +23,7 @@ func cmdMCP(g *Globals) *cobra.Command {
 			}
 			paths := ctx.Paths
 			s.ShardsFor = paths.ZoektShards
+			s.LogPath = ctx.Paths.LogFile()
 			code := s.Serve(context.Background())
 			_ = code
 			return nil

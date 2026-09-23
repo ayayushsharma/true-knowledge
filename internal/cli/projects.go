@@ -121,8 +121,7 @@ func cmdIndex(g *Globals) *cobra.Command {
 			default:
 				return fail("invalid mode %q", mode)
 			}
-			r, _, err := ctx.needCBM(cmd.Context())
-			if err != nil {
+			if _, _, err := ctx.needCBM(cmd.Context()); err != nil {
 				return err
 			}
 			names := args
@@ -137,7 +136,7 @@ func cmdIndex(g *Globals) *cobra.Command {
 				if !ok {
 					return fail("unknown project %q; see `tk status`", n)
 				}
-				out, err := r.Run(cmd.Context(), "index_repository", map[string]any{"repo_path": p.Path, "mode": mode, "name": n})
+				out, err := ctx.cbmCall(cmd.Context(), "index_repository", map[string]any{"repo_path": p.Path, "mode": mode, "name": n})
 				if err != nil {
 					return fail("index %q: %v", n, err)
 				}
@@ -222,14 +221,13 @@ func cmdSync(g *Globals) *cobra.Command {
 					map[string]any{"clean": clean, "indexed": []string{}})
 			}
 			// Dirty: prefer watcher; do one explicit moderate index per dirty project.
-			r, _, err := ctx.needCBM(cmd.Context())
-			if err != nil {
+			if _, _, err := ctx.needCBM(cmd.Context()); err != nil {
 				return ctx.out(cmd, fmt.Sprintf("%d clean, %d dirty but CBM unavailable — watcher will catch up", clean, len(dirty)),
 					map[string]any{"clean": clean, "dirty": dirty})
 			}
 			for _, n := range dirty {
 				p := ctx.Reg[n]
-				if _, err := r.Run(cmd.Context(), "index_repository", map[string]any{"repo_path": p.Path, "mode": ctx.Cfg.IndexMode, "name": n}); err != nil {
+				if _, err := ctx.cbmCall(cmd.Context(), "index_repository", map[string]any{"repo_path": p.Path, "mode": ctx.Cfg.IndexMode, "name": n}); err != nil {
 					return fail("sync %q: %v", n, err)
 				}
 				if head := gitx.Head(p.Path); head != "" {

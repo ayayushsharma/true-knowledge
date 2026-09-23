@@ -28,11 +28,10 @@ func cmdDaemon(g *Globals) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				r, _, err := ctx.needCBM(cmd.Context())
-				if err != nil {
+				if _, _, err := ctx.needCBM(cmd.Context()); err != nil {
 					return err
 				}
-				out, err := r.RunDaemon(cmd.Context(), "daemon", sub)
+				out, err := ctx.cbmDaemon(cmd.Context(), "daemon", sub)
 				// A daemon that reports state on a nonzero exit ("daemon: not
 				// running") answered the question: print its report, exit 0.
 				// Only a total lack of output is a real failure.

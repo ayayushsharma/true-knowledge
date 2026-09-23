@@ -125,6 +125,46 @@ func (r *Runner) RunRaw(ctx context.Context, argv ...string) (string, error) {
 	return out.String(), nil
 }
 
+// RunDaemon invokes a top-level (non-cli) cbm subcommand such as
+// `daemon status|stop` with the same env mapping. CLI-only surface:
+// model-facing MCP must never control daemon lifecycle.
+// Unlike Run/RunRaw, stdout is returned even on failure: daemon commands
+// report state ("daemon: not running") on stdout with a nonzero exit.
+// Callers decide whether that output is the answer (status) or an error.
+func (r *Runner) RunDaemon(ctx context.Context, argv ...string) (string, error) {
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), defaultTimeout)
+		defer cancel()
+	}
+	cmd := exec.CommandContext(ctx, r.Bin, argv...)
+	cmd.Env = append(os.Environ(),
+		"CBM_CACHE_DIR="+r.Paths.CBMCacheDir(),
+		"CBM_RUNTIME_DIR="+r.Paths.CBMRuntimeDir(),
+	)
+	if r.Cfg.AllowedRoot != "" {
+		cmd.Env = append(cmd.Env, "CBM_ALLOWED_ROOT="+r.Cfg.AllowedRoot)
+	}
+	var out, errb bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errb
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(errb.String())
+		if msg == "" {
+			msg = strings.TrimSpace(out.String())
+		}
+		if msg == "" {
+			msg = err.Error()
+		}
+		// Preserve any daemon output for the caller to interpret.
+		if text := strings.TrimSpace(out.String()); text != "" {
+			return text + "\n", fmt.Errorf("cbm daemon failed: %s", firstLine(msg))
+		}
+		return "", fmt.Errorf("cbm daemon failed: %s", firstLine(msg))
+	}
+	return out.String(), nil
+}
+
 func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		return s[:i]

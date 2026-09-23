@@ -38,7 +38,7 @@ type toolDef struct {
 	Description string `json:"description"`
 }
 
-// Tools exposed by tk mcp (scout-7 + snippet + source_search).
+// Tools exposed by tk mcp (scout profile + snippet + text).
 func tools() []toolDef {
 	return []toolDef{
 		{"list_projects", "List indexed projects with node/edge counts"},
@@ -48,6 +48,8 @@ func tools() []toolDef {
 		{"trace_path", "BFS callers/callees (function_name, direction, depth 1-5)"},
 		{"search_code", "Grep-like text search within indexed files (CBM)"},
 		{"source_search", "Trigram text search via zoekt (pattern, project, files?, limit?)"},
+		{"get_file_outline", "Declarations in one file, in source order (cheap read alternative)"},
+		{"detect_changes", "Working-tree diff mapped to affected symbols + blast radius"},
 		{"get_architecture", "Languages, packages, routes, hotspots overview"},
 		{"get_code_snippet", "Source snippet by qualified name"},
 	}
@@ -60,6 +62,8 @@ var toolToCBM = map[string]string{
 	"search_graph":         "search_graph",
 	"trace_path":           "trace_path",
 	"search_code":          "search_code",
+	"get_file_outline":     "get_file_outline",
+	"detect_changes":       "detect_changes",
 	"get_architecture":     "get_architecture",
 	"get_code_snippet":     "get_code_snippet",
 }

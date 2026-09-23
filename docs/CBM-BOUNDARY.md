@@ -1,7 +1,7 @@
 ---
 title: CBM boundary — what tk never does
 status: authoritative
-date: 2026-09-22
+date: 2026-09-23
 supersedes: [compatible-implementation-spec.md §5.2, §5.3, §12, §13]
 superseded-by: null
 ---
@@ -27,8 +27,9 @@ CBM owns: parsing, graph, store, daemon, watcher, install matrix, UI, artifacts.
 
 * XDG `true-knowledge/` path resolution (see `PATHS-CONFIG.md`).
 * `config.json` source of truth → propagate via env (`CBM_CACHE_DIR`, `CBM_RUNTIME_DIR`, `CBM_ALLOWED_ROOT`) + `cbm config set`.
-* Single spawn wrapper `internal/cbmexec`: `codebase-memory-mcp cli <tool> --json` + budget truncation + fail-open (`tk install` hint, never block agent).
-* `tk mcp` stdio proxy (7 tools): `list_projects, index_status/check_index_coverage, search_graph, trace_path, search_code, get_architecture, get_code_snippet`. `index_repository` gated behind explicit approval.
+* Single spawn wrapper `internal/cbmexec`: `codebase-memory-mcp cli <tool> --args-file <json>` (raw-JSON argv is deprecated upstream) + env + budget truncation + fail-open (`tk install` hint, never block agent). Project required — tk never sends `""`.
+* `tk mcp` stdio proxy (11 tools): scout profile + snippet + `source_search`. `index_repository` gated behind explicit approval.
+* `tk daemon status|stop` is CLI-ONLY: model-facing MCP must never control daemon lifecycle (stopping the shared daemon would strand other agents' watchers). Exists for the documented `watcher_enabled`-flip flow.
 * Cobra completion + `--json` + `--help` for human use without agents.
 
 ## Bug rule

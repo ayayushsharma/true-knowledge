@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -215,6 +216,119 @@ func cmdGrep(g *Globals) *cobra.Command {
 	c.Flags().StringVar(&files, "files", "", "file glob filter")
 	c.Flags().IntVar(&limit, "limit", 20, "max results")
 	c.Flags().BoolVar(&isRegex, "regex", false, "treat pattern as regex (validation error on bad regex)")
+	return c
+}
+
+func cmdOutline(g *Globals) *cobra.Command {
+	var project, labels string
+	var limit int
+	c := &cobra.Command{
+		Use:   "outline <file> [project]",
+		Short: "Declarations in one file, in source order (cheap read alternative)",
+		Example: `  tk outline orders.go demo
+  tk outline src/main.go --label Function`,
+		Args: cobra.MinimumNArgs(1),
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
+			if len(args) == 0 {
+				return nil, cobra.ShellCompDirectiveFilterFileExt
+			}
+			if ctx, err := load(*g); err == nil {
+				return ctx.projectNames(), cobra.ShellCompDirectiveNoFileComp
+			}
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, err := load(*g)
+			if err != nil {
+				return err
+			}
+			proj, err := requireProject(ctx, project, args)
+			if err != nil {
+				return err
+			}
+			file := repoRelative(ctx, proj, args[0])
+			r, _, err := ctx.needCBM(cmd.Context())
+			if err != nil {
+				return err
+			}
+			payload := map[string]any{"project": proj, "file_path": file, "limit": limit}
+			if labels != "" {
+				payload["labels"] = strings.Split(labels, ",")
+			}
+			out, err := r.Run(cmd.Context(), "get_file_outline", payload)
+			if err != nil {
+				return fail("%v", err)
+			}
+			return ctx.out(cmd, cbmexec.Truncate(out, ctx.budget("")), map[string]any{"project": proj, "file": file})
+		},
+	}
+	c.Flags().StringVar(&project, "project", "", "project name")
+	c.Flags().StringVar(&labels, "label", "", "comma-separated node-label filter")
+	c.Flags().IntVar(&limit, "limit", 100, "max declarations")
+	return c
+}
+
+// repoRelative makes absolute paths repo-relative when they sit under the
+// project root; CBM requires repository-relative file paths.
+func repoRelative(ctx *Ctx, proj, file string) string {
+	if !filepath.IsAbs(file) {
+		return file
+	}
+	if p, ok := ctx.Reg[proj]; ok {
+		if rel, err := filepath.Rel(p.Path, file); err == nil && !strings.HasPrefix(rel, "..") {
+			return rel
+		}
+	}
+	return file
+}
+
+func cmdImpact(g *Globals) *cobra.Command {
+	var project, direction string
+	var depth, limit int
+	c := &cobra.Command{
+		Use:   "impact [project]",
+		Short: "Map working-tree diff to affected symbols + blast radius",
+		Example: `  tk impact demo
+  tk impact --direction outbound --depth 3`,
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
+			if len(args) == 0 {
+				if ctx, err := load(*g); err == nil {
+					return ctx.projectNames(), cobra.ShellCompDirectiveNoFileComp
+				}
+			}
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, err := load(*g)
+			if err != nil {
+				return err
+			}
+			proj, err := requireProject(ctx, project, args)
+			if err != nil {
+				return err
+			}
+			switch direction {
+			case "inbound", "outbound", "both":
+			default:
+				return fail("invalid --direction %q (want inbound|outbound|both)", direction)
+			}
+			r, _, err := ctx.needCBM(cmd.Context())
+			if err != nil {
+				return err
+			}
+			out, err := r.Run(cmd.Context(), "detect_changes", map[string]any{
+				"project": proj, "direction": direction, "depth": depth, "limit": limit,
+			})
+			if err != nil {
+				return fail("%v", err)
+			}
+			return ctx.out(cmd, cbmexec.Truncate(out, ctx.budget("")), map[string]any{"project": proj})
+		},
+	}
+	c.Flags().StringVar(&project, "project", "", "project name")
+	c.Flags().StringVar(&direction, "direction", "inbound", "inbound|outbound|both")
+	c.Flags().IntVar(&depth, "depth", 2, "traversal depth")
+	c.Flags().IntVar(&limit, "limit", 50, "max rows")
 	return c
 }
 

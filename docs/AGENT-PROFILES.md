@@ -16,7 +16,7 @@ Target: 27B-class agent (32k-128k context, real tool-calling). Sub-8B models are
 
 | Profile | Tools (tk mcp) | Budgets | Use |
 |---|---|---|---|
-| `scout` (default for 27B) | `list_projects, check_index_coverage, search_graph, trace_path, search_code, source_search, get_architecture, get_code_snippet` (8) | `default 6000 chars, arch 2200, toc 700`; whole-record truncate + `...truncated` + `cursor/has_more` | autonomous dev |
+| `scout` (default for 27B) | `list_projects, check_index_coverage, index_status, search_graph, trace_path, search_code, source_search, get_file_outline, detect_changes, get_architecture, get_code_snippet` (11) | `default 6000 chars, arch 2200, toc 700`; whole-record truncate + `...truncated` + `cursor/has_more` | autonomous dev |
 | `analysis` | scout + `query_graph` (Cypher) + `manage_adr` passthrough | same budgets | deep/debug, explicit opt-in |
 | `minimal` | `check_index_coverage, search_graph, get_code_snippet` (3) | `default 2000` | <8B filters, IDE inline |
 

@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/true-knowledge/tk/internal/cbmexec"
@@ -75,15 +76,26 @@ type Server struct {
 	Out    *os.File
 	// ShardsFor maps project -> zoekt shard dir.
 	ShardsFor func(project string) string
+	// In/Out override stdio (tests). Nil = os.Stdin/os.Stdout.
+	In   io.Reader
+	OutW io.Writer
 }
 
 // Serve loops on stdin NDJSON; EOF exits 0 immediately.
 func (s *Server) Serve(ctx context.Context) int {
-	in := bufio.NewScanner(os.Stdin)
-	in.Buffer(make([]byte, 1024*1024), 1024*1024)
-	enc := json.NewEncoder(os.Stdout)
-	for in.Scan() {
-		line := in.Bytes()
+	in := s.In
+	if in == nil {
+		in = os.Stdin
+	}
+	out := s.OutW
+	if out == nil {
+		out = os.Stdout
+	}
+	sc := bufio.NewScanner(in)
+	sc.Buffer(make([]byte, 1024*1024), 1024*1024)
+	enc := json.NewEncoder(out)
+	for sc.Scan() {
+		line := sc.Bytes()
 		if len(line) == 0 {
 			continue
 		}

@@ -1,8 +1,8 @@
 ---
 title: Roadmap — MVP1 through MVP4
 status: authoritative
-date: 2026-09-23
-supersedes: [compatible-implementation-spec.md §20, docs/DECISIONS/2026-09-22-thin-tk-over-cbm.md (scope), docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (mvp2 non-fleet scope), docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (mvp3 scope)]
+date: 2026-09-24
+supersedes: [compatible-implementation-spec.md §20, docs/DECISIONS/2026-09-22-thin-tk-over-cbm.md (scope), docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (mvp2 non-fleet scope), docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (mvp3 scope), docs/DECISIONS/2026-09-24-evals-harness.md (mvp4 evals design)]
 superseded-by: null
 ---
 
@@ -49,7 +49,7 @@ Locked decisions: Go-only thin `tk` over CBM, Linux-style `true-knowledge/` dirs
 ## MVP4 — human UX + hardening (deferred)
 
 * Rich terminal: fuzzy picker, `history`, `completion-install`, man pages, `status --watch`.
-* Evals: frozen-SHA `PASS/PARTIAL/FAIL` + tokens/tool-calls for 27B + <8B filter smoke.
+* Evals: frozen-SHA `PASS/PARTIAL/FAIL` + tokens/tool-calls for 27B + <8B filter smoke. **Design locked (not built):** `docs/DECISIONS/2026-09-24-evals-harness.md` — committed frozen fixture + `tests/evals/run.sh` (fake-CBM default, `TK_LIVE=1` opt-in), rule-based record verdicts, `est_tokens = chars/4` proxy, no `tk eval` subcommand, self-judging 27B scorer deferred to phase 2.
 * Ops: diagnostics (`trajectory.ndjson`), resource-limit surfacing, packaging (`brew/nix/npm`), team `.zst` cadence.
 * Done when: human-only register→index→explain→sync completes with TAB everywhere, no agent.
 

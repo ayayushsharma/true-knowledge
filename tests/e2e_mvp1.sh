@@ -221,6 +221,41 @@ out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
 if [ "$n" = "3" ]; then pass=$((pass+1)); printf 'ok   mcp-tools-minimal-3\n';
 else fail=$((fail+1)); printf 'FAIL mcp-tools-minimal (n=%s)\n' "$n"; fi
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | $TK_BIN mcp --tool-profile memory)
+n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
+if [ "$n" = "20" ]; then pass=$((pass+1)); printf 'ok   mcp-tools-memory-20\n';
+else fail=$((fail+1)); printf 'FAIL mcp-tools-memory (n=%s)\n' "$n"; fi
+# memory profile: in-process tools work even though CBM was killed in live mode
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mem_save","arguments":{"topic":"deploy-tool","value":"make deploy ship it","scope":"project","project":"demo","provenance":"e2e"}}}' | $TK_BIN mcp --tool-profile memory 2>/dev/null)
+case "$out" in
+  *'saved fact'*) pass=$((pass+1)); printf 'ok   mcp-mem-save\n';;
+  *) fail=$((fail+1)); printf 'FAIL mcp-mem-save\n  %s\n' "$out";;
+esac
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"mem_recall","arguments":{"topic":"deploy-tool","project":"demo"}}}' | $TK_BIN mcp --tool-profile memory 2>/dev/null)
+case "$out" in
+  *'make deploy ship it'*) pass=$((pass+1)); printf 'ok   mcp-mem-recall\n';;
+  *) fail=$((fail+1)); printf 'FAIL mcp-mem-recall\n  %s\n' "$out";;
+esac
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"mem_save","arguments":{"topic":"creds","value":"sk-a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0","scope":"project","project":"demo"}}}' | $TK_BIN mcp --tool-profile memory 2>/dev/null)
+case "$out" in
+  *'for review'*) pass=$((pass+1)); printf 'ok   mcp-mem-secret-queued\n';;
+  *) fail=$((fail+1)); printf 'FAIL mcp-mem-secret-queued\n  %s\n' "$out";;
+esac
+if printf '%s\n' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"mem_review","arguments":{"action":"list"}}}' | $TK_BIN mcp --tool-profile memory 2>/dev/null | grep -q 'sk-a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0'; then
+  fail=$((fail+1)); printf 'FAIL mcp-mem-secret-masked\n'
+else
+  pass=$((pass+1)); printf 'ok   mcp-mem-secret-masked\n'
+fi
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"note_search","arguments":{"query":"letsencrypt","project":"demo"}}}' | $TK_BIN mcp --tool-profile memory 2>/dev/null)
+case "$out" in
+  *'tls config'*) pass=$((pass+1)); printf 'ok   mcp-note-search\n';;
+  *) fail=$((fail+1)); printf 'FAIL mcp-note-search\n  %s\n' "$out";;
+esac
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"ledger_update","arguments":{"project":"demo","text":"demo serves the API and owns the tls config"}}}' | $TK_BIN mcp --tool-profile memory 2>/dev/null)
+case "$out" in
+  *'updated ledger'*) pass=$((pass+1)); printf 'ok   mcp-ledger-update\n';;
+  *) fail=$((fail+1)); printf 'FAIL mcp-ledger-update\n  %s\n' "$out";;
+esac
 # NOTE: zoekt is a linked library, not a backend binary — the fake only
 # stubs CBM, so source_search genuinely succeeds in both modes.
 out=$(printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"source_search","arguments":{"pattern":"Demo","project":"demo"}}}' | $TK_BIN mcp 2>/dev/null)

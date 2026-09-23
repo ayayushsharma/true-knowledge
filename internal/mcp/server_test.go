@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/true-knowledge/tk/internal/memory"
 	"github.com/true-knowledge/tk/internal/zoekttext"
 )
 
@@ -28,6 +29,15 @@ func serveOne(t *testing.T, s *Server, line string) map[string]any {
 	return resp
 }
 
+func responseText(t *testing.T, resp map[string]any) string {
+	t.Helper()
+	result, ok := resp["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected result, got %v", resp)
+	}
+	return result["content"].([]any)[0].(map[string]any)["text"].(string)
+}
+
 func TestToolsListCount(t *testing.T) {
 	tests := []struct {
 		profile string
@@ -39,6 +49,7 @@ func TestToolsListCount(t *testing.T) {
 		{"scout", 11, nil, nil},
 		{"analysis", 14, []string{"validate", "query_graph", "manage_adr"}, nil},
 		{"minimal", 3, []string{"check_index_coverage", "search_graph", "get_code_snippet"}, []string{"source_search", "detect_changes"}},
+		{"memory", 20, []string{"mem_save", "mem_recall", "mem_review", "note_save", "note_search", "note_toc", "note_reindex", "note_review", "ledger_update"}, []string{"validate"}},
 	}
 	for _, tc := range tests {
 		resp := serveOne(t, &Server{Profile: tc.profile}, `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
@@ -217,5 +228,95 @@ func TestSourceSearchPanicContained(t *testing.T) {
 	}
 	if !strings.Contains(errObj["message"].(string), "shard boom") {
 		t.Fatalf("message = %q", errObj["message"])
+	}
+}
+
+// openTestMemStore wires a real memory.Store on a temp TK_HOME tree.
+func openTestMemStore(t *testing.T) *memory.Store {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "data")
+	facts, err := memory.OpenFacts(context.Background(), filepath.Join(root, "mem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes, err := memory.OpenNotes(context.Background(), filepath.Join(root, "notes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ldg, err := memory.OpenLedger(filepath.Join(root, "ledger"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = notes.Close() })
+	return &memory.Store{Facts: facts, Notes: notes, Ledger: ldg, LedgerBudget: 1500, NotesTocBudget: 700}
+}
+
+// TestMemoryToolsWorkWithoutCBM: memory-profile tools must succeed even when
+// the graph backend is absent.
+func TestMemoryToolsWorkWithoutCBM(t *testing.T) {
+	s := &Server{Profile: ProfileMemory, Budget: 6000, Mem: openTestMemStore(t)}
+
+	resp := serveOne(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"mem_save","arguments":{"topic":"db","value":"postgres","scope":"project","project":"demo","provenance":"e2e"}}}`)
+	if text := responseText(t, resp); !strings.Contains(text, "saved fact") {
+		t.Fatalf("mem_save = %q", text)
+	}
+	resp = serveOne(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"mem_recall","arguments":{"topic":"db","project":"demo"}}}`)
+	if text := responseText(t, resp); !strings.Contains(text, "postgres") {
+		t.Fatalf("mem_recall = %q", text)
+	}
+	resp = serveOne(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"note_save","arguments":{"title":"tls","text":"certs rotate monthly","project":"demo"}}}`)
+	if text := responseText(t, resp); !strings.Contains(text, "for review") {
+		t.Fatalf("note_save = %q", text)
+	}
+	resp = serveOne(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"note_review","arguments":{"action":"list"}}}`)
+	if text := responseText(t, resp); !strings.Contains(text, "tls") {
+		t.Fatalf("note_review list = %q", text)
+	}
+	id := ""
+	for _, line := range strings.Split(responseText(t, resp), "\n") {
+		if strings.Contains(line, "tls") {
+			id = strings.Fields(line)[0]
+		}
+	}
+	if id == "" {
+		t.Fatal("no note review id")
+	}
+	resp = serveOne(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"note_review","arguments":{"action":"approve","id":"`+id+`"}}}`)
+	if text := responseText(t, resp); !strings.Contains(text, "approved note") {
+		t.Fatalf("note_review approve = %q", text)
+	}
+	resp = serveOne(t, s, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"note_search","arguments":{"query":"certs","project":"demo"}}}`)
+	if text := responseText(t, resp); !strings.Contains(text, "certs rotate monthly") {
+		t.Fatalf("note_search = %q", text)
+	}
+	resp = serveOne(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"ledger_update","arguments":{"project":"demo","text":"demo serves the API"}}}`)
+	if text := responseText(t, resp); !strings.Contains(text, "updated ledger") {
+		t.Fatalf("ledger_update = %q", text)
+	}
+}
+
+// TestMemorySecretsMasked: secret-looking saved values must be masked, not
+// echoed, in memory tool output.
+func TestMemorySecretsMasked(t *testing.T) {
+	s := &Server{Profile: ProfileMemory, Budget: 6000, Mem: openTestMemStore(t)}
+	resp := serveOne(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"mem_save","arguments":{"topic":"keys","value":"sk-abcdefghijklmnopqrstuvwxyz123456","scope":"project","project":"demo"}}}`)
+	text := responseText(t, resp)
+	if strings.Contains(text, "sk-abcdefghijklmnopqrstuvwxyz123456") {
+		t.Fatalf("secret leaked into output: %q", text)
+	}
+	resp = serveOne(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mem_review","arguments":{"action":"list"}}}`)
+	text = responseText(t, resp)
+	if strings.Contains(text, "sk-abcdefghijklmnopqrstuvwxyz123456") {
+		t.Fatalf("secret leaked into review list: %q", text)
+	}
+}
+
+// TestMemoryProfileGateKept: memory tools are not exposed outside the profile.
+func TestMemoryProfileGateKept(t *testing.T) {
+	resp := serveOne(t, &Server{Profile: ProfileScout, Mem: openTestMemStore(t)},
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"mem_save","arguments":{}}}`)
+	errObj := resp["error"].(map[string]any)
+	if errObj["code"].(float64) != -32601 {
+		t.Fatalf("code = %v", errObj["code"])
 	}
 }

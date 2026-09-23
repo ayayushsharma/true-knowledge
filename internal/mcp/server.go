@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/true-knowledge/tk/internal/cbmexec"
+	"github.com/true-knowledge/tk/internal/memory"
 	"github.com/true-knowledge/tk/internal/trace"
 )
 
@@ -43,12 +44,27 @@ type toolDef struct {
 }
 
 // Profile names. scout (11) is default; analysis adds demo/power tools;
-// minimal keeps the fast filter trio for <8B models.
+// minimal keeps the fast filter trio for <8B models; memory joins the scout
+// surface with tk's 9 in-process memory tools (20 total) and works without CBM.
 const (
 	ProfileScout    = "scout"
 	ProfileAnalysis = "analysis"
 	ProfileMinimal  = "minimal"
+	ProfileMemory   = "memory"
 )
+
+// memoryTools are the tk-owned, in-process memory tools (no CBM needed).
+var memoryTools = []toolDef{
+	{"mem_save", "Store (or queue for review) a durable fact: topic, value, scope project|global, project, provenance"},
+	{"mem_recall", "Recall facts by topic: project-scoped first, then global"},
+	{"mem_review", "Facts review queue: action=list | approve|reject with id"},
+	{"note_save", "Capture a note (title, text, project) into the review queue"},
+	{"note_search", "Search approved notes (BM25 + optional embedding fusion)"},
+	{"note_toc", "Approved note titles only, budgeted, newest first"},
+	{"note_reindex", "Rebuild the FTS index from the markdown sources of truth"},
+	{"note_review", "Notes review queue: action=list | approve|reject with id"},
+	{"ledger_update", "Replace a project's working-truth ledger (bounded full-text)"},
+}
 
 // tools returns the profile-dependent surface.
 func tools(profile string) []toolDef {
@@ -72,6 +88,8 @@ func tools(profile string) []toolDef {
 			base[3],  // search_graph
 			base[10], // get_code_snippet
 		}
+	case ProfileMemory:
+		return append(base, memoryTools...)
 	case ProfileAnalysis:
 		return append(base,
 			toolDef{"query_graph", "Read-only Cypher-style graph query (max_rows guardrail)"},
@@ -115,6 +133,9 @@ type Server struct {
 	OutW io.Writer
 	// LogPath is <state>/logs/tk.log ("": no per-call records).
 	LogPath string
+	// Mem is the in-process memory backend (facts/notes/ledger). Nil means
+	// the memory profile tools error out; graph tools never need it.
+	Mem *memory.Store
 }
 
 // Serve loops on stdin NDJSON; EOF exits 0 immediately.
@@ -149,7 +170,7 @@ func (s *Server) Serve(ctx context.Context) int {
 // profile returns the normalized profile (default scout).
 func (s *Server) profile() string {
 	switch s.Profile {
-	case ProfileAnalysis, ProfileMinimal:
+	case ProfileAnalysis, ProfileMinimal, ProfileMemory:
 		return s.Profile
 	default:
 		return ProfileScout
@@ -201,12 +222,14 @@ func (s *Server) callTool(ctx context.Context, id any, name string, args map[str
 	if !s.hasTool(name) {
 		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32601, fmt.Sprintf("unknown tool %q (profile %s: %s)", name, s.profile(), strings.Join(s.toolNames(), ", "))}}
 	}
-	if s.Run == nil {
-		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, "cbm not installed; run `tk install` (fail-open: continue without graph)"}}
-	}
-	_ = id
 	if args == nil {
 		args = map[string]any{}
+	}
+	if isMemoryTool(name) {
+		return s.callMemory(ctx, id, name, args)
+	}
+	if s.Run == nil {
+		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, "cbm not installed; run `tk install` (fail-open: continue without graph)"}}
 	}
 	if name == "validate" {
 		return s.callValidate(ctx, id, args)

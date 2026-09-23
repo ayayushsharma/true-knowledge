@@ -9,23 +9,15 @@ import (
 	"github.com/true-knowledge/tk/internal/cbmexec"
 )
 
-// coverageVerdict asks CBM whether the serving index covers proj.
+// coverageVerdict probes whole-project coverage (scopes=.) via CBM.
 // Returns a one-line verdict for absence annotations.
 func coverageVerdict(ctx context.Context, c *Ctx, proj string) (string, error) {
-	out, err := c.cbmCallJSON(ctx, "check_index_coverage", map[string]any{"project": proj})
+	out, err := c.cbmCallJSON(ctx, "check_index_coverage",
+		map[string]any{"project": proj, "scopes": []string{"."}})
 	if err != nil {
 		return "", err
 	}
-	t := strings.TrimSpace(out)
-	if t == "" {
-		return "coverage: unknown (empty reply)", nil
-	}
-	lower := strings.ToLower(t)
-	if strings.Contains(lower, "gap") || strings.Contains(lower, "stale") ||
-		strings.Contains(lower, "missing") || strings.Contains(lower, "unindexed") {
-		return "coverage: GAP — " + firstLine(t), nil
-	}
-	return "coverage: clean — " + firstLine(t), nil
+	return cbmexec.CoverageVerdict(out), nil
 }
 
 // annotateAbsence appends a coverage verdict to empty output.

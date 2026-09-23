@@ -215,6 +215,13 @@ func (s *Server) callTool(ctx context.Context, id any, name string, args map[str
 	if cbmTool == "" {
 		cbmTool = name // query_graph / manage_adr passthrough
 	}
+	if cbmTool == "check_index_coverage" {
+		_, hasPaths := args["paths"].([]any)
+		_, hasScopes := args["scopes"].([]any)
+		if !hasPaths && !hasScopes {
+			args["scopes"] = []string{"."} // whole-project probe
+		}
+	}
 	out, err := s.Run.RunJSON(ctx, cbmTool, args)
 	if err != nil {
 		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, err.Error()}}
@@ -272,15 +279,11 @@ func (s *Server) callValidate(ctx context.Context, id any, args map[string]any) 
 		}}
 	}
 coverage:
-	out, cerr := s.Run.RunJSON(ctx, "check_index_coverage", map[string]any{"project": project})
+	out, cerr := s.Run.RunJSON(ctx, "check_index_coverage", map[string]any{"project": project, "scopes": []string{"."}})
 	if cerr != nil {
 		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, "no exact hit and coverage check failed: " + cerr.Error() + " — absence unverified"}}
 	}
-	verdict := "coverage: clean — " + cbmexec.FirstLine(out)
-	if strings.Contains(strings.ToLower(out), "gap") || strings.Contains(strings.ToLower(out), "stale") ||
-		strings.Contains(strings.ToLower(out), "missing") || strings.Contains(strings.ToLower(out), "unindexed") {
-		verdict = "coverage: GAP — " + cbmexec.FirstLine(out)
-	}
+	verdict := cbmexec.CoverageVerdict(out)
 	cands := "(no candidates)"
 	if toks := cbmexec.NearMissTokens(sym); len(toks) > 0 {
 		if near, nerr := s.Run.RunJSON(ctx, "search_graph", map[string]any{"name_pattern": toks[0], "project": project, "limit": limit}); nerr == nil && !cbmexec.LooksEmpty(near) {

@@ -119,12 +119,49 @@ func TestQueryGraphPassthrough(t *testing.T) {
 }
 
 type spyRunner struct {
-	tool string
+	tool    string
+	payload map[string]any
 }
 
 func (r *spyRunner) RunJSON(ctx context.Context, tool string, payload map[string]any) (string, error) {
 	r.tool = tool
+	r.payload = payload
 	return "mock-out", nil
+}
+
+// TestCoverageScopesDefault verifies check_index_coverage without explicit
+// paths/scopes probes the whole project.
+func TestCoverageScopesDefault(t *testing.T) {
+	run := &spyRunner{}
+	resp := serveOne(t, &Server{
+		Profile: ProfileAnalysis,
+		Budget:  1024,
+		Run:     run,
+	}, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_index_coverage","arguments":{"project":"p"}}}`)
+	if resp["error"] != nil {
+		t.Fatalf("coverage call failed: %v", resp)
+	}
+	got, ok := run.payload["scopes"].([]string)
+	if !ok || len(got) != 1 || got[0] != "." {
+		t.Fatalf("scopes = %#v, want [.]", run.payload["scopes"])
+	}
+}
+
+// TestCoverageScopesRespected skips the default when explicit scopes given.
+func TestCoverageScopesRespected(t *testing.T) {
+	run := &spyRunner{}
+	resp := serveOne(t, &Server{
+		Profile: ProfileAnalysis,
+		Budget:  1024,
+		Run:     run,
+	}, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_index_coverage","arguments":{"project":"p","scopes":["src"]}}}`)
+	if resp["error"] != nil {
+		t.Fatalf("coverage call failed: %v", resp)
+	}
+	got, ok := run.payload["scopes"].([]any)
+	if !ok || len(got) != 1 || got[0] != "src" {
+		t.Fatalf("scopes = %#v, want [src] untouched", run.payload["scopes"])
+	}
 }
 
 func TestUnknownTool(t *testing.T) {

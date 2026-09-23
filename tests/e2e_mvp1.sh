@@ -30,7 +30,10 @@ case "$tool" in
     else echo '{"ok":true,"results":[]}'; fi;;
   get_code_snippet) echo 'func Demo() {} // fake';;
   trace_path) echo '{"callers":[],"callees":[]}';;
-  get_architecture|query_graph|list_projects|index_status|check_index_coverage|get_file_outline|detect_changes) echo '{"ok":true,"coverage":"clean"}';;
+  get_architecture|query_graph|list_projects|index_status|get_file_outline|detect_changes) echo '{"ok":true,"coverage":"clean"}';;
+  check_index_coverage) echo 'generation_matches: true
+hash_records_complete: true
+recording_status: complete';;
   *) echo "{\"ok\":true,\"tool\":\"$tool\"}";;
 esac
 EOF

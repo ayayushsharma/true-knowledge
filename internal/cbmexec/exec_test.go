@@ -79,6 +79,41 @@ func TestRunJSONFallback(t *testing.T) {
 }
 
 // TestRunJSONEnvelope uses a fake emitting a real MCP envelope.
+func TestCoverageVerdictClean(t *testing.T) {
+	out := "project: demo\ngeneration_matches: true\nhash_records_complete: true\nrecording_status: complete\n"
+	v := cbmexec.CoverageVerdict(out)
+	if v[:15] != "coverage: clean" {
+		t.Fatalf("got %q", v)
+	}
+}
+
+func TestCoverageVerdictGap(t *testing.T) {
+	cases := map[string]string{
+		"stale generation": "generation_matches: false\nrecording_status: complete",
+		"incomplete":       "generation_matches: true\nrecording_status: incomplete",
+		"no projects":      "No projects indexed.",
+	}
+	for name, out := range cases {
+		if v := cbmexec.CoverageVerdict(out); v[:13] != "coverage: GAP" && v[:15] != "coverage: GAP" {
+			t.Fatalf("%s: got %q, want GAP", name, v)
+		}
+	}
+}
+
+func TestLooksEmptyAndTokens(t *testing.T) {
+	if !cbmexec.LooksEmpty("") || !cbmexec.LooksEmpty("No results found") {
+		t.Fatal("empty markers not detected")
+	}
+	if cbmexec.LooksEmpty("results: 2 (cols: qn)") {
+		t.Fatal("non-empty output flagged empty")
+	}
+	got := cbmexec.NearMissTokens("doProcessOrder")
+	want := []string{"process", "order"}
+	if len(got) != len(want) {
+		t.Fatalf("tokens = %q", got)
+	}
+}
+
 func TestRunJSONEnvelope(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "fake-cbm")

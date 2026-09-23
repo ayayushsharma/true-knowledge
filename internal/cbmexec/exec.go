@@ -341,6 +341,33 @@ func NearMissTokens(sym string) []string {
 	return out
 }
 
+// summaryLine picks the first line containing key, else firstLine.
+func summaryLine(t, key string) string {
+	for _, ln := range strings.Split(t, "\n") {
+		if strings.Contains(strings.ToLower(ln), key) {
+			return strings.TrimSpace(ln)
+		}
+	}
+	return firstLine(t)
+}
+
+// CoverageVerdict derives a one-line absence-claim verdict from a
+// check_index_coverage text reply (scopes=whole-project). Fresh + complete
+// recording = clean; anything else counts as a gap (absence unverified).
+func CoverageVerdict(out string) string {
+	t := strings.TrimSpace(out)
+	if t == "" {
+		return "coverage: unknown (empty reply)"
+	}
+	lower := strings.ToLower(t)
+	if strings.Contains(lower, "generation_matches: true") &&
+		strings.Contains(lower, "hash_records_complete: true") &&
+		strings.Contains(lower, "recording_status: complete") {
+		return "coverage: clean — " + summaryLine(t, "recording_status")
+	}
+	return "coverage: GAP — " + summaryLine(t, "generation_matches")
+}
+
 // Truncate cuts text to budget chars preferring whole lines + marker.
 func Truncate(s string, budget int) string {
 	if budget <= 0 || len(s) <= budget {

@@ -25,10 +25,12 @@ else
 tool="$2"
 case "$tool" in
   index_repository) echo '{"status":"indexed"}';;
-  search_graph|search_code) echo '{"ok":true,"results":["fake-hit"]}';;
+  search_graph|search_code)
+    if grep -q 'Demo' "$4" 2>/dev/null; then echo '{"ok":true,"results":[{"name":"Demo","path":"main.go"}]}'
+    else echo '{"ok":true,"results":[]}'; fi;;
   get_code_snippet) echo 'func Demo() {} // fake';;
   trace_path) echo '{"callers":[],"callees":[]}';;
-  get_architecture|query_graph|list_projects|index_status|check_index_coverage|get_file_outline|detect_changes) echo '{"ok":true}';;
+  get_architecture|query_graph|list_projects|index_status|check_index_coverage|get_file_outline|detect_changes) echo '{"ok":true,"coverage":"clean"}';;
   *) echo "{\"ok\":true,\"tool\":\"$tool\"}";;
 esac
 EOF
@@ -75,11 +77,24 @@ check config-validate 0 $TK_BIN config validate
 check daemon-status 0 $TK_BIN daemon status
 check completion 0 $TK_BIN completion bash
 check complete-projects 0 $TK_BIN __complete index ""
+check validate-hit 0 $TK_BIN validate Demo demo
+check validate-miss 0 $TK_BIN validate DoesNotExist demo
+check kg-find-alias 0 $TK_BIN kg_find Demo demo
+check kg-explain-alias 0 $TK_BIN kg_explain Demo demo
+check kg-grep-alias 0 $TK_BIN kg_grep Demo demo
 
 out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | $TK_BIN mcp)
 n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
 if [ "$n" = "11" ]; then pass=$((pass+1)); printf 'ok   mcp-tools-11\n';
 else fail=$((fail+1)); printf 'FAIL mcp-tools (n=%s)\n' "$n"; fi
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | $TK_BIN mcp --tool-profile analysis)
+n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
+if [ "$n" = "14" ]; then pass=$((pass+1)); printf 'ok   mcp-tools-analysis-14\n';
+else fail=$((fail+1)); printf 'FAIL mcp-tools-analysis (n=%s)\n' "$n"; fi
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | $TK_BIN mcp --tool-profile minimal)
+n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
+if [ "$n" = "3" ]; then pass=$((pass+1)); printf 'ok   mcp-tools-minimal-3\n';
+else fail=$((fail+1)); printf 'FAIL mcp-tools-minimal (n=%s)\n' "$n"; fi
 # NOTE: zoekt is a linked library, not a backend binary — the fake only
 # stubs CBM, so source_search genuinely succeeds in both modes.
 out=$(printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"source_search","arguments":{"pattern":"Demo","project":"demo"}}}' | $TK_BIN mcp 2>/dev/null)

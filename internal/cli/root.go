@@ -137,6 +137,19 @@ func (c *Ctx) cbmCall(ctx context.Context, tool string, payload map[string]any) 
 	return out, err
 }
 
+// cbmCallJSON runs a read-only graph tool through the envelope-first
+// wrapper, recording timing for tk.log. Writes stay on cbmCall.
+func (c *Ctx) cbmCallJSON(ctx context.Context, tool string, payload map[string]any) (string, error) {
+	t0 := time.Now()
+	out, err := c.Run.RunJSON(ctx, tool, payload)
+	ev := trace.Event{Backend: "cbm", Op: tool, Ms: sinceMs(t0), OK: err == nil}
+	if err != nil {
+		ev.Error = firstLine(err.Error())
+	}
+	c.record(ev)
+	return out, err
+}
+
 // cbmRaw runs raw `cbm cli` argv (tk cbm passthrough), recorded.
 func (c *Ctx) cbmRaw(ctx context.Context, argv ...string) (string, error) {
 	t0 := time.Now()

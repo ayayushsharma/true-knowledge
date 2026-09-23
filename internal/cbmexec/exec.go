@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/true-knowledge/tk/internal/cbmresolve"
 	"github.com/true-knowledge/tk/internal/config"
@@ -285,6 +286,59 @@ func firstLine(s string) string {
 		return s[:300] + "…"
 	}
 	return s
+}
+
+// FirstLine is firstLine exported for cross-package callers.
+func FirstLine(s string) string { return firstLine(s) }
+
+// LooksEmpty reports whether tool output carries no evidence.
+// Absence claims gate on this: empty output must prove coverage.
+func LooksEmpty(out string) bool {
+	t := strings.TrimSpace(out)
+	if t == "" {
+		return true
+	}
+	lower := strings.ToLower(t)
+	for _, marker := range []string{"no result", "no match", "0 result", "not found", "no caller"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// NearMissTokens splits a symbol into search tokens for candidate lookup.
+// Camel/snake/dotted boundaries split; tiny tokens drop.
+func NearMissTokens(sym string) []string {
+	var toks []string
+	var cur strings.Builder
+	flush := func() {
+		if w := cur.String(); len(w) >= 3 {
+			toks = append(toks, w)
+		}
+		cur.Reset()
+	}
+	for i, r := range sym {
+		switch {
+		case r == '_' || r == '.' || r == '/' || r == ':' || r == '-':
+			flush()
+		case unicode.IsUpper(r) && i > 0:
+			flush()
+			cur.WriteRune(unicode.ToLower(r))
+		default:
+			cur.WriteRune(unicode.ToLower(r))
+		}
+	}
+	flush()
+	seen := map[string]bool{}
+	out := toks[:0]
+	for _, t := range toks {
+		if !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // Truncate cuts text to budget chars preferring whole lines + marker.

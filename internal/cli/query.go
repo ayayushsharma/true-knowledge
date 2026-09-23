@@ -61,8 +61,9 @@ func cmdFind(g *Globals) *cobra.Command {
 	var project, label string
 	var limit int
 	c := &cobra.Command{
-		Use:   "find <query> [project]",
-		Short: "Deterministic router: regex→grep, NL→semantic, ident→graph",
+		Use:     "find <query> [project]",
+		Short:   "Deterministic router: regex→grep, NL→semantic, ident→graph",
+		Aliases: []string{"kg_find"},
 		Example: `  tk find ProcessOrder demo
   tk find "retry.*backoff" demo --limit 20
   tk find Handler demo --label Function`,
@@ -102,9 +103,15 @@ func cmdFind(g *Globals) *cobra.Command {
 			if label != "" {
 				payload["label"] = label
 			}
-			out, err := ctx.cbmCall(cmd.Context(), tool, payload)
+			out, err := ctx.cbmCallJSON(cmd.Context(), tool, payload)
 			if err != nil {
 				return fail("%v", err)
+			}
+			if cbmexec.LooksEmpty(out) {
+				out, err = annotateAbsence(cmd.Context(), ctx, proj, out)
+				if err != nil {
+					return err
+				}
 			}
 			out = cbmexec.Truncate(out, ctx.budget(""))
 			return ctx.outFresh(cmd, proj, out, map[string]any{"route": tool, "project": proj})
@@ -119,9 +126,10 @@ func cmdFind(g *Globals) *cobra.Command {
 func cmdExplain(g *Globals) *cobra.Command {
 	var project string
 	c := &cobra.Command{
-		Use:   "explain <symbol> [project]",
-		Short: "Definition + snippet + callers/callees (one bounded call set)",
-		Args:  cobra.MinimumNArgs(1),
+		Use:     "explain <symbol> [project]",
+		Short:   "Definition + snippet + callers/callees (one bounded call set)",
+		Aliases: []string{"kg_explain"},
+		Args:    cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, err := load(*g)
 			if err != nil {
@@ -135,11 +143,11 @@ func cmdExplain(g *Globals) *cobra.Command {
 			if _, _, err := ctx.needCBM(cmd.Context()); err != nil {
 				return err
 			}
-			snip, err := ctx.cbmCall(cmd.Context(), "get_code_snippet", map[string]any{"qualified_name": sym, "project": proj})
+			snip, err := ctx.cbmCallJSON(cmd.Context(), "get_code_snippet", map[string]any{"qualified_name": sym, "project": proj})
 			if err != nil {
 				return fail("%v", err)
 			}
-			trace, err := ctx.cbmCall(cmd.Context(), "trace_path", map[string]any{"function_name": sym, "project": proj, "direction": "both", "depth": 1})
+			trace, err := ctx.cbmCallJSON(cmd.Context(), "trace_path", map[string]any{"function_name": sym, "project": proj, "direction": "both", "depth": 1})
 			if err != nil {
 				trace = "(trace unavailable: " + err.Error() + ")"
 			}
@@ -156,9 +164,10 @@ func cmdGrep(g *Globals) *cobra.Command {
 	var limit int
 	var isRegex bool
 	c := &cobra.Command{
-		Use:   "grep <pattern> [project]",
-		Short: "Project-scoped source-text search",
-		Args:  cobra.MinimumNArgs(1),
+		Use:     "grep <pattern> [project]",
+		Short:   "Project-scoped source-text search",
+		Aliases: []string{"kg_grep"},
+		Args:    cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, err := load(*g)
 			if err != nil {
@@ -177,9 +186,16 @@ func cmdGrep(g *Globals) *cobra.Command {
 			if _, _, err := ctx.needCBM(cmd.Context()); err != nil {
 				return err
 			}
-			out, err := ctx.cbmCall(cmd.Context(), "search_code", map[string]any{"pattern": pat, "project": proj, "file_pattern": files, "limit": limit, "regex": isRegex})
+			out, err := ctx.cbmCallJSON(cmd.Context(), "search_code", map[string]any{"pattern": pat, "project": proj, "file_pattern": files, "limit": limit, "regex": isRegex})
 			if err != nil {
 				return fail("%v", err)
+			}
+			if cbmexec.LooksEmpty(out) {
+				var aerr error
+				out, aerr = annotateAbsence(cmd.Context(), ctx, proj, out)
+				if aerr != nil {
+					return aerr
+				}
 			}
 			return ctx.outFresh(cmd, proj, cbmexec.Truncate(out, ctx.budget("")), map[string]any{"project": proj})
 		},
@@ -226,7 +242,7 @@ func cmdOutline(g *Globals) *cobra.Command {
 			if labels != "" {
 				payload["labels"] = strings.Split(labels, ",")
 			}
-			out, err := ctx.cbmCall(cmd.Context(), "get_file_outline", payload)
+			out, err := ctx.cbmCallJSON(cmd.Context(), "get_file_outline", payload)
 			if err != nil {
 				return fail("%v", err)
 			}
@@ -286,7 +302,7 @@ func cmdImpact(g *Globals) *cobra.Command {
 			if _, _, err := ctx.needCBM(cmd.Context()); err != nil {
 				return err
 			}
-			out, err := ctx.cbmCall(cmd.Context(), "detect_changes", map[string]any{
+			out, err := ctx.cbmCallJSON(cmd.Context(), "detect_changes", map[string]any{
 				"project": proj, "direction": direction, "depth": depth, "limit": limit,
 			})
 			if err != nil {
@@ -319,7 +335,7 @@ func cmdArch(g *Globals) *cobra.Command {
 			if _, _, err := ctx.needCBM(cmd.Context()); err != nil {
 				return err
 			}
-			out, err := ctx.cbmCall(cmd.Context(), "get_architecture", map[string]any{"project": proj})
+			out, err := ctx.cbmCallJSON(cmd.Context(), "get_architecture", map[string]any{"project": proj})
 			if err != nil {
 				return fail("%v", err)
 			}
@@ -350,7 +366,7 @@ func cmdQuery(g *Globals) *cobra.Command {
 			if _, _, err := ctx.needCBM(cmd.Context()); err != nil {
 				return err
 			}
-			out, err := ctx.cbmCall(cmd.Context(), "query_graph", map[string]any{"query": args[0], "project": proj, "max_rows": limit})
+			out, err := ctx.cbmCallJSON(cmd.Context(), "query_graph", map[string]any{"query": args[0], "project": proj, "max_rows": limit})
 			if err != nil {
 				return fail("%v", err)
 			}

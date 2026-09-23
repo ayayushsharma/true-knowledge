@@ -29,20 +29,57 @@ func serveOne(t *testing.T, s *Server, line string) map[string]any {
 }
 
 func TestToolsListCount(t *testing.T) {
-	resp := serveOne(t, &Server{}, `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
-	result := resp["result"].(map[string]any)
-	tools := result["tools"].([]any)
-	if len(tools) != 11 {
-		t.Fatalf("tools = %d, want 11", len(tools))
+	tests := []struct {
+		profile string
+		want    int
+		check   []string
+		absent  []string
+	}{
+		{"", 11, []string{"search_graph", "source_search", "get_file_outline", "detect_changes", "check_index_coverage"}, []string{"validate", "query_graph", "manage_adr"}},
+		{"scout", 11, nil, nil},
+		{"analysis", 14, []string{"validate", "query_graph", "manage_adr"}, nil},
+		{"minimal", 3, []string{"check_index_coverage", "search_graph", "get_code_snippet"}, []string{"source_search", "detect_changes"}},
 	}
-	names := map[string]bool{}
-	for _, tool := range tools {
-		names[tool.(map[string]any)["name"].(string)] = true
-	}
-	for _, want := range []string{"search_graph", "source_search", "get_file_outline", "detect_changes", "check_index_coverage"} {
-		if !names[want] {
-			t.Fatalf("missing tool %q", want)
+	for _, tc := range tests {
+		resp := serveOne(t, &Server{Profile: tc.profile}, `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+		result := resp["result"].(map[string]any)
+		tools := result["tools"].([]any)
+		if len(tools) != tc.want {
+			t.Fatalf("[%q] tools = %d, want %d", tc.profile, len(tools), tc.want)
 		}
+		names := map[string]bool{}
+		for _, tool := range tools {
+			names[tool.(map[string]any)["name"].(string)] = true
+		}
+		for _, want := range tc.check {
+			if !names[want] {
+				t.Fatalf("[%q] missing tool %q", tc.profile, want)
+			}
+		}
+		for _, gone := range tc.absent {
+			if names[gone] {
+				t.Fatalf("[%q] tool %q must be absent", tc.profile, gone)
+			}
+		}
+	}
+}
+
+// fakeRunner satisfies the cbmexec.Runner surface for MCP tests.
+type fakeRunner struct {
+	bin string
+}
+
+func (r *fakeRunner) RunJSON(ctx context.Context, tool string, payload map[string]any) (string, error) {
+	return "mock-out", nil
+}
+
+func TestValidateToolInAnalysisOnly(t *testing.T) {
+	resp := serveOne(t, &Server{
+		Profile: ProfileAnalysis,
+		Run:     &fakeRunner{},
+	}, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"validate","arguments":{"symbol":"Demo","project":"p"}}}`)
+	if resp["error"] != nil {
+		t.Fatalf("validate failed in analysis: %v", resp)
 	}
 }
 
@@ -51,6 +88,43 @@ func TestParseError(t *testing.T) {
 	if resp["error"] == nil {
 		t.Fatal("expected parse error")
 	}
+}
+
+// TestScoutDoesNotExposeValidate checks the gate holds for calls too.
+func TestScoutDoesNotExposeValidate(t *testing.T) {
+	resp := serveOne(t, &Server{
+		Profile: ProfileScout,
+		Run:     &fakeRunner{},
+	}, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"validate","arguments":{"symbol":"X","project":"p"}}}`)
+	errObj := resp["error"].(map[string]any)
+	if errObj["code"].(float64) != -32601 {
+		t.Fatalf("code = %v", errObj["code"])
+	}
+}
+
+// TestQueryGraphPassthrough verifies analysis-only tools reach cbm under
+// their own name (they are not in toolToCBM).
+func TestQueryGraphPassthrough(t *testing.T) {
+	run := &spyRunner{}
+	resp := serveOne(t, &Server{
+		Profile: ProfileAnalysis,
+		Run:     run,
+	}, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query_graph","arguments":{"query":"MATCH (f) RETURN f LIMIT 1","project":"p"}}}`)
+	if resp["error"] != nil {
+		t.Fatalf("query_graph failed: %v", resp)
+	}
+	if run.tool != "query_graph" {
+		t.Fatalf("spawned %q, want query_graph", run.tool)
+	}
+}
+
+type spyRunner struct {
+	tool string
+}
+
+func (r *spyRunner) RunJSON(ctx context.Context, tool string, payload map[string]any) (string, error) {
+	r.tool = tool
+	return "mock-out", nil
 }
 
 func TestUnknownTool(t *testing.T) {

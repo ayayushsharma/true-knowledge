@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/true-knowledge/tk/internal/cbmexec"
@@ -41,9 +42,17 @@ type toolDef struct {
 	Description string `json:"description"`
 }
 
-// Tools exposed by tk mcp (scout profile + snippet + text).
-func tools() []toolDef {
-	return []toolDef{
+// Profile names. scout (11) is default; analysis adds demo/power tools;
+// minimal keeps the fast filter trio for <8B models.
+const (
+	ProfileScout    = "scout"
+	ProfileAnalysis = "analysis"
+	ProfileMinimal  = "minimal"
+)
+
+// tools returns the profile-dependent surface.
+func tools(profile string) []toolDef {
+	base := []toolDef{
 		{"list_projects", "List indexed projects with node/edge counts"},
 		{"index_status", "Indexing status of a project"},
 		{"check_index_coverage", "Whether exact paths/scope are indexed and fresh (clean = no recorded gap, not proof)"},
@@ -55,6 +64,22 @@ func tools() []toolDef {
 		{"detect_changes", "Working-tree diff mapped to affected symbols + blast radius"},
 		{"get_architecture", "Languages, packages, routes, hotspots overview"},
 		{"get_code_snippet", "Source snippet by qualified name"},
+	}
+	switch profile {
+	case ProfileMinimal:
+		return []toolDef{
+			base[2],  // check_index_coverage
+			base[3],  // search_graph
+			base[10], // get_code_snippet
+		}
+	case ProfileAnalysis:
+		return append(base,
+			toolDef{"query_graph", "Read-only Cypher-style graph query (max_rows guardrail)"},
+			toolDef{"manage_adr", "Persist architectural decisions alongside the graph (passthrough)"},
+			toolDef{"validate", "Symbol existence + near-miss candidates, coverage-annotated"},
+		)
+	default:
+		return base
 	}
 }
 
@@ -71,10 +96,18 @@ var toolToCBM = map[string]string{
 	"get_code_snippet":     "get_code_snippet",
 }
 
+// cbmRunner is the graph backend surface mcp needs. Concretely
+// *cbmexec.Runner; interface keeps tests free of a real binary.
+type cbmRunner interface {
+	RunJSON(ctx context.Context, tool string, payload map[string]any) (string, error)
+}
+
 // Server proxies tool calls to `cbm cli`, except source_search (zoekt library).
 type Server struct {
-	Run    *cbmexec.Runner
+	Run    cbmRunner
 	Budget int
+	// Profile selects the tool surface: scout (11) | analysis (14) | minimal (3).
+	Profile string
 	// ShardsFor maps project -> zoekt shard dir.
 	ShardsFor func(project string) string
 	// In/Out override stdio (tests). Nil = os.Stdin/os.Stdout.
@@ -113,20 +146,31 @@ func (s *Server) Serve(ctx context.Context) int {
 	return 0
 }
 
+// profile returns the normalized profile (default scout).
+func (s *Server) profile() string {
+	switch s.Profile {
+	case ProfileAnalysis, ProfileMinimal:
+		return s.Profile
+	default:
+		return ProfileScout
+	}
+}
+
 func (s *Server) handle(ctx context.Context, req rpcReq) rpcResp {
 	id := req.ID
 	switch req.Method {
 	case "initialize":
 		return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{
 			"protocolVersion": "2024-11-05",
-			"serverInfo":      map[string]any{"name": "tk", "version": "0.1.0"},
+			"serverInfo":      map[string]any{"name": "tk", "version": "0.1.0", "profile": s.profile()},
 			"capabilities":    map[string]any{"tools": map[string]any{}},
 		}}
 	case "notifications/initialized":
 		return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{}}
 	case "tools/list":
-		names := make([]map[string]any, 0, len(tools()))
-		for _, t := range tools() {
+		tl := tools(s.profile())
+		names := make([]map[string]any, 0, len(tl))
+		for _, t := range tl {
 			names = append(names, map[string]any{"name": t.Name, "description": t.Description})
 		}
 		return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{"tools": names}}
@@ -154,23 +198,98 @@ func (s *Server) callTool(ctx context.Context, id any, name string, args map[str
 	if name == "source_search" {
 		return s.callSourceSearch(ctx, id, args)
 	}
-	cbmTool, ok := toolToCBM[name]
-	if !ok {
-		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32601, fmt.Sprintf("unknown tool %q (tk exposes scout + snippet + source_search)", name)}}
+	if !s.hasTool(name) {
+		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32601, fmt.Sprintf("unknown tool %q (profile %s: %s)", name, s.profile(), strings.Join(s.toolNames(), ", "))}}
 	}
 	if s.Run == nil {
 		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, "cbm not installed; run `tk install` (fail-open: continue without graph)"}}
 	}
+	_ = id
 	if args == nil {
 		args = map[string]any{}
 	}
-	out, err := s.Run.Run(ctx, cbmTool, args)
+	if name == "validate" {
+		return s.callValidate(ctx, id, args)
+	}
+	cbmTool := toolToCBM[name]
+	if cbmTool == "" {
+		cbmTool = name // query_graph / manage_adr passthrough
+	}
+	out, err := s.Run.RunJSON(ctx, cbmTool, args)
 	if err != nil {
 		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, err.Error()}}
 	}
 	out = cbmexec.Truncate(out, s.Budget)
 	return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{
 		"content": []map[string]any{{"type": "text", "text": out}},
+	}}
+}
+
+// hasTool reports whether name is exposed in the active profile.
+func (s *Server) hasTool(name string) bool {
+	for _, t := range tools(s.profile()) {
+		if t.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) toolNames() []string {
+	tl := tools(s.profile())
+	names := make([]string, len(tl))
+	for i, t := range tl {
+		names[i] = t.Name
+	}
+	return names
+}
+
+// callValidate implements the analysis-profile validate tool: exact symbol
+// lookup via search_graph, near-miss candidates on failed token match, and a
+// mandatory check_index_coverage annotation for absence claims.
+func (s *Server) callValidate(ctx context.Context, id any, args map[string]any) rpcResp {
+	str := func(k string) string {
+		if v, ok := args[k].(string); ok {
+			return v
+		}
+		return ""
+	}
+	sym, project := str("symbol"), str("project")
+	if sym == "" || project == "" {
+		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32602, "validate needs symbol + project"}}
+	}
+	limit := 5
+	if v, ok := args["limit"].(float64); ok && v > 0 {
+		limit = int(v)
+	}
+	hit, err := s.Run.RunJSON(ctx, "search_graph", map[string]any{"name_pattern": sym, "project": project, "limit": limit})
+	if err != nil {
+		goto coverage
+	}
+	if !cbmexec.LooksEmpty(hit) && strings.Contains(strings.ToLower(hit), strings.ToLower(sym)) {
+		return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{
+			"content": []map[string]any{{"type": "text", "text": cbmexec.Truncate("valid: "+sym+" found\n"+hit, s.Budget)}},
+		}}
+	}
+coverage:
+	out, cerr := s.Run.RunJSON(ctx, "check_index_coverage", map[string]any{"project": project})
+	if cerr != nil {
+		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, "no exact hit and coverage check failed: " + cerr.Error() + " — absence unverified"}}
+	}
+	verdict := "coverage: clean — " + cbmexec.FirstLine(out)
+	if strings.Contains(strings.ToLower(out), "gap") || strings.Contains(strings.ToLower(out), "stale") ||
+		strings.Contains(strings.ToLower(out), "missing") || strings.Contains(strings.ToLower(out), "unindexed") {
+		verdict = "coverage: GAP — " + cbmexec.FirstLine(out)
+	}
+	cands := "(no candidates)"
+	if toks := cbmexec.NearMissTokens(sym); len(toks) > 0 {
+		if near, nerr := s.Run.RunJSON(ctx, "search_graph", map[string]any{"name_pattern": toks[0], "project": project, "limit": limit}); nerr == nil && !cbmexec.LooksEmpty(near) {
+			cands = near
+		}
+	}
+	text := fmt.Sprintf("invalid: %q not found in %s\n== near-miss ==\n%s\n(%s)", sym, project, cands, verdict)
+	return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{
+		"content": []map[string]any{{"type": "text", "text": cbmexec.Truncate(text, s.Budget)}},
 	}}
 }
 

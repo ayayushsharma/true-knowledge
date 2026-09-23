@@ -8,16 +8,17 @@ import (
 )
 
 func cmdMCP(g *Globals) *cobra.Command {
+	var profile string
 	c := &cobra.Command{
 		Use:   "mcp",
-		Short: "Run MCP stdio proxy (scout + snippet + source_search), stdin EOF = instant exit",
+		Short: "Run MCP stdio proxy (profile: scout|analysis|minimal), stdin EOF = instant exit",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, err := load(*g)
 			if err != nil {
 				return err
 			}
 			budget := ctx.budget("")
-			s := &mcp.Server{Budget: budget}
+			s := &mcp.Server{Budget: budget, Profile: profile}
 			if ctx.CBMOK {
 				s.Run = ctx.Run
 			}
@@ -29,5 +30,7 @@ func cmdMCP(g *Globals) *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().StringVar(&profile, "tool-profile", mcp.ProfileScout,
+		"tool surface: scout (11) | analysis (14) | minimal (3)")
 	return c
 }

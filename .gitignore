@@ -1,0 +1,12 @@
+# built binary (48MB+; rebuild with: go build -o tk ./cmd/tk)
+/tk
+
+# Go build cache / test artifacts
+*.test
+*.out
+
+# editor / OS noise
+.idea/
+.vscode/
+*.swp
+.DS_Store

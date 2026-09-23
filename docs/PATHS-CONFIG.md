@@ -1,7 +1,7 @@
 ---
 title: Paths and config — Linux-style everywhere
 status: authoritative
-date: 2026-09-22
+date: 2026-09-23
 supersedes: [compatible-implementation-spec.md §6]
 superseded-by: null
 ---
@@ -14,9 +14,9 @@ Single resolver. No `os.UserConfigDir` branches. No `~/Library/*`, no `%AppData%
 
 ```text
 ~/.config/true-knowledge/       config.json (tk source of truth)
-~/.local/share/true-knowledge/  tk.json (name→path), graph-refs.json
-~/.cache/true-knowledge/        == CBM_CACHE_DIR (_config.db, indexes)
-~/.local/state/true-knowledge/  logs/tk.log, history.jsonl, rendezvous/ (CBM_RUNTIME_DIR)
+~/.local/share/true-knowledge/  tk.json (name→path, heads, fingerprints)
+~/.cache/true-knowledge/        == CBM_CACHE_DIR (_config.db, indexes) + zoekt/ shards
+~/.local/state/true-knowledge/  logs/tk.log (unified JSONL trace), rendezvous/ (CBM_RUNTIME_DIR)
 ```
 
 Resolution: `$XDG_{CONFIG,DATA,CACHE,STATE}_HOME/true-knowledge/` or `$HOME/{.config,.local/share,.cache,.local/state}/true-knowledge/`. On Windows `$HOME` = `%USERPROFILE%` via `filepath.Join` (e.g. `C:\Users\you\.config\true-knowledge\`).

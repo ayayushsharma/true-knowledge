@@ -51,4 +51,4 @@ Artifacts: explicit index = `Best (VACUUM INTO + zstd -9)`; watcher = `Fast (zst
 
 ## tk freshness contract
 
-`tk sync` = `git HEAD` + `check_index_coverage` → clean = no-op, dirty = let watcher do it. Check coverage before negative claims. Every response carries `project+generation+head_sha`; stale cursors fail explicitly.
+`tk sync` = `git HEAD` (or mtime fingerprint for plain dirs) + `check_index_coverage` → clean = no-op, dirty = let watcher do it. Check coverage before negative claims. Query responses carry `head/current/fresh`; stale cursors deferred (no tk-issued cursors exist yet).

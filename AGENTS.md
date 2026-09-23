@@ -17,7 +17,7 @@
 ~/.config/true-knowledge/       config.json (tk source of truth)
 ~/.local/share/true-knowledge/  tk.json (name→path, heads, fingerprints)
 ~/.cache/true-knowledge/        == CBM_CACHE_DIR (_config.db, indexes) + zoekt/ shards
-~/.local/state/true-knowledge/  logs/tk.log (deferred), history.jsonl, rendezvous/ (CBM_RUNTIME_DIR)
+~/.local/state/true-knowledge/  logs/tk.log (unified JSONL trace), rendezvous/ (CBM_RUNTIME_DIR)
 ```
 
 * Never write `~/.tk`, `~/Library/*`, `%AppData%`. Always `true-knowledge/` subfolder.
@@ -53,7 +53,7 @@ jq -r 'select(.mcp.tool=="source_search") | .output.text' tk.log
 3. **Freshness:** `tk sync` = `git HEAD` + coverage → no-op or let watcher do it. Never force full on save.
 4. **Fail-open + budgets:** CBM down → clear `tk install` hint, never block agent. Truncate by whole records + `...truncated`.
 5. **Completion:** Cobra only. Dynamic: projects (from `tk.json` + `list_projects`), config keys, `--client pi,opencode,claude,codex`. Test `tk __complete`.
-6. **Close fast:** no flush/stop on session end. stdin EOF = instant exit. Only `install/update` holds admission barrier to deadline.
+6. **Close fast:** no flush/stop on session end. stdin EOF = instant exit. Only `install --update` holds admission barrier to deadline.
 7. **Docs:** change = new `docs/DECISIONS/YYYY-MM-DD-<slug>.md` + bump affected `docs/*.md` header (`status/date/supersedes`). Never edit history except `superseded-by` stamp. `grep -r "status: authoritative" docs/` is truth.
 
 ## Key references
@@ -67,4 +67,5 @@ jq -r 'select(.mcp.tool=="source_search") | .output.text' tk.log
 * [ ] Single spawn wrapper used, env map set
 * [ ] Coverage checked, budgets honored, fail-open
 * [ ] Completion + `--json` + `--help` updated
+* [ ] No secrets in `tk.log` (redaction patterns cover any new secret-shaped output)
 * [ ] Docs header + ADR added if behavior changed

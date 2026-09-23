@@ -17,19 +17,19 @@ Locked decisions: Go-only thin `tk` over CBM, Linux-style `true-knowledge/` dirs
 * `setup/init/register/index/sync/status/find/explain/grep/source-search/outline/impact/arch/query/cbm/daemon/mcp/config/migrate/install/mcp-install/completion`. `daemon` is CLI-only (never MCP).
 * One spawn wrapper `internal/cbmexec`: `codebase-memory-mcp cli <tool> --args-file <json>` (raw-JSON argv is deprecated upstream) + env (`CBM_CACHE_DIR`, `CBM_RUNTIME_DIR`, `CBM_ALLOWED_ROOT`) + budget truncation + fail-open. Project is required — tk never sends `""`.
 * `tk` installs ALL its external dependencies itself: `internal/backends` registry (CBM today) + `internal/installer` (pinned download, SHA-256 manifest verify, atomic `<cache>/bin` install, no system package managers). Zoekt is NOT a backend — it links in as a Go library (`go.mod` pin; same-language links, cross-language spawns). `tk setup` = init + install + opt-in register/client. Resolver: `TK_CBM_BIN` > sibling > cache > PATH > download.
-* MCP 9-tool proxy: scout-7 + snippet + `source_search` (zoekt, hard error when absent).
+* MCP 11-tool proxy: scout profile + snippet + `source_search` (zoekt library; a missing index hints `tk index`, never silent fallback).
 * `source-search`: explicit Zoekt trigram text (no magic routing), served in-process via `internal/zoekttext` (`gitindex`/`index`/`shards`/`query` at the `go.mod` pin); shards at `<cache>/zoekt/<project>/`, `zoekt_head` tracked in `tk.json`.
 * XDG `true-knowledge/{config,data,cache,state}` + `TK_*`/`TK_HOME` isolated test homes.
 * No supervisor, no facts/notes/ledger, no graph code in `tk`.
-* Done when: `TK_HOME=/tmp/x` smoke (`setup → register → index → sync no-op → status --json → mcp tools/list` = 9) passes with zero `~/.tk`/`Library` writes — verified against real CBM 0.11.0 + zoekt @153817f6 (spawn spike; library port per zoekt-library ADR).
+* Done when: `TK_HOME=/tmp/x` smoke (`setup → register → index → sync no-op → status --json → mcp tools/list` = 11) passes with zero `~/.tk`/`Library` writes — verified against real CBM 0.11.0 + zoekt @153817f6 (spawn spike; library port per zoekt-library ADR).
 
 ## MVP2 — code-intel depth + cross-repo fleet
 
 *Why first:* flagged focus + unblocks 27B autonomy. Still delegated to CBM, no new stores.
 * `kg_*` facade: `kg_find` (regex→grep / ident→graph / NL→semantic router), `kg_explain` (def+snippet+callers+callees, one call), `kg_grep`; legacy `search/trace/arch/query` compat.
-* `analysis` profile: `query_graph` (read-only, `LIMIT` + timeout guardrails), `get_file_outline`, `validate` (existence + near-miss), `detect_changes → impact` (diff → blast radius + risk).
+* `analysis` profile: `query_graph` (read-only, `LIMIT` + timeout guardrails), `validate` (existence + near-miss). Shipped in MVP1: `get_file_outline` (`tk outline`), `detect_changes → impact` (`tk impact`).
 * Cross-repo: `tk index --cross --targets "*"` = base loop then `cross-repo-intelligence` pass; `CROSS_*` edges + fleet arch summary.
-* Freshness: `project+generation+head_sha` on every response, coverage-before-absence in `scout`, stale-cursor errors.
+* Freshness: `head/current/fresh` envelopes shipped in MVP1; left for MVP2: coverage-before-absence enforcement in `scout`, stale-cursor protocol (no tk-issued cursors exist yet).
 * Done when: 27B answers `who calls X / what breaks if Y changes / outline Z` in ≤3 calls; 2-fixture fleet links `CROSS_HTTP_CALLS`.
 
 ## MVP3 — memory layer (tk-owned; CBM has no equivalent)

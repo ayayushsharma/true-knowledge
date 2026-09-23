@@ -21,6 +21,12 @@ type Budgets struct {
 	DefaultChars      int `json:"default_chars"`
 	ArchitectureChars int `json:"architecture_chars"`
 	NotesTocChars     int `json:"notes_toc_chars"`
+	LedgerChars       int `json:"ledger_chars"`
+}
+
+// Ledger gate for tk's per-project working-truth blobs (full-text replace).
+type Ledger struct {
+	Enabled bool `json:"enabled"`
 }
 
 // Embedding configures the optional Ollama-compatible /api/embed endpoint
@@ -48,6 +54,7 @@ type Config struct {
 	AllowedRoot    string    `json:"allowed_root,omitempty"`
 	Budgets        Budgets   `json:"budgets"`
 	Embedding      Embedding `json:"embedding"`
+	Ledger         Ledger    `json:"ledger"`
 }
 
 // Defaults returns the Linux-first defaults.
@@ -59,8 +66,9 @@ func Defaults() Config {
 		AutoIndex:      true,
 		AutoWatch:      true,
 		WatcherEnabled: true,
-		Budgets:        Budgets{DefaultChars: 6000, ArchitectureChars: 2200, NotesTocChars: 700},
+		Budgets:        Budgets{DefaultChars: 6000, ArchitectureChars: 2200, NotesTocChars: 700, LedgerChars: 1500},
 		Embedding:      Embedding{Enabled: false, Endpoint: "http://127.0.0.1:11434", TimeoutMS: 3000},
+		Ledger:         Ledger{Enabled: true},
 	}
 }
 
@@ -101,7 +109,7 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("invalid index_mode %q (want fast|moderate|full)", c.IndexMode)
 	}
-	if c.Budgets.DefaultChars <= 0 || c.Budgets.ArchitectureChars <= 0 || c.Budgets.NotesTocChars <= 0 {
+	if c.Budgets.DefaultChars <= 0 || c.Budgets.ArchitectureChars <= 0 || c.Budgets.NotesTocChars <= 0 || c.Budgets.LedgerChars <= 0 {
 		return fmt.Errorf("budgets must be positive")
 	}
 	if c.CBMVersionPin != "" && !versionRe.MatchString(c.CBMVersionPin) {
@@ -146,8 +154,9 @@ func KnownKeys() []string {
 	return []string{
 		"index_mode", "auto_index", "auto_watch", "watcher_enabled",
 		"allowed_root", "cbm_binary", "cbm_version_pin",
-		"budgets.default_chars", "budgets.architecture_chars", "budgets.notes_toc_chars",
+		"budgets.default_chars", "budgets.architecture_chars", "budgets.notes_toc_chars", "budgets.ledger_chars",
 		"embedding.enabled", "embedding.endpoint", "embedding.model", "embedding.timeout_ms",
+		"ledger.enabled",
 	}
 }
 
@@ -173,6 +182,8 @@ func SetKey(cfg *Config, key, value string) error {
 		return setBudget(&cfg.Budgets.ArchitectureChars, "budgets.architecture_chars", value)
 	case "budgets.notes_toc_chars":
 		return setBudget(&cfg.Budgets.NotesTocChars, "budgets.notes_toc_chars", value)
+	case "budgets.ledger_chars":
+		return setBudget(&cfg.Budgets.LedgerChars, "budgets.ledger_chars", value)
 	case "embedding.enabled":
 		return setBool(&cfg.Embedding.Enabled, value)
 	case "embedding.endpoint":
@@ -181,6 +192,8 @@ func SetKey(cfg *Config, key, value string) error {
 		cfg.Embedding.Model = strings.TrimSpace(value)
 	case "embedding.timeout_ms":
 		return setBudget(&cfg.Embedding.TimeoutMS, "embedding.timeout_ms", value)
+	case "ledger.enabled":
+		return setBool(&cfg.Ledger.Enabled, value)
 	default:
 		return fmt.Errorf("unknown config key %q", key)
 	}

@@ -50,6 +50,7 @@ All graph work = codebase-memory-mcp cli <tool> --json via one wrapper.`,
 		cmdMCPInstall(g),
 		cmdMem(g),
 		cmdNote(g),
+		cmdLedger(g),
 	)
 
 	// Central trace capture: all rendered output flows through root's

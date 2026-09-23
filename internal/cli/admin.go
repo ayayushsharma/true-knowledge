@@ -150,6 +150,8 @@ func getKey(c config.Config, key string) (string, error) {
 		return strconv.Itoa(c.Budgets.ArchitectureChars), nil
 	case "budgets.notes_toc_chars":
 		return strconv.Itoa(c.Budgets.NotesTocChars), nil
+	case "budgets.ledger_chars":
+		return strconv.Itoa(c.Budgets.LedgerChars), nil
 	case "embedding.enabled":
 		return strconv.FormatBool(c.Embedding.Enabled), nil
 	case "embedding.endpoint":
@@ -158,6 +160,8 @@ func getKey(c config.Config, key string) (string, error) {
 		return c.Embedding.Model, nil
 	case "embedding.timeout_ms":
 		return strconv.Itoa(c.Embedding.TimeoutMS), nil
+	case "ledger.enabled":
+		return strconv.FormatBool(c.Ledger.Enabled), nil
 	}
 	return "", fmt.Errorf("unknown key %q (see `tk config list` / known keys)", key)
 }
@@ -191,7 +195,7 @@ func setKey(c *config.Config, key, val string) error {
 			return fmt.Errorf("want X.Y.Z version, got %q", val)
 		}
 		c.CBMVersionPin = val
-	case "budgets.default_chars", "budgets.architecture_chars", "budgets.notes_toc_chars":
+	case "budgets.default_chars", "budgets.architecture_chars", "budgets.notes_toc_chars", "budgets.ledger_chars":
 		n, err := strconv.Atoi(val)
 		if err != nil || n <= 0 {
 			return fmt.Errorf("budget must be positive int")
@@ -203,6 +207,8 @@ func setKey(c *config.Config, key, val string) error {
 			c.Budgets.ArchitectureChars = n
 		case "budgets.notes_toc_chars":
 			c.Budgets.NotesTocChars = n
+		case "budgets.ledger_chars":
+			c.Budgets.LedgerChars = n
 		}
 	case "embedding.enabled":
 		b, err := strconv.ParseBool(val)
@@ -220,6 +226,12 @@ func setKey(c *config.Config, key, val string) error {
 			return fmt.Errorf("timeout_ms must be positive int")
 		}
 		c.Embedding.TimeoutMS = n
+	case "ledger.enabled":
+		b, err := strconv.ParseBool(val)
+		if err != nil {
+			return fmt.Errorf("want true|false: %w", err)
+		}
+		c.Ledger.Enabled = b
 	default:
 		return fmt.Errorf("unknown key %q", key)
 	}

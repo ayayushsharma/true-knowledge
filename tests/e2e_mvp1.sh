@@ -184,6 +184,31 @@ PYEOF
   fi
 fi
 
+# --- ledger layer ---
+check ledger-update 0 $TK_BIN ledger update demo "demo serves the public API; deploys weekly."
+check ledger-get 0 $TK_BIN ledger get demo
+shiftled=$(TK_HOME="$TK_HOME" $TK_BIN ledger get demo)
+if echo "$shiftled" | grep -q 'public API'; then
+  pass=$((pass+1)); printf 'ok   ledger-roundtrip\n'
+else
+  fail=$((fail+1)); printf 'FAIL ledger-roundtrip\n'
+fi
+check ledger-budget 0 $TK_BIN config set budgets.ledger_chars 24
+check ledger-update-trunc 0 $TK_BIN ledger update demo "much longer ledger text that must be truncated aggressively here"
+shortled=$(TK_HOME="$TK_HOME" $TK_BIN ledger get demo --json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['ledger'])" 2>/dev/null)
+if [ "${#shortled}" -le 24 ]; then
+  pass=$((pass+1)); printf 'ok   ledger-budget-enforced\n'
+else
+  fail=$((fail+1)); printf 'FAIL ledger-budget-enforced (%d chars)\n' "${#shortled}"
+fi
+check ledger-disable 0 $TK_BIN config set ledger.enabled false
+if $TK_BIN ledger update demo "should fail when disabled" >/dev/null 2>&1; then
+  fail=$((fail+1)); printf 'FAIL ledger-disabled-gate\n'
+else
+  pass=$((pass+1)); printf 'ok   ledger-disabled-gate\n'
+fi
+check ledger-reenable 0 $TK_BIN config set ledger.enabled true
+
 out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | $TK_BIN mcp)
 n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
 if [ "$n" = "11" ]; then pass=$((pass+1)); printf 'ok   mcp-tools-11\n';

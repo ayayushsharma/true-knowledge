@@ -101,7 +101,7 @@ func cmdFind(g *Globals) *cobra.Command {
 				return fail("%v", err)
 			}
 			out = cbmexec.Truncate(out, ctx.budget(""))
-			return ctx.out(cmd, out, map[string]any{"route": tool, "project": proj})
+			return ctx.outFresh(cmd, proj, out, map[string]any{"route": tool, "project": proj})
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
@@ -133,7 +133,7 @@ func cmdSearch(g *Globals) *cobra.Command {
 			if err != nil {
 				return fail("%v", err)
 			}
-			return ctx.out(cmd, cbmexec.Truncate(out, ctx.budget("")), map[string]any{"project": proj})
+			return ctx.outFresh(cmd, proj, cbmexec.Truncate(out, ctx.budget("")), map[string]any{"project": proj})
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
@@ -171,7 +171,7 @@ func cmdExplain(g *Globals) *cobra.Command {
 				trace = "(trace unavailable: " + err.Error() + ")"
 			}
 			combined := "== definition/snippet ==\n" + snip + "\n== callers+callees (depth 1) ==\n" + trace
-			return ctx.out(cmd, cbmexec.Truncate(combined, ctx.budget("")), map[string]any{"symbol": sym, "project": proj})
+			return ctx.outFresh(cmd, proj, cbmexec.Truncate(combined, ctx.budget("")), map[string]any{"symbol": sym, "project": proj})
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
@@ -209,7 +209,7 @@ func cmdGrep(g *Globals) *cobra.Command {
 			if err != nil {
 				return fail("%v", err)
 			}
-			return ctx.out(cmd, cbmexec.Truncate(out, ctx.budget("")), map[string]any{"project": proj})
+			return ctx.outFresh(cmd, proj, cbmexec.Truncate(out, ctx.budget("")), map[string]any{"project": proj})
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
@@ -259,7 +259,7 @@ func cmdOutline(g *Globals) *cobra.Command {
 			if err != nil {
 				return fail("%v", err)
 			}
-			return ctx.out(cmd, cbmexec.Truncate(out, ctx.budget("")), map[string]any{"project": proj, "file": file})
+			return ctx.outFresh(cmd, proj, cbmexec.Truncate(out, ctx.budget("")), map[string]any{"project": proj, "file": file})
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
@@ -322,7 +322,7 @@ func cmdImpact(g *Globals) *cobra.Command {
 			if err != nil {
 				return fail("%v", err)
 			}
-			return ctx.out(cmd, cbmexec.Truncate(out, ctx.budget("")), map[string]any{"project": proj})
+			return ctx.outFresh(cmd, proj, cbmexec.Truncate(out, ctx.budget("")), map[string]any{"project": proj})
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
@@ -354,7 +354,7 @@ func cmdArch(g *Globals) *cobra.Command {
 			if err != nil {
 				return fail("%v", err)
 			}
-			return ctx.out(cmd, cbmexec.Truncate(out, ctx.budget("arch")), map[string]any{"project": proj})
+			return ctx.outFresh(cmd, proj, cbmexec.Truncate(out, ctx.budget("arch")), map[string]any{"project": proj})
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
@@ -386,7 +386,7 @@ func cmdQuery(g *Globals) *cobra.Command {
 			if err != nil {
 				return fail("%v", err)
 			}
-			return ctx.out(cmd, cbmexec.Truncate(out, ctx.budget("")), map[string]any{"project": proj})
+			return ctx.outFresh(cmd, proj, cbmexec.Truncate(out, ctx.budget("")), map[string]any{"project": proj})
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")

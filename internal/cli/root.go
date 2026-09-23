@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/true-knowledge/tk/internal/cbmexec"
 	"github.com/true-knowledge/tk/internal/config"
+	"github.com/true-knowledge/tk/internal/gitx"
 	"github.com/true-knowledge/tk/internal/paths"
 	"github.com/true-knowledge/tk/internal/store"
 )
@@ -108,4 +109,35 @@ func (c *Ctx) projectNames() []string {
 		_ = os.Getenv("TK_LIVE_COMPLETION")
 	}
 	return names
+}
+
+// freshness describes whether the serving index covers the live tree.
+// Git repos compare HEADs; plain dirs compare mtime fingerprints.
+// Fields merge into --json envelopes so agents can gate absence claims.
+func (c *Ctx) freshness(proj string) map[string]any {
+	p, ok := c.Reg[proj]
+	if !ok {
+		return map[string]any{"fresh": false}
+	}
+	if head := gitx.Head(p.Path); head != "" {
+		return map[string]any{"head": p.Head, "current": head, "fresh": head == p.Head}
+	}
+	live, err := store.Fingerprint(p.Path)
+	if err != nil {
+		return map[string]any{"head": p.Fingerprint, "fresh": false}
+	}
+	return map[string]any{"head": p.Fingerprint, "current": live, "fresh": live == p.Fingerprint}
+}
+
+// outFresh renders like out but merges freshness fields for proj.
+func (c *Ctx) outFresh(cmd *cobra.Command, proj, text string, fields map[string]any) error {
+	if fields == nil {
+		fields = map[string]any{}
+	}
+	for k, v := range c.freshness(proj) {
+		if _, exists := fields[k]; !exists {
+			fields[k] = v
+		}
+	}
+	return c.out(cmd, text, fields)
 }

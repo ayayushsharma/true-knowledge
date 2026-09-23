@@ -73,7 +73,7 @@ func cmdSourceSearch(g *Globals) *cobra.Command {
 			if err != nil {
 				return fail("source-search: %v (shards missing? run `tk index %s`)", err, proj)
 			}
-			return ctx.out(cmd, cbmexec.Truncate(text, ctx.budget("")), map[string]any{"project": proj, "backend": "zoekt"})
+			return ctx.outFresh(cmd, proj, cbmexec.Truncate(text, ctx.budget("")), map[string]any{"project": proj, "backend": "zoekt"})
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")

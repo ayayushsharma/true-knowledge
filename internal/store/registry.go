@@ -22,6 +22,9 @@ type Project struct {
 	IndexedAt int64  `json:"indexed_at,omitempty"`
 	// ZoektHead is the git HEAD covered by the zoekt shards ("" = none/stale).
 	ZoektHead string `json:"zoekt_head,omitempty"`
+	// Fingerprint covers non-git trees (max mtime + file count).
+	// Git repos use Head instead; never both.
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 // Registry maps canonical name -> project.
@@ -97,11 +100,21 @@ func (r Registry) Names() []string {
 	return out
 }
 
-// Touch records a successful index.
+// Touch records a successful git-backed index.
 func (r Registry) Touch(name, head, mode string) {
 	p := r[name]
 	p.Head = head
 	p.Mode = mode
+	p.IndexedAt = time.Now().Unix()
+	r[name] = p
+}
+
+// TouchFiles records a successful non-git index keyed by fingerprint.
+func (r Registry) TouchFiles(name, fingerprint, mode string) {
+	p := r[name]
+	p.Head = ""
+	p.Mode = mode
+	p.Fingerprint = fingerprint
 	p.IndexedAt = time.Now().Unix()
 	r[name] = p
 }

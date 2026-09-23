@@ -146,7 +146,14 @@ func cmdIndex(g *Globals) *cobra.Command {
 					return fail("index %q: %v", n, err)
 				}
 				head := gitx.Head(p.Path)
-				ctx.Reg.Touch(n, head, mode)
+				if head != "" {
+					ctx.Reg.Touch(n, head, mode)
+				} else if fp, ferr := store.Fingerprint(p.Path); ferr == nil {
+					// Non-git tree: fingerprint is the freshness key.
+					ctx.Reg.TouchFiles(n, fp, mode)
+				} else {
+					ctx.Reg.Touch(n, head, mode)
+				}
 				// Zoekt pass: in-process trigram index, same HEAD discipline as CBM.
 				if zhead, zerr := ensureZoektIndex(cmd.Context(), ctx, n, p.Path); zerr != nil {
 					return fail("index %q: %v", n, zerr)
@@ -202,8 +209,13 @@ func cmdSync(g *Globals) *cobra.Command {
 				if !ok {
 					return fail("unknown project %q", n)
 				}
-				head := gitx.Head(p.Path)
-				if head != "" && head == p.Head {
+				if head := gitx.Head(p.Path); head != "" {
+					if head == p.Head {
+						clean++
+						continue
+					}
+				} else if fp, ferr := store.Fingerprint(p.Path); ferr == nil && fp == p.Fingerprint && p.Fingerprint != "" {
+					// Non-git tree unchanged since index.
 					clean++
 					continue
 				}
@@ -224,7 +236,13 @@ func cmdSync(g *Globals) *cobra.Command {
 				if _, err := r.Run(cmd.Context(), "index_repository", map[string]any{"repo_path": p.Path, "mode": ctx.Cfg.IndexMode, "name": n}); err != nil {
 					return fail("sync %q: %v", n, err)
 				}
-				ctx.Reg.Touch(n, gitx.Head(p.Path), ctx.Cfg.IndexMode)
+				if head := gitx.Head(p.Path); head != "" {
+					ctx.Reg.Touch(n, head, ctx.Cfg.IndexMode)
+				} else if fp, ferr := store.Fingerprint(p.Path); ferr == nil {
+					ctx.Reg.TouchFiles(n, fp, ctx.Cfg.IndexMode)
+				} else {
+					ctx.Reg.Touch(n, "", ctx.Cfg.IndexMode)
+				}
 				if zhead, zerr := ensureZoektIndex(cmd.Context(), ctx, n, p.Path); zerr != nil {
 					return fail("sync %q: %v", n, zerr)
 				} else if zhead != "" {
@@ -260,13 +278,30 @@ func cmdStatus(g *Globals) *cobra.Command {
 				p := ctx.Reg[n]
 				head := gitx.Head(p.Path)
 				state := "clean"
+				zstate := "z:-"
 				if head == "" {
-					state = "non-git"
-				} else if head != p.Head {
-					state = "dirty"
+					// Non-git: fingerprint decides; zoekt tracks "files".
+					if fp, ferr := store.Fingerprint(p.Path); ferr != nil || p.Fingerprint == "" || fp != p.Fingerprint {
+						state = "dirty"
+					}
+					if p.ZoektHead == "files" && state == "clean" {
+						zstate = "z:ok"
+					} else if p.ZoektHead != "" {
+						zstate = "z:stale"
+					}
+				} else {
+					if head != p.Head {
+						state = "dirty"
+					}
+					switch {
+					case p.ZoektHead == head:
+						zstate = "z:ok"
+					case p.ZoektHead != "":
+						zstate = "z:stale"
+					}
 				}
-				fmt.Fprintf(&b, "%-20s %-6s %s  %s\n", n, state, shortHead(head), p.Path)
-				rows = append(rows, map[string]any{"project": n, "state": state, "head": head, "path": p.Path, "mode": p.Mode, "zoekt_head": p.ZoektHead})
+				fmt.Fprintf(&b, "%-20s %-6s %-7s %s  %s\n", n, state, zstate, shortHead(head), p.Path)
+				rows = append(rows, map[string]any{"project": n, "state": state, "head": head, "path": p.Path, "mode": p.Mode, "zoekt_head": p.ZoektHead, "fingerprint": p.Fingerprint})
 			}
 			_ = cbmexec.Truncate
 			return ctx.out(cmd, strings.TrimRight(b.String(), "\n"), map[string]any{"projects": rows})

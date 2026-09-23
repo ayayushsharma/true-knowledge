@@ -103,6 +103,9 @@ func (c *Ctx) budget(kind string) int {
 	if kind == "arch" {
 		return c.Cfg.Budgets.ArchitectureChars
 	}
+	if kind == "notes_toc" {
+		return c.Cfg.Budgets.NotesTocChars
+	}
 	return c.Cfg.Budgets.DefaultChars
 }
 

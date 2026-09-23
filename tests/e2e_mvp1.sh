@@ -111,6 +111,32 @@ else
   fail=$((fail+1)); printf 'FAIL mem-facts-db-0600\n'
 fi
 
+# --- notes layer (tk-owned, review-gated) ---
+check note-save 0 $TK_BIN note save "tls config" --text "certificates rotate monthly via letsencrypt on the proxy" --project demo
+if $TK_BIN note search letsencrypt --project demo | grep -q 'proxy'; then
+  fail=$((fail+1)); printf 'FAIL note-gated-before-approval\n'
+else
+  pass=$((pass+1)); printf 'ok   note-gated-before-approval\n'
+fi
+nid=$("$TK_BIN" note review list --json | python3 -c "import json,sys; print(json.load(sys.stdin)['reviews'][0]['id'])")
+check note-review-approve 0 $TK_BIN note review approve "$nid"
+check note-search-hit 0 $TK_BIN note search letsencrypt --project demo
+check note-toc 0 $TK_BIN note toc --project demo
+"$TK_BIN" note save "superseded idea" --text "an old idea about feature flags that we dropped" --project demo >/dev/null
+nid2=$("$TK_BIN" note review list --json | python3 -c "import json,sys; print([r['id'] for r in json.load(sys.stdin)['reviews'] if r['title']=='superseded idea'][0])")
+check note-review-reject 0 $TK_BIN note review reject "$nid2"
+if $TK_BIN note search feature --project demo | grep -q 'old idea'; then
+  fail=$((fail+1)); printf 'FAIL note-rejected-not-stored\n'
+else
+  pass=$((pass+1)); printf 'ok   note-rejected-not-stored\n'
+fi
+check note-reindex 0 $TK_BIN note reindex
+if command -v stat >/dev/null 2>&1 && [ "$(stat -c '%a' "$TK_HOME"/data/notes/demo/*.md 2>/dev/null | head -1)" = "600" ]; then
+  pass=$((pass+1)); printf 'ok   note-md-0600\n'
+else
+  fail=$((fail+1)); printf 'FAIL note-md-0600\n'
+fi
+
 out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | $TK_BIN mcp)
 n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
 if [ "$n" = "11" ]; then pass=$((pass+1)); printf 'ok   mcp-tools-11\n';

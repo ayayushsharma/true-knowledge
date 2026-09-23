@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -484,5 +485,167 @@ func TestNotesReindexEmbeds(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("expected both notes embedded under m1, got %d", count)
+	}
+}
+
+// TestNotesReindexIncrementalCache: a second rebuild of unchanged notes must
+// reuse the persistent embed cache — even when the endpoint is dead — so
+// vectors survive and reindex never re-pays for unchanged content.
+func TestNotesReindexIncrementalCache(t *testing.T) {
+	ctx := context.Background()
+	srv, _ := fakeEmbedServer(map[string][]float32{})
+	defer srv.Close()
+
+	root := filepath.Join(t.TempDir(), "notes")
+	if err := os.MkdirAll(filepath.Join(root, "demo"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, nt := range []Note{earthNote(), marsNote()} {
+		if err := os.WriteFile(filepath.Join(root, "demo", nt.File), marshalNote(nt), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := OpenNotes(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.Close()
+
+	n.SetEmbedder(NewEmbedder(srv.URL, "m1", 3000))
+	if _, err := n.Reindex(ctx, "demo"); err != nil {
+		t.Fatalf("Reindex: %v", err)
+	}
+
+	dead := srv.URL
+	srv.Close()
+	n.SetEmbedder(NewEmbedder(dead, "m1", 3000))
+	if _, err := n.Reindex(ctx, "demo"); err != nil {
+		t.Fatalf("Reindex (dead endpoint): %v", err)
+	}
+
+	var count int
+	if err := n.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM notes WHERE embed_model = ? AND embedding IS NOT NULL`, "m1").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("reindex with dead endpoint should keep cached vectors, got %d embedded notes", count)
+	}
+}
+
+// TestNotesReindexChunked: fresh notes embed in embedChunkSize-groups after a
+// single warm call; a failed chunk must not sink the ones after it.
+func TestNotesReindexChunked(t *testing.T) {
+	ctx := context.Background()
+	srv, hits := fakeEmbedServer(map[string][]float32{})
+	defer srv.Close()
+
+	root := filepath.Join(t.TempDir(), "notes")
+	if err := os.MkdirAll(filepath.Join(root, "demo"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	total := 5
+	for i := 0; i < total; i++ {
+		nt := Note{ID: fmt.Sprintf("n%d", i), Project: "demo", Title: fmt.Sprintf("note %d", i),
+			File: fmt.Sprintf("note-%03d.md", i), Scope: "project", CreatedAt: int64(i), UpdatedAt: int64(i),
+			Body: fmt.Sprintf("body number %d of the fixture set", i)}
+		if err := os.WriteFile(filepath.Join(root, "demo", nt.File), marshalNote(nt), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := OpenNotes(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.Close()
+
+	old := embedChunkSize
+	embedChunkSize = 2
+	defer func() { embedChunkSize = old }()
+
+	n.SetEmbedder(NewEmbedder(srv.URL, "m1", 3000))
+	if _, err := n.Reindex(ctx, "demo"); err != nil {
+		t.Fatalf("Reindex: %v", err)
+	}
+
+	chunks := (total + embedChunkSize - 1) / embedChunkSize
+	if *hits != 1+chunks {
+		t.Fatalf("embed calls = %d, want %d (1 warm + %d chunks)", *hits, 1+chunks, chunks)
+	}
+	var count int
+	if err := n.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM notes WHERE embed_model = ?`, "m1").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != total {
+		t.Fatalf("embedded %d of %d notes", count, total)
+	}
+}
+
+// TestNotesReindexChunkFailOpen: a single failed chunk degrades only those
+// notes to BM25 — every other chunk still embeds and reindex never errors.
+func TestNotesReindexChunkFailOpen(t *testing.T) {
+	ctx := context.Background()
+	badChunk := 0
+	embedCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		embedCalls++
+		if embedCalls == 2 { // warm call is #1, so fail the first real chunk
+			badChunk++
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		var req struct {
+			Model string   `json:"model"`
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		emb := make([][]float32, len(req.Input))
+		for i := range emb {
+			emb[i] = []float32{float32(i), 1}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"model": req.Model, "embeddings": emb})
+	}))
+	defer srv.Close()
+
+	root := filepath.Join(t.TempDir(), "notes")
+	if err := os.MkdirAll(filepath.Join(root, "demo"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	total := 5
+	for i := 0; i < total; i++ {
+		nt := Note{ID: fmt.Sprintf("n%d", i), Project: "demo", Title: fmt.Sprintf("note %d", i),
+			File: fmt.Sprintf("note-%03d.md", i), Scope: "project", CreatedAt: int64(i), UpdatedAt: int64(i),
+			Body: fmt.Sprintf("body number %d of the fixture set", i)}
+		if err := os.WriteFile(filepath.Join(root, "demo", nt.File), marshalNote(nt), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := OpenNotes(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer n.Close()
+
+	old := embedChunkSize
+	embedChunkSize = 2
+	defer func() { embedChunkSize = old }()
+
+	n.SetEmbedder(NewEmbedder(srv.URL, "m1", 3000))
+	if _, err := n.Reindex(ctx, "demo"); err != nil {
+		t.Fatalf("Reindex must not fail on a bad chunk: %v", err)
+	}
+
+	var count int
+	if err := n.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM notes WHERE embed_model = ?`, "m1").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if want := total - embedChunkSize; count != want {
+		t.Fatalf("embedded %d notes after one bad chunk, want %d", count, want)
+	}
+	if badChunk != 1 {
+		t.Fatalf("expected exactly one failed chunk, got %d", badChunk)
 	}
 }

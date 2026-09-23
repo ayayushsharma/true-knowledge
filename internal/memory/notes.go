@@ -8,7 +8,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,7 +24,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const notesSchemaVersion = 2
+const notesSchemaVersion = 3
 
 const notesSchema = `
 CREATE TABLE IF NOT EXISTS notes (
@@ -42,7 +44,38 @@ CREATE INDEX IF NOT EXISTS notes_project_idx ON notes (project);
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
 	title, body
 );
+CREATE TABLE IF NOT EXISTS note_embeds (
+	file      TEXT NOT NULL,
+	model     TEXT NOT NULL,
+	digest    TEXT NOT NULL,
+	embedding BLOB NOT NULL,
+	PRIMARY KEY (file, model)
+);
+CREATE INDEX IF NOT EXISTS note_embeds_model_idx ON note_embeds (model);
 `
+
+// embedChunkSize bounds each /api/embed request so a single slow or dead
+// endpoint can never torpedo the whole corpus: one chunk fails, the rest
+// still embed. Kept a var so tests can shrink it.
+var embedChunkSize = 64
+
+// warmEmbedText is a throwaway body used to force a cold model to load once,
+// under the configured timeout, before the first real chunk. Its vector is
+// discarded. A failed warm call means embed-all is hopeless: we skip every
+// remaining chunk (fail-open BM25) instead of paying chunkN×timeout.
+const warmEmbedText = "tk:kernel:reindex-warmup"
+
+// reindexEntry is a single note being rebuilt plus the sha256 of its body —
+// the content key used to reuse cached embeddings across rebuilds.
+type reindexEntry struct {
+	note   Note
+	digest string
+}
+
+func bodyDigest(body string) string {
+	sum := sha256.Sum256([]byte(body))
+	return hex.EncodeToString(sum[:])
+}
 
 // Note is one approved, indexed knowledge entry.
 type Note struct {
@@ -128,7 +161,10 @@ func (n *Notes) migrate(ctx context.Context) error {
 				ALTER TABLE notes ADD COLUMN embed_model TEXT NOT NULL DEFAULT ''`); err != nil {
 				return fmt.Errorf("migrate notes index to v2: %w", err)
 			}
-		} else if _, err := n.db.ExecContext(ctx, notesSchema); err != nil {
+		}
+		// All CREATEs in notesSchema are IF NOT EXISTS, so running it on any
+		// existing store is safe; v1/v2 only lacks note_embeds by now.
+		if _, err := n.db.ExecContext(ctx, notesSchema); err != nil {
 			return fmt.Errorf("create notes index schema: %w", err)
 		}
 		if _, err := n.db.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", notesSchemaVersion)); err != nil {
@@ -481,7 +517,9 @@ func (n *Notes) TOC(ctx context.Context, project string, maxChars int) ([]string
 }
 
 // Reindex rebuilds the index from the markdown files themselves (the source
-// of truth), for one project or all. Returns the note count.
+// of truth), for one project or all. Returns the note count. Embeds are kept
+// in a persistent content-keyed cache (note_embeds), so this stays cheap for
+// unchanged notes and vectors survive the table rebuild.
 func (n *Notes) Reindex(ctx context.Context, project string) (int, error) {
 	project = strings.TrimSpace(project)
 	if _, err := n.db.ExecContext(ctx, `DROP TABLE IF EXISTS notes_fts`); err != nil {
@@ -493,10 +531,7 @@ func (n *Notes) Reindex(ctx context.Context, project string) (int, error) {
 	if _, err := n.db.ExecContext(ctx, notesSchema); err != nil {
 		return 0, err
 	}
-	type entry struct {
-		note Note
-	}
-	var entries []entry
+	var entries []reindexEntry
 	err := walkProjects(n.notesRoot(), func(proj, file string) error {
 		if project != "" && proj != project {
 			return nil
@@ -509,24 +544,22 @@ func (n *Notes) Reindex(ctx context.Context, project string) (int, error) {
 		if err != nil {
 			return fmt.Errorf("%s: %w", file, err)
 		}
-		entries = append(entries, entry{note})
+		entries = append(entries, reindexEntry{note: note})
 		return nil
 	})
 	if err != nil {
 		return 0, err
 	}
-	// Batch-embed all bodies before the single insert transaction so the
-	// transaction never holds while an HTTP embed call is in flight.
+	for i := range entries {
+		entries[i].digest = bodyDigest(entries[i].note.Body)
+	}
+	// Embedding happens before the single insert transaction so the
+	// transaction never holds while HTTP is in flight. Unchanged bodies reuse
+	// the persistent cache; fresh ones are embedded in chunks with per-chunk
+	// fail-open (a bad endpoint never fails a reindex, it just degrades).
 	if n.embed != nil && len(entries) > 0 {
-		bodies := make([]string, len(entries))
-		for i, e := range entries {
-			bodies[i] = e.note.Body
-		}
-		if vecs, eerr := n.embed.Embed(ctx, bodies); eerr == nil {
-			for i := range entries {
-				entries[i].note.Embedding = vecs[i]
-				entries[i].note.EmbedModel = n.embed.Model
-			}
+		if err := n.reindexEmbed(ctx, entries); err != nil {
+			return 0, err
 		}
 	}
 	tx, err := n.db.BeginTx(ctx, nil)
@@ -553,11 +586,105 @@ func (n *Notes) Reindex(ctx context.Context, project string) (int, error) {
 		}
 		count++
 	}
+	// Refresh the persistent embed cache for this model inside the same tx:
+	// rows for files that vanished are pruned, everything else is re-keyed by
+	// body digest (unchanged bodies hit cache on the next rebuild).
+	if n.embed != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM note_embeds WHERE model = ?`, n.embed.Model); err != nil {
+			return 0, err
+		}
+		for _, e := range entries {
+			if e.note.Embedding == nil {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx,
+				`INSERT OR REPLACE INTO note_embeds (file, model, digest, embedding) VALUES (?, ?, ?, ?)`,
+				filepath.Join(e.note.Project, e.note.File), n.embed.Model, e.digest, encodeVec(e.note.Embedding)); err != nil {
+				return 0, err
+			}
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
 	_, _ = n.db.ExecContext(ctx, "PRAGMA optimize")
 	return count, nil
+}
+
+// reindexEmbed wires cached vectors into unchanged notes and embeds the rest
+// in chunks of embedChunkSize. HTTP embedding never fails reindex: missing or
+// stale vectors simply stay BM25-only (fail-open). One warm call bounds the
+// unusable-endpoint case to a single timeout instead of chunkN×timeout.
+func (n *Notes) reindexEmbed(ctx context.Context, entries []reindexEntry) error {
+	model := n.embed.Model
+	type cachedRow struct {
+		digest string
+		vec    []float32
+	}
+	cached := map[string]cachedRow{}
+	rows, err := n.db.QueryContext(ctx, `SELECT file, digest, embedding FROM note_embeds WHERE model = ?`, model)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var file, digest string
+		var emb []byte
+		if err := rows.Scan(&file, &digest, &emb); err != nil {
+			return err
+		}
+		if vec, ok := decodeVec(emb); ok {
+			cached[file] = cachedRow{digest: digest, vec: vec}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	needs := 0
+	for i := range entries {
+		rel := filepath.Join(entries[i].note.Project, entries[i].note.File)
+		if row, ok := cached[rel]; ok && row.digest == entries[i].digest {
+			entries[i].note.Embedding = row.vec
+			entries[i].note.EmbedModel = model
+			continue
+		}
+		needs++
+	}
+	if needs == 0 {
+		return nil
+	}
+
+	bodies := make([]string, 0, needs)
+	idx := make([]int, 0, needs)
+	for i := range entries {
+		if entries[i].note.Embedding == nil {
+			bodies = append(bodies, entries[i].note.Body)
+			idx = append(idx, i)
+		}
+	}
+	// Warm call: force a cold model to load under the endpoint timeout once,
+	// before the first real chunk. A failure here (endpoint down, missing
+	// model, load slower than timeout) means chunking would just repeat it, so
+	// bail to BM25-only rather than burn needs/chunkSize × timeout.
+	if _, err := n.embed.Embed(ctx, []string{warmEmbedText}); err != nil {
+		return nil
+	}
+	for start := 0; start < len(bodies); start += embedChunkSize {
+		end := start + embedChunkSize
+		if end > len(bodies) {
+			end = len(bodies)
+		}
+		vecs, err := n.embed.Embed(ctx, bodies[start:end])
+		if err != nil {
+			continue // per-chunk fail-open: this chunk stays keyword-only
+		}
+		for j := range vecs {
+			entries[idx[start+j]].note.Embedding = vecs[j]
+			entries[idx[start+j]].note.EmbedModel = model
+		}
+	}
+	return nil
 }
 
 func (n *Notes) notesRoot() string        { return filepath.Join(n.root) }

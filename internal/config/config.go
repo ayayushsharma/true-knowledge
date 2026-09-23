@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -55,6 +56,9 @@ type Config struct {
 	Budgets        Budgets   `json:"budgets"`
 	Embedding      Embedding `json:"embedding"`
 	Ledger         Ledger    `json:"ledger"`
+	// MCPProfile is the machine default MCP tool profile when neither the
+	// --tool-profile flag nor TK_MCP_PROFILE is set. Empty = scout.
+	MCPProfile string `json:"mcp_profile,omitempty"`
 }
 
 // Defaults returns the Linux-first defaults.
@@ -77,6 +81,9 @@ const DefaultCBMPin = "0.11.0"
 
 // ValidModes for tk index.
 func ValidModes() []string { return []string{"fast", "moderate", "full"} }
+
+// ValidProfiles for the MCP tool surface (also used by completion).
+func ValidProfiles() []string { return []string{"scout", "analysis", "minimal", "memory"} }
 
 // Load reads path or returns Defaults when missing.
 func Load(path string) (Config, error) {
@@ -126,6 +133,9 @@ func (c Config) Validate() error {
 			return fmt.Errorf("embedding.timeout_ms must be positive")
 		}
 	}
+	if c.MCPProfile != "" && !slices.Contains(ValidProfiles(), c.MCPProfile) {
+		return fmt.Errorf("invalid mcp.profile %q (want %s)", c.MCPProfile, strings.Join(ValidProfiles(), "|"))
+	}
 	return nil
 }
 
@@ -157,6 +167,7 @@ func KnownKeys() []string {
 		"budgets.default_chars", "budgets.architecture_chars", "budgets.notes_toc_chars", "budgets.ledger_chars",
 		"embedding.enabled", "embedding.endpoint", "embedding.model", "embedding.timeout_ms",
 		"ledger.enabled",
+		"mcp.profile",
 	}
 }
 
@@ -194,6 +205,12 @@ func SetKey(cfg *Config, key, value string) error {
 		return setBudget(&cfg.Embedding.TimeoutMS, "embedding.timeout_ms", value)
 	case "ledger.enabled":
 		return setBool(&cfg.Ledger.Enabled, value)
+	case "mcp.profile":
+		p := strings.TrimSpace(value)
+		if p != "" && !slices.Contains(ValidProfiles(), p) {
+			return fmt.Errorf("invalid mcp.profile %q (want %s)", p, strings.Join(ValidProfiles(), "|"))
+		}
+		cfg.MCPProfile = p
 	default:
 		return fmt.Errorf("unknown config key %q", key)
 	}

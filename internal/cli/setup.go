@@ -5,27 +5,34 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/true-knowledge/tk/internal/backends"
 	"github.com/true-knowledge/tk/internal/config"
 	"github.com/true-knowledge/tk/internal/installer"
+	"github.com/true-knowledge/tk/internal/mcp"
 	"github.com/true-knowledge/tk/internal/store"
 )
 
 // mcpSnippet renders the manual-paste MCP client snippet shared by
-// mcp-install and setup.
-func mcpSnippet(exe, client string, dry bool) (string, map[string]any, error) {
+// mcp-install and setup. profile selects the tool surface via the
+// TK_MCP_PROFILE env var so the `tk mcp` command itself never changes per
+// client — each client/project can override the profile through its own env.
+func mcpSnippet(exe, client, profile string, dry bool) (string, map[string]any, error) {
 	switch client {
 	case "pi":
 		return "", nil, fail("Pi integration slipped this build (no reviewed extension yet); use --client opencode|claude|codex")
 	case "opencode", "claude", "codex":
-		snippet := map[string]any{
-			"mcpServers": map[string]any{
-				"tk": map[string]any{"command": exe, "args": []string{"mcp"}},
-			},
+		srv := map[string]any{"command": exe, "args": []string{"mcp"}}
+		if profile != "" && profile != mcp.ProfileScout {
+			if !slices.Contains(config.ValidProfiles(), profile) {
+				return "", nil, fail("unknown --tool-profile %q (want %s)", profile, strings.Join(config.ValidProfiles(), "|"))
+			}
+			srv["env"] = map[string]string{mcpProfileEnv: profile}
 		}
+		snippet := map[string]any{"mcpServers": map[string]any{"tk": srv}}
 		raw, _ := json.MarshalIndent(snippet, "", "  ")
 		target := map[string]string{
 			"opencode": "~/.config/opencode/opencode.json (mcpServers.tk)",
@@ -43,7 +50,7 @@ func mcpSnippet(exe, client string, dry bool) (string, map[string]any, error) {
 
 func cmdSetup(g *Globals) *cobra.Command {
 	var doRegister bool
-	var name, client string
+	var name, client, profile string
 	var dry bool
 	c := &cobra.Command{
 		Use:   "setup",
@@ -55,6 +62,9 @@ Steps: init dirs/config → install all backends at pins → (opt-in) register c
   tk setup --register --name demo
   tk setup --client opencode`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if client == "" && profile != "" {
+				return fail("--tool-profile needs --client")
+			}
 			ctx, err := load(*g)
 			if err != nil {
 				return err
@@ -129,7 +139,7 @@ Steps: init dirs/config → install all backends at pins → (opt-in) register c
 				if err != nil {
 					exe = "tk"
 				}
-				text, _, err := mcpSnippet(exe, client, dry)
+				text, _, err := mcpSnippet(exe, client, profile, dry)
 				if err != nil {
 					return err
 				}
@@ -141,9 +151,13 @@ Steps: init dirs/config → install all backends at pins → (opt-in) register c
 	c.Flags().BoolVar(&doRegister, "register", false, "register the current directory as a project (opt-in)")
 	c.Flags().StringVar(&name, "name", "", "project name for --register (default: directory base)")
 	c.Flags().StringVar(&client, "client", "", "print MCP snippet for pi|opencode|claude|codex")
+	c.Flags().StringVar(&profile, "tool-profile", "", "tool surface for --client (scout|analysis|minimal|memory); emitted as TK_MCP_PROFILE env so per-project overrides work")
 	c.Flags().BoolVar(&dry, "dry-run", false, "print plan without downloading or writing")
 	_ = c.RegisterFlagCompletionFunc("client", func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"pi", "opencode", "claude", "codex"}, cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = c.RegisterFlagCompletionFunc("tool-profile", func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return config.ValidProfiles(), cobra.ShellCompDirectiveNoFileComp
 	})
 	return c
 }

@@ -2,8 +2,12 @@ package cli
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/true-knowledge/tk/internal/config"
 	"github.com/true-knowledge/tk/internal/mcp"
 	"github.com/true-knowledge/tk/internal/memory"
 )
@@ -15,6 +19,10 @@ func cmdMCP(g *Globals) *cobra.Command {
 		Short: "Run MCP stdio proxy (profile: scout|analysis|minimal|memory), stdin EOF = instant exit",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, err := load(*g)
+			if err != nil {
+				return err
+			}
+			profile, err := resolveProfile(cmd.Flags().Changed("tool-profile"), profile, os.Getenv("TK_MCP_PROFILE"), ctx.Cfg.MCPProfile)
 			if err != nil {
 				return err
 			}
@@ -35,11 +43,38 @@ func cmdMCP(g *Globals) *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&profile, "tool-profile", mcp.ProfileScout,
-		"tool surface: scout (11) | analysis (14) | minimal (3) | memory (20)")
+		"tool surface: scout (11) | analysis (14) | minimal (3) | memory (20); explicit flag beats TK_MCP_PROFILE and config mcp.profile")
 	_ = c.RegisterFlagCompletionFunc("tool-profile", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		return []string{mcp.ProfileScout, mcp.ProfileAnalysis, mcp.ProfileMinimal, mcp.ProfileMemory}, cobra.ShellCompDirectiveNoFileComp
+		return config.ValidProfiles(), cobra.ShellCompDirectiveNoFileComp
 	})
 	return c
+}
+
+const mcpProfileEnv = "TK_MCP_PROFILE"
+
+// resolveProfile picks the MCP tool profile by precedence: an explicitly-set
+// --tool-profile flag wins, then the TK_MCP_PROFILE env var, then the config
+// mcp.profile machine default, then scout. An invalid value at any level is a
+// hard error (never a silent fallback) so a typo'd env never silently exposes
+// an agent to the wrong tool surface.
+func resolveProfile(flagChanged bool, flagVal, envVal, cfgVal string) (string, error) {
+	var candidate, source string
+	switch {
+	case flagChanged:
+		candidate, source = flagVal, "--tool-profile"
+	case envVal != "":
+		candidate, source = envVal, "TK_MCP_PROFILE"
+	case cfgVal != "":
+		candidate, source = cfgVal, "mcp.profile"
+	default:
+		return mcp.ProfileScout, nil
+	}
+	for _, p := range config.ValidProfiles() {
+		if candidate == p {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("invalid %s %q (want %s)", source, candidate, strings.Join(config.ValidProfiles(), "|"))
 }
 
 // memoryStore opens the three memory sub-stores wired for the memory profile.

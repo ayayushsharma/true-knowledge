@@ -6,7 +6,7 @@
 
 ## What this repo is
 
-* Single static Go binary `tk`: `setup/init/register/index/sync/status/find/explain/grep/source-search/outline/impact/arch/query/validate/cbm/daemon/mcp/config/migrate/install/mcp-install/completion` + tk-owned memory `mem/note/ledger` (offline, no CBM). `kg_find/kg_explain/kg_grep` are aliases of `find/explain/grep`. `daemon` is CLI-only (never MCP). MCP profiles: `scout(11)|analysis(14)|minimal(3)|memory(20)`.
+* Single static Go binary `tk`: `setup/init/register/index/sync/status/find/explain/grep/source-search/outline/impact/arch/query/validate/cbm/daemon/mcp/config/migrate/install/mcp-install/completion` + tk-owned memory `mem/note/ledger` (offline, no CBM). `kg_find/kg_explain/kg_grep` are aliases of `find/explain/grep`. `daemon` is CLI-only (never MCP). MCP profiles: `scout(11)|analysis(14)|minimal(3)|memory(20)` — selected at runtime by `--tool-profile` > `TK_MCP_PROFILE` env > config `mcp.profile` > `scout` (invalid = hard error; clients set env per model/project).
 * No own indexer/parser/SQLite touch — except the memory layer, which is deliberately tk-owned: `mem/facts.db` + `notes/index.db` via pinned CGo-free `modernc.org/sqlite` (FTS5, standalone tables only — external-content tables corrupt on insert), durable note sources as markdown, bounded ledger JSON. Graph work = `codebase-memory-mcp cli <tool> --args-file` (raw-JSON argv is deprecated upstream) via one wrapper (`internal/cbmexec`); text work = explicit `source-search` via Zoekt linked as a Go library (`internal/zoekttext`, no magic routing, no subprocess).
 * tk installs ALL its external dependencies itself (`internal/backends` registry + `internal/installer`: pinned, checksum-verified, `<cache>/bin`; CBM today). Zoekt is a `go.mod` pin, not a backend — same-language links, cross-language spawns. No apt/brew/npm/toolchain at runtime. `tk setup` = init + install + opt-in register/client.
 * No `tk` supervisor daemon. CBM coordination daemon is shared per-account (first-starts/last-stops). `cli` mode is daemon-free one-shot.
@@ -52,14 +52,14 @@ jq -r 'select(.mcp.tool=="source_search") | .output.text' tk.log
 2. **Indexing:** default `moderate`; `fast` for watcher/auto, `full` explicit only; `cross-repo-intelligence` only after fresh bases + `target_projects=["*"]`. Check `check_index_coverage` before negative claims. Respect `.cbmignore` order + `512MiB` cap + `index_max_*` (fail-whole-preserve-serving).
 3. **Freshness:** `tk sync` = `git HEAD` + coverage → no-op or let watcher do it. Never force full on save.
 4. **Fail-open + budgets:** CBM down → clear `tk install` hint, never block agent. Truncate by whole records + `...truncated`.
-5. **Completion:** Cobra only. Dynamic: projects (from `tk.json` + `list_projects`), config keys, `--client pi,opencode,claude,codex`. Test `tk __complete`.
+5. **Completion:** Cobra only. Dynamic: projects (from `tk.json` + `list_projects`), config keys, `--client pi,opencode,claude,codex`, `--tool-profile scout,analysis,minimal,memory`. Test `tk __complete`.
 6. **Close fast:** no flush/stop on session end. stdin EOF = instant exit. Only `install --update` holds admission barrier to deadline.
 7. **Docs:** change = new `docs/DECISIONS/YYYY-MM-DD-<slug>.md` + bump affected `docs/*.md` header (`status/date/supersedes`). Never edit history except `superseded-by` stamp. `grep -r "status: authoritative" docs/` is truth.
 
 ## Key references
 
 * CBM: `README.md #session-coordination-daemon #cli-mode #auto-index`, `docs/CONFIGURATION.md §2/§4`, `docs/INDEX_RESOURCE_LIMITS.md`, `docs/cbmignore.md`, `server.json`.
-* This repo: `compatible-implementation-spec.md` (v1 frozen), `docs/00-AUTHORITY.md`, `docs/INDEXING.md`, `docs/CBM-BOUNDARY.md`, `docs/PATHS-CONFIG.md`, `docs/AGENT-PROFILES.md`, `docs/ROADMAP.md`, `docs/DECISIONS/2026-09-23-mvp3-memory-layer.md` (memory layer: SQLite + endpoint embeddings + memory profile).
+* This repo: `compatible-implementation-spec.md` (v1 frozen), `docs/00-AUTHORITY.md`, `docs/INDEXING.md`, `docs/CBM-BOUNDARY.md`, `docs/PATHS-CONFIG.md`, `docs/AGENT-PROFILES.md`, `docs/ROADMAP.md`, `docs/DECISIONS/2026-09-23-mvp3-memory-layer.md` (memory layer: SQLite + endpoint embeddings + memory profile), `docs/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md` (profile via `TK_MCP_PROFILE`).
 
 ## PR checklist
 

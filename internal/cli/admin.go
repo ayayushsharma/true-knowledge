@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -162,6 +163,11 @@ func getKey(c config.Config, key string) (string, error) {
 		return strconv.Itoa(c.Embedding.TimeoutMS), nil
 	case "ledger.enabled":
 		return strconv.FormatBool(c.Ledger.Enabled), nil
+	case "mcp.profile":
+		if c.MCPProfile == "" {
+			return "scout (unset)", nil
+		}
+		return c.MCPProfile, nil
 	}
 	return "", fmt.Errorf("unknown key %q (see `tk config list` / known keys)", key)
 }
@@ -232,6 +238,11 @@ func setKey(c *config.Config, key, val string) error {
 			return fmt.Errorf("want true|false: %w", err)
 		}
 		c.Ledger.Enabled = b
+	case "mcp.profile":
+		if val != "" && !slices.Contains(config.ValidProfiles(), val) {
+			return fmt.Errorf("want %s or empty to unset, got %q", strings.Join(config.ValidProfiles(), "|"), val)
+		}
+		c.MCPProfile = val
 	default:
 		return fmt.Errorf("unknown key %q", key)
 	}
@@ -441,14 +452,17 @@ func displayPath(st installer.Status) string {
 }
 
 func cmdMCPInstall(g *Globals) *cobra.Command {
-	var client string
+	var client, profile string
 	var dry bool
 	c := &cobra.Command{
 		Use:   "mcp-install",
 		Short: "Point an agent client at `tk mcp` (Pi slipped this build)",
 		Example: `  tk mcp-install --client opencode --dry-run
-  tk mcp-install --client claude`,
+  tk mcp-install --client claude --tool-profile memory`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if profile != "" && !slices.Contains(config.ValidProfiles(), profile) {
+				return fmt.Errorf("unknown --tool-profile %q (want %s)", profile, strings.Join(config.ValidProfiles(), "|"))
+			}
 			ctx, err := load(*g)
 			if err != nil {
 				return err
@@ -457,7 +471,7 @@ func cmdMCPInstall(g *Globals) *cobra.Command {
 			if err != nil {
 				exe = "tk"
 			}
-			text, fields, err := mcpSnippet(exe, client, dry)
+			text, fields, err := mcpSnippet(exe, client, profile, dry)
 			if err != nil {
 				return err
 			}
@@ -466,9 +480,13 @@ func cmdMCPInstall(g *Globals) *cobra.Command {
 	}
 	c.Flags().StringVar(&client, "client", "", "pi|opencode|claude|codex (required)")
 	_ = c.MarkFlagRequired("client")
+	c.Flags().StringVar(&profile, "tool-profile", "", "tool surface (scout|analysis|minimal|memory); emitted as TK_MCP_PROFILE env, default scout")
 	c.Flags().BoolVar(&dry, "dry-run", false, "print without writing")
 	_ = c.RegisterFlagCompletionFunc("client", func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
 		return []string{"pi", "opencode", "claude", "codex"}, cobra.ShellCompDirectiveNoFileComp
+	})
+	_ = c.RegisterFlagCompletionFunc("tool-profile", func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return config.ValidProfiles(), cobra.ShellCompDirectiveNoFileComp
 	})
 	return c
 }

@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/true-knowledge/tk/internal/mcp"
 	"github.com/true-knowledge/tk/internal/store"
 )
 
@@ -82,5 +83,39 @@ func TestRepoRelative(t *testing.T) {
 	}
 	if got := repoRelative(c, "demo", "/elsewhere/a.go"); got != "/elsewhere/a.go" {
 		t.Fatalf("outside root = %q", got)
+	}
+}
+
+func TestResolveProfile(t *testing.T) {
+	cases := []struct {
+		name string
+		flag bool
+		fl   string
+		env  string
+		cfg  string
+		want string
+		err  bool
+	}{
+		{"defaults to scout", false, "", "", "", mcp.ProfileScout, false},
+		{"flag wins over env and config", true, "memory", "analysis", "minimal", "memory", false},
+		{"env beats config", false, "", "analysis", "minimal", "analysis", false},
+		{"config fallback", false, "", "", "minimal", "minimal", false},
+		{"invalid flag errors", true, "bogus", "memory", "", "", true},
+		{"invalid env errors", false, "", "bogus", "memory", "", true},
+		{"invalid config errors", false, "", "", "bogus", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveProfile(tc.flag, tc.fl, tc.env, tc.cfg)
+			if tc.err {
+				if err == nil {
+					t.Fatalf("expected error, got %q", got)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("got %q err %v (want %q)", got, err, tc.want)
+			}
+		})
 	}
 }

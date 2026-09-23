@@ -1,8 +1,8 @@
 ---
 title: Paths and config — Linux-style everywhere
 status: authoritative
-date: 2026-09-23
-supersedes: [compatible-implementation-spec.md §6, docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (memory paths)]
+date: 2026-09-24
+supersedes: [compatible-implementation-spec.md §6, docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (memory paths), docs/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md (MCP profile env)]
 superseded-by: null
 ---
 
@@ -10,7 +10,11 @@ superseded-by: null
 
 ## Config keys (dotted, `tk config set/list`)
 
-`index_mode`, `auto_index`, `auto_watch`, `watcher_enabled`, `allowed_root`, `cbm_binary`, `cbm_version_pin`, `budgets.default_chars|architecture_chars|notes_toc_chars|ledger_chars`, `embedding.enabled|endpoint|model|timeout_ms`, `ledger.enabled`. Unknown keys error; `set` validates at write time (enabling embeddings requires an endpoint + model).
+`index_mode`, `auto_index`, `auto_watch`, `watcher_enabled`, `allowed_root`, `cbm_binary`, `cbm_version_pin`, `budgets.default_chars|architecture_chars|notes_toc_chars|ledger_chars`, `embedding.enabled|endpoint|model|timeout_ms`, `ledger.enabled`, `mcp.profile`. Unknown keys error; `set` validates at write time (enabling embeddings requires an endpoint + model; `mcp.profile` must be one of `scout|analysis|minimal|memory` or empty).
+
+## Runtime env vars
+
+`TK_CONFIG_HOME/TK_DATA_HOME/TK_CACHE_HOME/TK_STATE_HOME` / `TK_HOME` (see above) and `TK_MCP_PROFILE` — the MCP tool surface for `tk mcp`, resolved as explicit `--tool-profile` flag > `TK_MCP_PROFILE` > config `mcp.profile` > `scout`. Invalid values fail loudly, never fall back silently. Clients set it per model/project via their own MCP server `env` (see docs/AGENT-PROFILES.md).
 
 # PATHS-CONFIG — Linux standard, Windows-compatible
 

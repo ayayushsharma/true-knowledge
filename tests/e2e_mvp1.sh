@@ -225,6 +225,35 @@ out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
 if [ "$n" = "20" ]; then pass=$((pass+1)); printf 'ok   mcp-tools-memory-20\n';
 else fail=$((fail+1)); printf 'FAIL mcp-tools-memory (n=%s)\n' "$n"; fi
+# profile is a runtime knob: TK_MCP_PROFILE env drives it, flag beats env, invalid env fails loudly
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | TK_MCP_PROFILE=analysis $TK_BIN mcp)
+n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
+if [ "$n" = "14" ]; then pass=$((pass+1)); printf 'ok   mcp-env-analysis-14\n';
+else fail=$((fail+1)); printf 'FAIL mcp-env-analysis (n=%s)\n' "$n"; fi
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | TK_MCP_PROFILE=minimal $TK_BIN mcp --tool-profile memory)
+n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
+if [ "$n" = "20" ]; then pass=$((pass+1)); printf 'ok   mcp-flag-beats-env-20\n';
+else fail=$((fail+1)); printf 'FAIL mcp-flag-beats-env (n=%s)\n' "$n"; fi
+if TK_MCP_PROFILE=bogus sh -c "printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}' | $TK_BIN mcp" 2>&1 | grep -q 'scout|analysis|minimal|memory'; then
+  pass=$((pass+1)); printf 'ok   mcp-env-invalid-rejected\n'
+else
+  fail=$((fail+1)); printf 'FAIL mcp-env-invalid-rejected\n'
+fi
+check mcp-config-set 0 $TK_BIN config set mcp.profile analysis
+if $TK_BIN config get mcp.profile | grep -q '^analysis$'; then
+  pass=$((pass+1)); printf 'ok   mcp-config-get\n'
+else
+  fail=$((fail+1)); printf 'FAIL mcp-config-get\n'
+fi
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | $TK_BIN mcp)
+n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
+if [ "$n" = "14" ]; then pass=$((pass+1)); printf 'ok   mcp-config-profile-14\n';
+else fail=$((fail+1)); printf 'FAIL mcp-config-profile (n=%s)\n' "$n"; fi
+check mcp-config-unset 0 $TK_BIN config set mcp.profile ""
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | $TK_BIN mcp)
+n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
+if [ "$n" = "11" ]; then pass=$((pass+1)); printf 'ok   mcp-config-unset-back-to-11\n';
+else fail=$((fail+1)); printf 'FAIL mcp-config-unset-back (n=%s)\n' "$n"; fi
 # memory profile: in-process tools work even though CBM was killed in live mode
 out=$(printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mem_save","arguments":{"topic":"deploy-tool","value":"make deploy ship it","scope":"project","project":"demo","provenance":"e2e"}}}' | $TK_BIN mcp --tool-profile memory 2>/dev/null)
 case "$out" in

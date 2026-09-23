@@ -13,7 +13,14 @@ import (
 )
 
 func (c *Ctx) openNotes(ctx context.Context) (*memory.Notes, error) {
-	return memory.OpenNotes(ctx, c.Paths.NotesDir())
+	n, err := memory.OpenNotes(ctx, c.Paths.NotesDir())
+	if err != nil {
+		return nil, err
+	}
+	if c.Cfg.Embedding.Enabled {
+		n.SetEmbedder(memory.NewEmbedder(c.Cfg.Embedding.Endpoint, c.Cfg.Embedding.Model, c.Cfg.Embedding.TimeoutMS))
+	}
+	return n, nil
 }
 
 func cmdNote(g *Globals) *cobra.Command {

@@ -137,6 +137,53 @@ else
   fail=$((fail+1)); printf 'FAIL note-md-0600\n'
 fi
 
+# --- embedding layer (optional external /api/embed, BM25-first) ---
+if command -v python3 >/dev/null 2>&1; then
+  python3 - "$T" <<'PYEOF' >/dev/null 2>&1 &
+import sys, json, http.server, socketserver
+d = sys.argv[1]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        n = int(self.headers.get('Content-Length', 0))
+        body = json.loads(self.rfile.read(n))
+        with open(d + '/mock_embed.log', 'a') as f:
+            f.write(json.dumps([body.get('model'), len(body.get('input', []))]) + '\n')
+        vecs = [[0.1] * 8 for _ in body.get('input', [])]
+        resp = json.dumps({'model': body.get('model'), 'embeddings': vecs}).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(resp)))
+        self.end_headers()
+        self.wfile.write(resp)
+    def log_message(self, *a):
+        pass
+with socketserver.TCPServer(('127.0.0.1', 0), H) as srv:
+    with open(d + '/mock_embed.port', 'w') as f:
+        f.write(str(srv.server_address[1]))
+    srv.serve_forever()
+PYEOF
+  EMB_PID=$!
+  for _ in $(seq 1 50); do [ -f "$T/mock_embed.port" ] && break; sleep 0.1; done
+  EMB_PORT=$(cat "$T/mock_embed.port" 2>/dev/null)
+  if [ -n "$EMB_PORT" ]; then
+    check embed-set-model 0 $TK_BIN config set embedding.model e2e-notes
+    check embed-set-endpoint 0 $TK_BIN config set embedding.endpoint "http://127.0.0.1:$EMB_PORT"
+    check embed-enable 0 $TK_BIN config set embedding.enabled true
+    check embed-reindex 0 $TK_BIN note reindex
+    check embed-search-live 0 $TK_BIN note search letsencrypt --project demo
+    kill "$EMB_PID" 2>/dev/null || true
+    wait "$EMB_PID" 2>/dev/null || true
+    check embed-search-down 0 $TK_BIN note search letsencrypt --project demo
+    if grep -q 'e2e-notes' "$T/mock_embed.log" 2>/dev/null; then
+      pass=$((pass+1)); printf 'ok   embed-calls-recorded\n'
+    else
+      fail=$((fail+1)); printf 'FAIL embed-calls-recorded (%s)\n' "$(cat "$T/mock_embed.log" 2>/dev/null)"
+    fi
+  else
+    fail=$((fail+1)); printf 'FAIL embed-mock-server\n'
+  fi
+fi
+
 out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | $TK_BIN mcp)
 n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
 if [ "$n" = "11" ]; then pass=$((pass+1)); printf 'ok   mcp-tools-11\n';

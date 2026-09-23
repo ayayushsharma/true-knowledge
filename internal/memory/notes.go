@@ -22,7 +22,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const notesSchemaVersion = 1
+const notesSchemaVersion = 2
 
 const notesSchema = `
 CREATE TABLE IF NOT EXISTS notes (
@@ -34,7 +34,9 @@ CREATE TABLE IF NOT EXISTS notes (
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL,
 	pinned     INTEGER NOT NULL DEFAULT 0,
-	body       TEXT NOT NULL
+	body       TEXT NOT NULL,
+	embedding  BLOB,
+	embed_model TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS notes_project_idx ON notes (project);
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
@@ -53,6 +55,9 @@ type Note struct {
 	UpdatedAt int64  `json:"updated_at"`
 	Pinned    bool   `json:"pinned"`
 	Body      string `json:"body,omitempty"`
+	// Embedding and model tag are derived data, never serialized.
+	Embedding  []float32 `json:"-"`
+	EmbedModel string    `json:"-"`
 }
 
 // NoteHit is one ranked search result.
@@ -74,9 +79,13 @@ type NoteReviewEntry struct {
 
 // Notes is the approved-notes store plus its FTS5 index.
 type Notes struct {
-	root string
-	db   *sql.DB
+	root  string
+	db    *sql.DB
+	embed *Embedder
 }
+
+// SetEmbedder attaches an embedder for semantic-aware search (nil = BM25 only).
+func (n *Notes) SetEmbedder(e *Embedder) { n.embed = e }
 
 // OpenNotes opens (creating if needed) the notes tree under root.
 func OpenNotes(ctx context.Context, root string) (*Notes, error) {
@@ -113,7 +122,13 @@ func (n *Notes) migrate(ctx context.Context) error {
 		for _, pragma := range []string{"synchronous(NORMAL)", "busy_timeout(10000)"} {
 			_, _ = n.db.ExecContext(ctx, "PRAGMA "+pragma)
 		}
-		if _, err := n.db.ExecContext(ctx, notesSchema); err != nil {
+		if v == 1 {
+			if _, err := n.db.ExecContext(ctx, `
+				ALTER TABLE notes ADD COLUMN embedding BLOB;
+				ALTER TABLE notes ADD COLUMN embed_model TEXT NOT NULL DEFAULT ''`); err != nil {
+				return fmt.Errorf("migrate notes index to v2: %w", err)
+			}
+		} else if _, err := n.db.ExecContext(ctx, notesSchema); err != nil {
 			return fmt.Errorf("create notes index schema: %w", err)
 		}
 		if _, err := n.db.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", notesSchemaVersion)); err != nil {
@@ -208,6 +223,7 @@ func (n *Notes) Approve(ctx context.Context, id string) (Note, error) {
 	if err := atomicWrite(mdPath, marshalNote(note)); err != nil {
 		return Note{}, fmt.Errorf("write note: %w", err)
 	}
+	n.attachEmbedding(ctx, &note)
 	if err := n.indexNote(ctx, note); err != nil {
 		return Note{}, fmt.Errorf("index note: %w", err)
 	}
@@ -226,6 +242,20 @@ func (n *Notes) Reject(ctx context.Context, id string) error {
 	return dropLine(file, ent.ID)
 }
 
+// attachEmbedding fills note.Embedding/EmbedModel when an embedder is set.
+// Any embed failure leaves the note keyword-only; search still works.
+func (n *Notes) attachEmbedding(ctx context.Context, note *Note) {
+	if n.embed == nil {
+		return
+	}
+	vec, err := n.embed.EmbedOne(ctx, note.Body)
+	if err != nil {
+		return
+	}
+	note.Embedding = vec
+	note.EmbedModel = n.embed.Model
+}
+
 // indexNote inserts a note row + FTS entry in one transaction.
 func (n *Notes) indexNote(ctx context.Context, note Note) error {
 	tx, err := n.db.BeginTx(ctx, nil)
@@ -234,9 +264,10 @@ func (n *Notes) indexNote(ctx context.Context, note Note) error {
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `
-		INSERT OR REPLACE INTO notes (id, project, title, file, scope, created_at, updated_at, pinned, body)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		note.ID, note.Project, note.Title, note.File, note.Scope, note.CreatedAt, note.UpdatedAt, boolInt(note.Pinned), note.Body); err != nil {
+		INSERT OR REPLACE INTO notes (id, project, title, file, scope, created_at, updated_at, pinned, body, embedding, embed_model)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		note.ID, note.Project, note.Title, note.File, note.Scope, note.CreatedAt, note.UpdatedAt, boolInt(note.Pinned), note.Body,
+		encodeVecOrNil(note.Embedding), note.EmbedModel); err != nil {
 		return err
 	}
 	var rowid int64
@@ -253,8 +284,18 @@ func (n *Notes) indexNote(ctx context.Context, note Note) error {
 	return tx.Commit()
 }
 
-// Search ranks approved notes with FTS5 BM25. The query is AND'd over
-// whitespace terms so arbitrary keyboard input cannot break MATCH syntax.
+// searchRow is an intermediate ranking candidate.
+type searchRow struct {
+	note  Note
+	score float64
+}
+
+// Search ranks approved notes with FTS5 BM25, fused (RRF) with cosine
+// similarity over stored embeddings when an embedder is configured and the
+// index has notes embedded by a matching model. Any embedder failure, model
+// mismatch, or empty index silently falls back to BM25 — never fails.
+// The query is AND'd over whitespace terms so arbitrary keyboard input
+// cannot break MATCH syntax.
 func (n *Notes) Search(ctx context.Context, project, query string, limit int) ([]NoteHit, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 10
@@ -264,6 +305,8 @@ func (n *Notes) Search(ctx context.Context, project, query string, limit int) ([
 		return nil, errors.New("empty search query")
 	}
 	project = strings.TrimSpace(project)
+	const pool = 50
+
 	rows, err := n.db.QueryContext(ctx, `
 		SELECT n.id, n.project, n.title, n.file, n.scope, n.created_at, n.updated_at, n.pinned, n.body,
 		       bm25(notes_fts) AS score
@@ -272,23 +315,122 @@ func (n *Notes) Search(ctx context.Context, project, query string, limit int) ([
 		WHERE notes_fts MATCH ?
 		  AND (? = '' OR n.project = ?)
 		ORDER BY n.pinned DESC, score
-		LIMIT ?`, fts, project, project, limit)
+		LIMIT ?`, fts, project, project, pool)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []NoteHit
+	var bmRows []searchRow
 	for rows.Next() {
-		var h NoteHit
-		if err := rows.Scan(&h.Note.ID, &h.Note.Project, &h.Note.Title, &h.Note.File,
-			&h.Note.Scope, &h.Note.CreatedAt, &h.Note.UpdatedAt, &h.Note.Pinned, &h.Note.Body, &h.Score); err != nil {
+		var r searchRow
+		if err := rows.Scan(&r.note.ID, &r.note.Project, &r.note.Title, &r.note.File, &r.note.Scope,
+			&r.note.CreatedAt, &r.note.UpdatedAt, &r.note.Pinned, &r.note.Body, &r.score); err != nil {
+			rows.Close()
 			return nil, err
 		}
-		h.Excerpt = excerpt(h.Note.Body)
-		h.Note.Body = ""
-		out = append(out, h)
+		bmRows = append(bmRows, r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	semRows, semIdeal := n.semanticRows(ctx, query, project, pool)
+	if !semIdeal {
+		if len(bmRows) > limit {
+			bmRows = bmRows[:limit]
+		}
+		return toHits(bmRows), nil
+	}
+
+	bmIDs := make([]string, len(bmRows))
+	for i, r := range bmRows {
+		bmIDs[i] = r.note.ID
+	}
+	semIDs := make([]string, len(semRows))
+	for i, r := range semRows {
+		semIDs[i] = r.note.ID
+	}
+	byID := map[string]searchRow{}
+	for _, r := range bmRows {
+		byID[r.note.ID] = r
+	}
+	for _, r := range semRows {
+		byID[r.note.ID] = r
+	}
+	sc := rrScoreMap(bmIDs, semIDs)
+	var ids []string
+	for id := range sc {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		if sc[ids[i]] != sc[ids[j]] {
+			return sc[ids[i]] > sc[ids[j]]
+		}
+		return ids[i] < ids[j]
+	})
+	if len(ids) > limit {
+		ids = ids[:limit]
+	}
+	var out []NoteHit
+	for _, id := range ids {
+		r := byID[id]
+		out = append(out, NoteHit{Note: r.note, Score: sc[id], Excerpt: excerpt(r.note.Body)})
+	}
+	return out, nil
+}
+
+// semanticRows ranks stored embeddings by cosine against the query. ok=false
+// means embeddings are not usable (no embedder, endpoint down, model
+// mismatch, or empty matching set) and search must fall back to BM25.
+func (n *Notes) semanticRows(ctx context.Context, query, project string, cap int) ([]searchRow, bool) {
+	var out []searchRow
+	if n.embed == nil {
+		return out, false
+	}
+	qv, err := n.embed.EmbedOne(ctx, query)
+	if err != nil {
+		return out, false
+	}
+	srows, err := n.db.QueryContext(ctx, `
+		SELECT id, project, title, file, scope, created_at, updated_at, pinned, body, embedding
+		FROM notes
+		WHERE (? = '' OR project = ?) AND embed_model = ?`, project, project, n.embed.Model)
+	if err != nil {
+		return out, false
+	}
+	defer srows.Close()
+	for srows.Next() {
+		var r searchRow
+		var blob []byte
+		if err := srows.Scan(&r.note.ID, &r.note.Project, &r.note.Title, &r.note.File, &r.note.Scope,
+			&r.note.CreatedAt, &r.note.UpdatedAt, &r.note.Pinned, &r.note.Body, &blob); err != nil {
+			return out, false
+		}
+		vec, ok := decodeVec(blob)
+		if !ok || len(vec) != len(qv) {
+			continue
+		}
+		r.note.Body = ""
+		r.score = float64(cosine(qv, vec))
+		out = append(out, r)
+	}
+	if err := srows.Err(); err != nil || len(out) == 0 {
+		return out, false
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].score > out[j].score })
+	if len(out) > cap {
+		out = out[:cap]
+	}
+	return out, true
+}
+
+func toHits(rows []searchRow) []NoteHit {
+	out := make([]NoteHit, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, NoteHit{Note: r.note, Score: r.score, Excerpt: excerpt(r.note.Body)})
+	}
+	return out
 }
 
 // TOC lists note titles newest-first, pinned first, trimmed to maxChars.
@@ -351,13 +493,11 @@ func (n *Notes) Reindex(ctx context.Context, project string) (int, error) {
 	if _, err := n.db.ExecContext(ctx, notesSchema); err != nil {
 		return 0, err
 	}
-	tx, err := n.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
+	type entry struct {
+		note Note
 	}
-	defer tx.Rollback()
-	count := 0
-	err = walkProjects(n.notesRoot(), func(proj, file string) error {
+	var entries []entry
+	err := walkProjects(n.notesRoot(), func(proj, file string) error {
 		if project != "" && proj != project {
 			return nil
 		}
@@ -369,25 +509,49 @@ func (n *Notes) Reindex(ctx context.Context, project string) (int, error) {
 		if err != nil {
 			return fmt.Errorf("%s: %w", file, err)
 		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT OR REPLACE INTO notes (id, project, title, file, scope, created_at, updated_at, pinned, body)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			note.ID, note.Project, note.Title, note.File, note.Scope, note.CreatedAt, note.UpdatedAt, boolInt(note.Pinned), note.Body); err != nil {
-			return err
-		}
-		var rowid int64
-		if err := tx.QueryRowContext(ctx, `SELECT rowid FROM notes WHERE id = ?`, note.ID).Scan(&rowid); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO notes_fts (rowid, title, body) VALUES (?, ?, ?)`, rowid, note.Title, note.Body); err != nil {
-			return err
-		}
-		count++
+		entries = append(entries, entry{note})
 		return nil
 	})
 	if err != nil {
 		return 0, err
+	}
+	// Batch-embed all bodies before the single insert transaction so the
+	// transaction never holds while an HTTP embed call is in flight.
+	if n.embed != nil && len(entries) > 0 {
+		bodies := make([]string, len(entries))
+		for i, e := range entries {
+			bodies[i] = e.note.Body
+		}
+		if vecs, eerr := n.embed.Embed(ctx, bodies); eerr == nil {
+			for i := range entries {
+				entries[i].note.Embedding = vecs[i]
+				entries[i].note.EmbedModel = n.embed.Model
+			}
+		}
+	}
+	tx, err := n.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	count := 0
+	for _, e := range entries {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR REPLACE INTO notes (id, project, title, file, scope, created_at, updated_at, pinned, body, embedding, embed_model)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			e.note.ID, e.note.Project, e.note.Title, e.note.File, e.note.Scope, e.note.CreatedAt, e.note.UpdatedAt,
+			boolInt(e.note.Pinned), e.note.Body, encodeVecOrNil(e.note.Embedding), e.note.EmbedModel); err != nil {
+			return 0, err
+		}
+		var rowid int64
+		if err := tx.QueryRowContext(ctx, `SELECT rowid FROM notes WHERE id = ?`, e.note.ID).Scan(&rowid); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO notes_fts (rowid, title, body) VALUES (?, ?, ?)`, rowid, e.note.Title, e.note.Body); err != nil {
+			return 0, err
+		}
+		count++
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
@@ -616,6 +780,14 @@ func boolInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// encodeVecOrNil stores an embedding as a BLOB (empty vector -> NULL).
+func encodeVecOrNil(v []float32) []byte {
+	if len(v) == 0 {
+		return nil
+	}
+	return encodeVec(v)
 }
 
 // ftsQuery ANDs whitespace terms as quoted phrases.

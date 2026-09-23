@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -22,19 +23,31 @@ type Budgets struct {
 	NotesTocChars     int `json:"notes_toc_chars"`
 }
 
+// Embedding configures the optional Ollama-compatible /api/embed endpoint
+// used to enrich note search (BM25 + cosine RRF fusion). tk never bundles or
+// downloads embedding models — the endpoint is external by design; when
+// disabled or unreachable, search is BM25 only and never fails.
+type Embedding struct {
+	Enabled   bool   `json:"enabled"`
+	Endpoint  string `json:"endpoint"`
+	Model     string `json:"model"`
+	TimeoutMS int    `json:"timeout_ms"`
+}
+
 // Config is the tk source of truth stored in <config>/config.json.
 // External-binary pins live here (cbm_version_pin). Same-language
 // dependencies (zoekt) pin in go.mod instead — never in this file.
 type Config struct {
-	Version        int     `json:"version"`
-	CBMBinary      string  `json:"cbm_binary,omitempty"`
-	CBMVersionPin  string  `json:"cbm_version_pin,omitempty"`
-	IndexMode      string  `json:"index_mode"`
-	AutoIndex      bool    `json:"auto_index"`
-	AutoWatch      bool    `json:"auto_watch"`
-	WatcherEnabled bool    `json:"watcher_enabled"`
-	AllowedRoot    string  `json:"allowed_root,omitempty"`
-	Budgets        Budgets `json:"budgets"`
+	Version        int       `json:"version"`
+	CBMBinary      string    `json:"cbm_binary,omitempty"`
+	CBMVersionPin  string    `json:"cbm_version_pin,omitempty"`
+	IndexMode      string    `json:"index_mode"`
+	AutoIndex      bool      `json:"auto_index"`
+	AutoWatch      bool      `json:"auto_watch"`
+	WatcherEnabled bool      `json:"watcher_enabled"`
+	AllowedRoot    string    `json:"allowed_root,omitempty"`
+	Budgets        Budgets   `json:"budgets"`
+	Embedding      Embedding `json:"embedding"`
 }
 
 // Defaults returns the Linux-first defaults.
@@ -47,6 +60,7 @@ func Defaults() Config {
 		AutoWatch:      true,
 		WatcherEnabled: true,
 		Budgets:        Budgets{DefaultChars: 6000, ArchitectureChars: 2200, NotesTocChars: 700},
+		Embedding:      Embedding{Enabled: false, Endpoint: "http://127.0.0.1:11434", TimeoutMS: 3000},
 	}
 }
 
@@ -93,6 +107,17 @@ func (c Config) Validate() error {
 	if c.CBMVersionPin != "" && !versionRe.MatchString(c.CBMVersionPin) {
 		return fmt.Errorf("invalid cbm_version_pin %q (want X.Y.Z)", c.CBMVersionPin)
 	}
+	if c.Embedding.Enabled {
+		if strings.TrimSpace(c.Embedding.Endpoint) == "" {
+			return fmt.Errorf("embedding.enabled requires embedding.endpoint")
+		}
+		if strings.TrimSpace(c.Embedding.Model) == "" {
+			return fmt.Errorf("embedding.enabled requires embedding.model")
+		}
+		if c.Embedding.TimeoutMS <= 0 {
+			return fmt.Errorf("embedding.timeout_ms must be positive")
+		}
+	}
 	return nil
 }
 
@@ -122,5 +147,63 @@ func KnownKeys() []string {
 		"index_mode", "auto_index", "auto_watch", "watcher_enabled",
 		"allowed_root", "cbm_binary", "cbm_version_pin",
 		"budgets.default_chars", "budgets.architecture_chars", "budgets.notes_toc_chars",
+		"embedding.enabled", "embedding.endpoint", "embedding.model", "embedding.timeout_ms",
 	}
+}
+
+// SetKey applies a dotted config key from `config set`. Only known keys are
+// accepted; unknown keys error so typo'd settings never silently land.
+func SetKey(cfg *Config, key, value string) error {
+	switch key {
+	case "index_mode":
+		cfg.IndexMode = value
+	case "auto_index":
+		return setBool(&cfg.AutoIndex, value)
+	case "auto_watch":
+		return setBool(&cfg.AutoWatch, value)
+	case "watcher_enabled":
+		return setBool(&cfg.WatcherEnabled, value)
+	case "allowed_root":
+		cfg.AllowedRoot = strings.TrimSpace(value)
+	case "cbm_binary":
+		cfg.CBMBinary = strings.TrimSpace(value)
+	case "budgets.default_chars":
+		return setBudget(&cfg.Budgets.DefaultChars, "budgets.default_chars", value)
+	case "budgets.architecture_chars":
+		return setBudget(&cfg.Budgets.ArchitectureChars, "budgets.architecture_chars", value)
+	case "budgets.notes_toc_chars":
+		return setBudget(&cfg.Budgets.NotesTocChars, "budgets.notes_toc_chars", value)
+	case "embedding.enabled":
+		return setBool(&cfg.Embedding.Enabled, value)
+	case "embedding.endpoint":
+		cfg.Embedding.Endpoint = strings.TrimSpace(value)
+	case "embedding.model":
+		cfg.Embedding.Model = strings.TrimSpace(value)
+	case "embedding.timeout_ms":
+		return setBudget(&cfg.Embedding.TimeoutMS, "embedding.timeout_ms", value)
+	default:
+		return fmt.Errorf("unknown config key %q", key)
+	}
+	return nil
+}
+
+func setBool(dst *bool, v string) error {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "true", "1":
+		*dst = true
+	case "false", "0":
+		*dst = false
+	default:
+		return fmt.Errorf("invalid bool %q", v)
+	}
+	return nil
+}
+
+func setBudget(dst *int, key, v string) error {
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n <= 0 {
+		return fmt.Errorf("invalid %s %q (want positive integer)", key, v)
+	}
+	*dst = n
+	return nil
 }

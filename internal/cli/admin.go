@@ -150,6 +150,14 @@ func getKey(c config.Config, key string) (string, error) {
 		return strconv.Itoa(c.Budgets.ArchitectureChars), nil
 	case "budgets.notes_toc_chars":
 		return strconv.Itoa(c.Budgets.NotesTocChars), nil
+	case "embedding.enabled":
+		return strconv.FormatBool(c.Embedding.Enabled), nil
+	case "embedding.endpoint":
+		return c.Embedding.Endpoint, nil
+	case "embedding.model":
+		return c.Embedding.Model, nil
+	case "embedding.timeout_ms":
+		return strconv.Itoa(c.Embedding.TimeoutMS), nil
 	}
 	return "", fmt.Errorf("unknown key %q (see `tk config list` / known keys)", key)
 }
@@ -196,6 +204,22 @@ func setKey(c *config.Config, key, val string) error {
 		case "budgets.notes_toc_chars":
 			c.Budgets.NotesTocChars = n
 		}
+	case "embedding.enabled":
+		b, err := strconv.ParseBool(val)
+		if err != nil {
+			return fmt.Errorf("want true|false: %w", err)
+		}
+		c.Embedding.Enabled = b
+	case "embedding.endpoint":
+		c.Embedding.Endpoint = strings.TrimSpace(val)
+	case "embedding.model":
+		c.Embedding.Model = strings.TrimSpace(val)
+	case "embedding.timeout_ms":
+		n, err := strconv.Atoi(val)
+		if err != nil || n <= 0 {
+			return fmt.Errorf("timeout_ms must be positive int")
+		}
+		c.Embedding.TimeoutMS = n
 	default:
 		return fmt.Errorf("unknown key %q", key)
 	}

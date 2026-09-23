@@ -2,7 +2,7 @@
 title: Roadmap — MVP1 through MVP4
 status: authoritative
 date: 2026-09-23
-supersedes: [compatible-implementation-spec.md §20, docs/DECISIONS/2026-09-22-thin-tk-over-cbm.md (scope), docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (mvp2 non-fleet scope)]
+supersedes: [compatible-implementation-spec.md §20, docs/DECISIONS/2026-09-22-thin-tk-over-cbm.md (scope), docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (mvp2 non-fleet scope), docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (mvp3 scope)]
 superseded-by: null
 ---
 
@@ -36,10 +36,15 @@ Locked decisions: Go-only thin `tk` over CBM, Linux-style `true-knowledge/` dirs
 ## MVP3 — memory layer (tk-owned; CBM has no equivalent)
 
 *Why after:* three new tk-owned stores with review/privacy risk; kept off MVP2's path.
-* `mem_*` facts: `(scope,project,topic)` UPSERT, global sentinel cross-project, provenance+timestamp, secret-detect → review queue (never silent store).
-* `note_*` notes: `notes/<project>/*.md` source-of-truth + FTS + optional local embeddings (BM25 fallback), title-only `toc` injection, `reindex`, capture→review→approve.
-* `ledger`: `goal/next/done/decisions/open_questions` partial-replace JSON, per-project file, compaction re-anchor, disable switch, independent budget.
-* Done when: facts survive sessions, notes require approval before searchable, ledger re-anchors after compaction — all `0600` under `data/state/true-knowledge/`.
+
+**Shipped (code complete, e2e both modes, real-binary verified):** see `docs/DECISIONS/2026-09-23-mvp3-memory-layer.md`.
+* `tk mem`: facts `(scope,project,topic)` UPSERT, global sentinel cross-project, provenance+timestamp, secret-detect → review queue (never silent store), approve/reject.
+* `tk note`: `notes/<project>/*.md` front-matter source-of-truth + FTS5 BM25 index + optional embedding fusion; capture→review→approve; title-only budgeted `toc`; `reindex` rebuilds from markdown.
+* `tk ledger`: bounded full-text-replace JSON per project (`ledger/<project>.json`), `ledger.enabled` gate + independent `budgets.ledger_chars` budget.
+* Storage: `modernc.org/sqlite` (CGo-free) for `facts.db` + `notes/index.db`; schema-versioned, WAL, 0600. Embeddings via **external** Ollama-compatible `/api/embed` (never bundled); BM25 stays authoritative, RRF fusion, all-embed-failure fallback.
+* MCP `memory` profile: scout(11) + 9 in-process tools = 20; no CBM/daemon needed for memory tools.
+* Done when: facts survive sessions, notes require approval before searchable, ledger truncates by budget — all `0600` under `~/.local/share/true-knowledge/`.
+* Deferred: compaction/re-anchor protocol for ledgers; RRF tuning knobs beyond defaults.
 
 ## MVP4 — human UX + hardening (deferred)
 

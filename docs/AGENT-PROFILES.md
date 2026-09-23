@@ -2,7 +2,7 @@
 title: Agent profiles — 27B default
 status: authoritative
 date: 2026-09-23
-supersedes: [compatible-implementation-spec.md §15, docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (tk-side profile filter + validate)]
+supersedes: [compatible-implementation-spec.md §15, docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (tk-side profile filter + validate), docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (memory profile)]
 superseded-by: null
 ---
 
@@ -19,8 +19,11 @@ Target: 27B-class agent (32k-128k context, real tool-calling). Sub-8B models are
 | `scout` (default for 27B) | `list_projects, check_index_coverage, index_status, search_graph, trace_path, search_code, source_search, get_file_outline, detect_changes, get_architecture, get_code_snippet` (11) | `default 6000 chars, arch 2200, toc 700`; whole-record truncate + `...truncated` + `cursor/has_more` | autonomous dev |
 | `analysis` | scout + `query_graph` (Cypher) + `manage_adr` passthrough + `validate` | same budgets | deep/debug, explicit opt-in |
 | `minimal` | `check_index_coverage, search_graph, get_code_snippet` (3) | `default 2000` | <8B filters, IDE inline |
+| `memory` | scout (11) + `mem_save, mem_recall, mem_review, note_save, note_search, note_toc, note_reindex, note_review, ledger_update` (20) | same budgets + `notes_toc 700`, `ledger 1500` | agents that persist knowledge; runs without CBM |
 
 `index_repository` (writes) is gated behind explicit user approval in all profiles per CBM SKILL.md.
+
+Memory-profile tools are tk-owned and in-process: they never require the graph backend, so long-term memory keeps working when CBM is missing or down.
 
 ## 27B rules
 
@@ -28,6 +31,7 @@ Target: 27B-class agent (32k-128k context, real tool-calling). Sub-8B models are
 * `file_outline` over full `read` for orientation (`70-98%` token win).
 * `check_index_coverage` before absence claims ("doesn't exist", "no callers", "dead code"). `tk validate` (existence + near-miss, coverage-annotated) otherwise — don't hard-fail every cite.
 * Fail-open: CBM down → `tk install` hint, agent continues. Loopback-only transport.
+* Memory-profile hygiene: keep facts topical (`mem_recall` is exact-topic), keep ledgers lean (they're budget-truncated, never a scratch pad), and only `note_save` durable truths — capture is cheap, approval is the gate, and secrets are masked either way.
 * No `query_graph` by default — Cypher is where 27B wastes calls; promote to `analysis` only.
 
 ## <8B rule

@@ -103,3 +103,9 @@ func (p Paths) ZoektDir() string { return filepath.Join(p.Cache, "zoekt") }
 
 // ZoektShards returns the shard dir for one project (created on demand by indexing).
 func (p Paths) ZoektShards(project string) string { return filepath.Join(p.ZoektDir(), project) }
+
+// Memory dirs under Data home — tk-owned stores (CBM never reads these).
+func (p Paths) MemDir() string         { return filepath.Join(p.Data, "mem") }
+func (p Paths) NotesDir() string       { return filepath.Join(p.Data, "notes") }
+func (p Paths) NotesIndexFile() string { return filepath.Join(p.NotesDir(), "index.db") }
+func (p Paths) LedgerDir() string      { return filepath.Join(p.Data, "ledger") }

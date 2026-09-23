@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/true-knowledge/tk/internal/memory"
 	"github.com/true-knowledge/tk/internal/trace"
 )
 
@@ -47,6 +48,7 @@ All graph work = codebase-memory-mcp cli <tool> --json via one wrapper.`,
 		cmdInstall(g),
 		cmdSetup(g),
 		cmdMCPInstall(g),
+		cmdMem(g),
 	)
 
 	// Central trace capture: all rendered output flows through root's
@@ -87,21 +89,33 @@ func finalize(buf *bytes.Buffer, start time.Time, err error) {
 		code = 1
 		errText = err.Error()
 	}
-	text := trace.Redact(buf.String())
+	argv := os.Args[1:]
+	for i, a := range argv {
+		if len(memory.DetectSecret(a)) > 0 {
+			argv[i] = "[REDACTED]"
+		}
+	}
+	text := maskedText(buf.String())
 	rec := map[string]any{
 		"v":      1,
 		"ts":     start.Unix(),
 		"dur_ms": time.Since(start).Milliseconds(),
-		"argv":   os.Args[1:],
+		"argv":   argv,
 		"cwd":    cwd(),
 		"exit":   code,
 		"events": c.Events,
 		"output": map[string]any{"chars": len(text), "text": text},
 	}
 	if errText != "" {
-		rec["error"] = trace.Redact(errText)
+		rec["error"] = maskedText(errText)
 	}
 	trace.Append(c.Paths.LogFile(), rec)
+}
+
+// maskedText masks secrets in any recorded output: trace.Redact (high
+// precision) plus memory.SecretMask (JWT, key-assignment spans).
+func maskedText(s string) string {
+	return memory.SecretMask(trace.Redact(s))
 }
 
 func cwd() string {

@@ -42,6 +42,16 @@ func DetectSecret(s string) []string {
 	return out
 }
 
+// SecretMask replaces recognized secret spans with [REDACTED]. Used for
+// tk.log masking of memory output; entropy checks are whole-string and do
+// not apply here (arg-level masking in cli/finalize covers those).
+func SecretMask(s string) string {
+	for _, r := range secretRes {
+		s = r.re.ReplaceAllString(s, "[REDACTED]")
+	}
+	return s
+}
+
 // highEntropy flags long base64-ish strings with no spaces that mix upper,
 // lower, and digits in near-uniform distribution (URLs and prose fail the
 // class mask or the ':'/'?'/' ' exclusions and stay clear).

@@ -86,6 +86,31 @@ check kg-find-alias 0 $TK_BIN kg_find Demo demo
 check kg-explain-alias 0 $TK_BIN kg_explain Demo demo
 check kg-grep-alias 0 $TK_BIN kg_grep Demo demo
 
+# --- memory layer (tk-owned, no CBM needed: same checks in both modes) ---
+MEM="$TK_HOME/data/mem"
+check mem-save 0 $TK_BIN mem save db postgres --project demo --provenance setup
+check mem-recall 0 $TK_BIN mem recall db --project demo
+check mem-save-global 0 $TK_BIN mem save api-base https://api.internal.example.com --scope global
+check mem-recall-global-fallback 0 $TK_BIN mem recall api-base --project demo
+check mem-secret-queued 0 $TK_BIN mem save openai-key "sk-proj-E2Ee2e01234567890123456789012" --project demo
+check mem-review-list 0 $TK_BIN mem review list
+memid=$("$TK_BIN" mem review list --json | python3 -c "import json,sys; print(json.load(sys.stdin)['reviews'][0]['id'])")
+check mem-review-approve 0 $TK_BIN mem review approve "$memid"
+check mem-recall-approved-secret 0 $TK_BIN mem recall openai-key --project demo
+"$TK_BIN" mem save deadtoken "ghp_E2ETestToken01234567890123456789012" --project demo >/dev/null
+rid=$("$TK_BIN" mem review list --json | python3 -c "import json,sys; print([r['id'] for r in json.load(sys.stdin)['reviews'] if r['topic']=='deadtoken'][0])")
+check mem-review-reject 0 $TK_BIN mem review reject "$rid"
+if "$TK_BIN" mem recall deadtoken --project demo | grep -q 'E2ETestToken'; then
+  fail=$((fail+1)); printf 'FAIL mem-rejected-not-stored\n'
+else
+  pass=$((pass+1)); printf 'ok   mem-rejected-not-stored\n'
+fi
+if command -v stat >/dev/null 2>&1 && [ "$(stat -c '%a' "$MEM/facts.db" 2>/dev/null)" = "600" ]; then
+  pass=$((pass+1)); printf 'ok   mem-facts-db-0600\n'
+else
+  fail=$((fail+1)); printf 'FAIL mem-facts-db-0600\n'
+fi
+
 out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | $TK_BIN mcp)
 n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
 if [ "$n" = "11" ]; then pass=$((pass+1)); printf 'ok   mcp-tools-11\n';

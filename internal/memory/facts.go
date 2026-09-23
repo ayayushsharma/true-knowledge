@@ -186,19 +186,34 @@ func (f *Facts) Save(ctx context.Context, scope, project, topic, value, provenan
 	return fact, false, nil
 }
 
-// Recall returns facts matching topic for the project, then global facts of
-// the same topic, most-recent first.
+// byRelevance orders most-recent first, project-scoped ahead of global.
+func byRelevance(out []Fact) {
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].UpdatedAt != out[j].UpdatedAt {
+			return out[i].UpdatedAt > out[j].UpdatedAt
+		}
+		if (out[i].Scope == ScopeProject) != (out[j].Scope == ScopeProject) {
+			return out[i].Scope == ScopeProject
+		}
+		return out[i].Topic < out[j].Topic
+	})
+}
+
+// Recall returns facts matching topic in scope-priority order: the given
+// project (when named) first, then global. An empty project means every
+// project's fact for that topic plus the global set.
 func (f *Facts) Recall(ctx context.Context, project, topic string) ([]Fact, error) {
 	topic = strings.TrimSpace(topic)
 	if topic == "" {
 		return nil, errors.New("topic must not be empty")
 	}
+	project = strings.TrimSpace(project)
 	rows, err := f.db.QueryContext(ctx, `
 		SELECT scope, project, topic, value, provenance, updated_at
 		FROM facts
 		WHERE topic = ?
-		  AND ((scope = ? AND project = ?) OR (scope = ?))`,
-		topic, ScopeProject, strings.TrimSpace(project), ScopeGlobal)
+		  AND (scope = ? OR (scope = ? AND ? = '') OR (scope = ? AND project = ?))`,
+		topic, ScopeGlobal, ScopeProject, project, ScopeProject, project)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +226,7 @@ func (f *Facts) Recall(ctx context.Context, project, topic string) ([]Fact, erro
 		}
 		out = append(out, fc)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt > out[j].UpdatedAt })
+	byRelevance(out)
 	return out, rows.Err()
 }
 
@@ -234,7 +249,7 @@ func (f *Facts) All(ctx context.Context, project string) ([]Fact, error) {
 		}
 		out = append(out, fc)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt > out[j].UpdatedAt })
+	byRelevance(out)
 	return out, rows.Err()
 }
 

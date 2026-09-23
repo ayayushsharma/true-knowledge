@@ -36,4 +36,6 @@ CBM owns: parsing, graph, store, daemon, watcher, install matrix, UI, artifacts.
 
 If `tk` parses source, touches SQLite, manages PIDs/endpoints, or hand-writes agent configs — it's a bug. Route through `cbm cli` / `cbm install`.
 
+If standard Unix commands already do it, tk doesn't reimplement it: no log reader (tail/grep/jq read `tk.log`), no pager, no grep-wrapper. A new tk command needs a reason Unix can't serve.
+
 Refs: CBM `README.md #session-coordination-daemon #cli-mode #auto-index`, `docs/CONFIGURATION.md §2/§4`, `docs/INDEX_RESOURCE_LIMITS.md`, `docs/cbmignore.md`, `server.json`.

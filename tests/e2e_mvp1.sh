@@ -89,4 +89,26 @@ case "$out" in
 esac
 
 printf '\npass=%d fail=%d\n' "$pass" "$fail"
+
+# Unified trace log: every invocation recorded with input+output+backends.
+LOG="$TK_HOME/state/logs/tk.log"
+if [ ! -s "$LOG" ]; then fail=$((fail+1)); printf 'FAIL trace-log-missing\n';
+else
+  if python3 - "$LOG" <<'EOF'
+import json, sys
+recs = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+assert recs, "empty log"
+for r in recs:
+    for k in ("v", "ts", "exit", "output"):
+        assert k in r, f"missing {k} in {r}"
+    assert "argv" in r or "mcp" in r, f"missing input in {r}"
+assert any(r.get("events") for r in recs), "no backend events logged"
+assert any(r.get("exit") != 0 for r in recs), "no failure records (grep-badregex should log exit=1)"
+print(f"trace-log ok ({len(recs)} records)")
+EOF
+  then pass=$((pass+1)); printf 'ok   trace-log\n';
+  else fail=$((fail+1)); printf 'FAIL trace-log\n'; fi
+fi
+
+printf 'trace: pass=%d fail=%d\n' "$pass" "$fail"
 [ "$fail" = "0" ]

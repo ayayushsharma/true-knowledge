@@ -37,6 +37,15 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | TK_HOME=/tmp/tk-test ./t
 gofmt -l . && go vet ./... && go test ./...
 ```
 
+## Trace log (`<state>/logs/tk.log`, JSONL — read with Unix tools, never a tk command)
+
+```bash
+tail -n 50 tk.log | jq .                                  # recent calls
+jq -c 'select(.exit != 0)' tk.log                         # failures only
+jq -r '[.ts, (.argv|join(" "))] | @tsv' tk.log            # argv history
+jq -r 'select(.mcp.tool=="source_search") | .output.text' tk.log
+```
+
 ## Conventions for agents (human or AI)
 
 1. **Delegate, don't reimplement:** parsing, FTS, embeddings, watcher, `install` matrix (45 clients), UI `:9749`, `.zst` artifacts = CBM. If you touch `*.db` directly or write client `mcp.json` by hand, it's a bug — call `cbm cli` / `cbm install --dry-run`.

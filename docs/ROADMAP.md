@@ -14,7 +14,7 @@ Locked decisions: Go-only thin `tk` over CBM, Linux-style `true-knowledge/` dirs
 
 ## MVP1 — thin proxy + self-installing backends (code complete, real-binary verified)
 
-* `setup/init/register/index/sync/status/find/search/explain/grep/source-search/outline/impact/arch/query/cbm/daemon/mcp/config/migrate/install/mcp-install/completion`. `daemon` is CLI-only (never MCP).
+* `setup/init/register/index/sync/status/find/explain/grep/source-search/outline/impact/arch/query/cbm/daemon/mcp/config/migrate/install/mcp-install/completion`. `daemon` is CLI-only (never MCP).
 * One spawn wrapper `internal/cbmexec`: `codebase-memory-mcp cli <tool> --args-file <json>` (raw-JSON argv is deprecated upstream) + env (`CBM_CACHE_DIR`, `CBM_RUNTIME_DIR`, `CBM_ALLOWED_ROOT`) + budget truncation + fail-open. Project is required — tk never sends `""`.
 * `tk` installs ALL its external dependencies itself: `internal/backends` registry (CBM today) + `internal/installer` (pinned download, SHA-256 manifest verify, atomic `<cache>/bin` install, no system package managers). Zoekt is NOT a backend — it links in as a Go library (`go.mod` pin; same-language links, cross-language spawns). `tk setup` = init + install + opt-in register/client. Resolver: `TK_CBM_BIN` > sibling > cache > PATH > download.
 * MCP 9-tool proxy: scout-7 + snippet + `source_search` (zoekt, hard error when absent).

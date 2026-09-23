@@ -58,13 +58,14 @@ func keywords(q string) []string {
 }
 
 func cmdFind(g *Globals) *cobra.Command {
-	var project string
+	var project, label string
 	var limit int
 	c := &cobra.Command{
 		Use:   "find <query> [project]",
 		Short: "Deterministic router: regex→grep, NL→semantic, ident→graph",
 		Example: `  tk find ProcessOrder demo
-  tk find "retry.*backoff" demo --limit 20`,
+  tk find "retry.*backoff" demo --limit 20
+  tk find Handler demo --label Function`,
 		Args: cobra.MinimumNArgs(1),
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
 			if ctx, err := load(*g); err == nil {
@@ -90,11 +91,17 @@ func cmdFind(g *Globals) *cobra.Command {
 			var payload map[string]any
 			switch {
 			case metaChars.MatchString(q) || strings.Contains(q, "/"):
+				if label != "" {
+					return fail("--label needs a graph route (identifier or multi-word query), not a text pattern")
+				}
 				tool, payload = "search_code", map[string]any{"pattern": q, "project": proj, "limit": limit}
 			case strings.Contains(strings.TrimSpace(q), " ") && len(strings.Fields(q)) > 2:
 				tool, payload = "search_graph", map[string]any{"semantic_query": keywords(q), "project": proj, "limit": limit}
 			default:
 				tool, payload = "search_graph", map[string]any{"name_pattern": q, "project": proj, "limit": limit}
+			}
+			if label != "" {
+				payload["label"] = label
 			}
 			out, err := r.Run(cmd.Context(), tool, payload)
 			if err != nil {
@@ -105,39 +112,7 @@ func cmdFind(g *Globals) *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
-	c.Flags().IntVar(&limit, "limit", 20, "max results")
-	return c
-}
-
-func cmdSearch(g *Globals) *cobra.Command {
-	var project, label string
-	var limit int
-	c := &cobra.Command{
-		Use:   "search <pattern> [project]",
-		Short: "Structural graph search (debug helper)",
-		Args:  cobra.MinimumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, err := load(*g)
-			if err != nil {
-				return err
-			}
-			proj, err := requireProject(ctx, project, args)
-			if err != nil {
-				return err
-			}
-			r, _, err := ctx.needCBM(cmd.Context())
-			if err != nil {
-				return err
-			}
-			out, err := r.Run(cmd.Context(), "search_graph", map[string]any{"name_pattern": args[0], "label": label, "project": proj, "limit": limit})
-			if err != nil {
-				return fail("%v", err)
-			}
-			return ctx.outFresh(cmd, proj, cbmexec.Truncate(out, ctx.budget("")), map[string]any{"project": proj})
-		},
-	}
-	c.Flags().StringVar(&project, "project", "", "project name")
-	c.Flags().StringVar(&label, "label", "", "node label filter")
+	c.Flags().StringVar(&label, "label", "", "node-label filter (graph routes only)")
 	c.Flags().IntVar(&limit, "limit", 20, "max results")
 	return c
 }

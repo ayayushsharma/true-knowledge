@@ -61,7 +61,7 @@ check sync 0 $TK_BIN sync demo
 check status 0 $TK_BIN status
 check status-json 0 $TK_BIN status --json
 check find 0 $TK_BIN find Demo demo
-check search 0 $TK_BIN search Demo demo
+check find-label 0 $TK_BIN find Demo demo --label Function
 check explain 0 $TK_BIN explain Demo demo
 check grep 0 $TK_BIN grep Demo demo
 check grep-badregex 1 $TK_BIN grep "(unclosed" --regex

@@ -39,8 +39,53 @@ type rpcErr struct {
 }
 
 type toolDef struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name        string
+	Description string
+	// Schema is the JSON Schema advertised for this tool in tools/list.
+	// MCP requires every tool to carry one (type: object + properties).
+	Schema map[string]any
+}
+
+// obj builds the outer JSON-Schema body for a tool's parameters.
+func obj(required []string, properties map[string]any) map[string]any {
+	s := map[string]any{"type": "object", "properties": properties}
+	if len(required) > 0 {
+		s["required"] = required
+	}
+	return s
+}
+
+func strProp(desc string) map[string]any {
+	return map[string]any{"type": "string", "description": desc}
+}
+
+func intProp(desc string) map[string]any {
+	return map[string]any{"type": "integer", "description": desc}
+}
+
+func boolProp(desc string) map[string]any {
+	return map[string]any{"type": "boolean", "description": desc}
+}
+
+func enumProp(vals []string, desc string) map[string]any {
+	return map[string]any{"type": "string", "enum": vals, "description": desc}
+}
+
+func strSliceProp(desc string) map[string]any {
+	return map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": desc}
+}
+
+// projectProp is the shared routing parameter most graph tools require.
+func projectProp() map[string]any {
+	return strProp("Registered project name (see list_projects / `tk status`)")
+}
+
+// auditProp describes the shared list|approve|reject review action + id pair.
+func auditProps() map[string]any {
+	return map[string]any{
+		"action": enumProp([]string{"list", "approve", "reject"}, "list (default) shows the queue; approve/reject resolve by id"),
+		"id":     strProp("Review entry id; required when action is approve|reject"),
+	}
 }
 
 // Profile names. scout (11) is default; analysis adds demo/power tools;
@@ -55,31 +100,99 @@ const (
 
 // memoryTools are the tk-owned, in-process memory tools (no CBM needed).
 var memoryTools = []toolDef{
-	{"mem_save", "Store (or queue for review) a durable fact: topic, value, scope project|global, project, provenance"},
-	{"mem_recall", "Recall facts by topic: project-scoped first, then global"},
-	{"mem_review", "Facts review queue: action=list | approve|reject with id"},
-	{"note_save", "Capture a note (title, text, project) into the review queue"},
-	{"note_search", "Search approved notes (BM25 + optional embedding fusion)"},
-	{"note_toc", "Approved note titles only, budgeted, newest first"},
-	{"note_reindex", "Rebuild the FTS index from the markdown sources of truth"},
-	{"note_review", "Notes review queue: action=list | approve|reject with id"},
-	{"ledger_update", "Replace a project's working-truth ledger (bounded full-text)"},
+	{"mem_save", "Store (or queue for review) a durable fact: topic, value, scope project|global, project, provenance", obj([]string{"topic", "value"}, map[string]any{
+		"topic":      strProp("Fact topic/key"),
+		"value":      strProp("Fact value (secret-looking values queue for review instead)"),
+		"scope":      enumProp([]string{"project", "global"}, "Where the fact applies (default project)"),
+		"project":    strProp("Required when scope=project"),
+		"provenance": strProp("Where the fact came from (free text)"),
+	})},
+	{"mem_recall", "Recall facts by topic: project-scoped first, then global", obj([]string{"topic"}, map[string]any{
+		"topic":   strProp("Fact topic to recall"),
+		"project": strProp("Prefer facts for this project before falling back to global"),
+	})},
+	{"mem_review", "Facts review queue: action=list | approve|reject with id", obj([]string{"action"}, auditProps())},
+	{"note_save", "Capture a note (title, text, project) into the review queue", obj([]string{"title", "text"}, map[string]any{
+		"title":   strProp("Note title"),
+		"text":    strProp("Note body"),
+		"project": strProp("Optional project to attach the note to"),
+	})},
+	{"note_search", "Search approved notes (BM25 + optional embedding fusion)", obj([]string{"query"}, map[string]any{
+		"query":   strProp("Search phrase"),
+		"project": strProp("Restrict to this project"),
+		"limit":   intProp("Max hits (default 10)"),
+	})},
+	{"note_toc", "Approved note titles only, budgeted, newest first", obj(nil, map[string]any{
+		"project": strProp("Restrict to this project"),
+	})},
+	{"note_reindex", "Rebuild the FTS index from the markdown sources of truth", obj(nil, map[string]any{
+		"project": strProp("Restrict to this project"),
+	})},
+	{"note_review", "Notes review queue: action=list | approve|reject with id", obj([]string{"action"}, auditProps())},
+	{"ledger_update", "Replace a project's working-truth ledger (bounded full-text)", obj([]string{"project", "text"}, map[string]any{
+		"project": projectProp(),
+		"text":    strProp("New ledger content (bounded full-text)"),
+	})},
 }
 
 // tools returns the profile-dependent surface.
 func tools(profile string) []toolDef {
 	base := []toolDef{
-		{"list_projects", "List indexed projects with node/edge counts"},
-		{"index_status", "Indexing status of a project"},
-		{"check_index_coverage", "Whether exact paths/scope are indexed and fresh (clean = no recorded gap, not proof)"},
-		{"search_graph", "Structural/semantic node search (name_pattern, label, semantic_query, limit/offset)"},
-		{"trace_path", "BFS callers/callees (function_name, direction, depth 1-5)"},
-		{"search_code", "Grep-like text search within indexed files (CBM)"},
-		{"source_search", "Trigram text search via zoekt (pattern, project, files?, limit?)"},
-		{"get_file_outline", "Declarations in one file, in source order (cheap read alternative)"},
-		{"detect_changes", "Working-tree diff mapped to affected symbols + blast radius"},
-		{"get_architecture", "Languages, packages, routes, hotspots overview"},
-		{"get_code_snippet", "Source snippet by qualified name"},
+		{"list_projects", "List indexed projects with node/edge counts", obj(nil, map[string]any{})},
+		{"index_status", "Indexing status of a project", obj([]string{"project"}, map[string]any{
+			"project": projectProp(),
+		})},
+		{"check_index_coverage", "Whether exact paths/scope are indexed and fresh (clean = no recorded gap, not proof)", obj([]string{"project"}, map[string]any{
+			"project": projectProp(),
+			"paths":   strSliceProp("Exact repo-relative paths to probe (default whole project)"),
+			"scopes":  strSliceProp("Scope markers to probe (default [\".\"])"),
+		})},
+		{"search_graph", "Structural/semantic node search (name_pattern, label, semantic_query, limit/offset)", obj([]string{"project"}, map[string]any{
+			"project":        projectProp(),
+			"name_pattern":   strProp("Regex/glob node-name pattern (give this OR semantic_query)"),
+			"label":          strProp("Node-label filter, e.g. Function"),
+			"semantic_query": strSliceProp("Keyword array for semantic search (give this OR name_pattern)"),
+			"limit":          intProp("Max results (default 20)"),
+			"offset":         intProp("Pagination offset"),
+		})},
+		{"trace_path", "BFS callers/callees (function_name, direction, depth 1-5)", obj([]string{"project", "function_name"}, map[string]any{
+			"project":       projectProp(),
+			"function_name": strProp("Function to trace"),
+			"direction":     enumProp([]string{"inbound", "outbound", "both"}, "inbound=callers, outbound=callees (default inbound)"),
+			"depth":         intProp("Traversal depth, 1-5"),
+		})},
+		{"search_code", "Grep-like text search within indexed files (CBM)", obj([]string{"project", "pattern"}, map[string]any{
+			"project":      projectProp(),
+			"pattern":      strProp("Text or regex pattern"),
+			"file_pattern": strProp("File glob filter"),
+			"limit":        intProp("Max results (default 20)"),
+			"regex":        boolProp("Treat pattern as a regex"),
+		})},
+		{"source_search", "Trigram text search via zoekt (pattern, project, files?, limit?)", obj([]string{"project", "pattern"}, map[string]any{
+			"project": projectProp(),
+			"pattern": strProp("Trigram search pattern"),
+			"files":   strProp("Optional file glob filter"),
+			"limit":   intProp("Max results (default 20)"),
+		})},
+		{"get_file_outline", "Declarations in one file, in source order (cheap read alternative)", obj([]string{"project", "file_path"}, map[string]any{
+			"project":   projectProp(),
+			"file_path": strProp("Repo-relative path to the file"),
+			"labels":    strSliceProp("Node-label filter, e.g. Function,Class"),
+			"limit":     intProp("Max declarations (default 100)"),
+		})},
+		{"detect_changes", "Working-tree diff mapped to affected symbols + blast radius", obj([]string{"project"}, map[string]any{
+			"project":   projectProp(),
+			"direction": enumProp([]string{"inbound", "outbound", "both"}, "Impact direction (default inbound)"),
+			"depth":     intProp("Traversal depth (default 2)"),
+			"limit":     intProp("Max rows (default 50)"),
+		})},
+		{"get_architecture", "Languages, packages, routes, hotspots overview", obj([]string{"project"}, map[string]any{
+			"project": projectProp(),
+		})},
+		{"get_code_snippet", "Source snippet by qualified name", obj([]string{"project", "qualified_name"}, map[string]any{
+			"project":        projectProp(),
+			"qualified_name": strProp("Qualified symbol name, e.g. pkg.Func"),
+		})},
 	}
 	switch profile {
 	case ProfileMinimal:
@@ -92,9 +205,20 @@ func tools(profile string) []toolDef {
 		return append(base, memoryTools...)
 	case ProfileAnalysis:
 		return append(base,
-			toolDef{"query_graph", "Read-only Cypher-style graph query (max_rows guardrail)"},
-			toolDef{"manage_adr", "Persist architectural decisions alongside the graph (passthrough)"},
-			toolDef{"validate", "Symbol existence + near-miss candidates, coverage-annotated"},
+			toolDef{"query_graph", "Read-only Cypher-style graph query (max_rows guardrail)", obj([]string{"project", "query"}, map[string]any{
+				"project":  projectProp(),
+				"query":    strProp("Cypher query (read-only; must carry LIMIT for safety)"),
+				"max_rows": intProp("Row limit guardrail"),
+			})},
+			toolDef{"manage_adr", "Persist architectural decisions alongside the graph (passthrough)", obj(nil, map[string]any{
+				"project": projectProp(),
+				"mode":    enumProp([]string{"get", "update", "set_sections", "sections", "list", "delete"}, "ADR operation"),
+			})},
+			toolDef{"validate", "Symbol existence + near-miss candidates, coverage-annotated", obj([]string{"project", "symbol"}, map[string]any{
+				"project": projectProp(),
+				"symbol":  strProp("Exact symbol name to validate"),
+				"limit":   intProp("Near-miss candidate limit (default 5)"),
+			})},
 		)
 	default:
 		return base
@@ -192,7 +316,7 @@ func (s *Server) handle(ctx context.Context, req rpcReq) rpcResp {
 		tl := tools(s.profile())
 		names := make([]map[string]any, 0, len(tl))
 		for _, t := range tl {
-			names = append(names, map[string]any{"name": t.Name, "description": t.Description})
+			names = append(names, map[string]any{"name": t.Name, "description": t.Description, "inputSchema": t.Schema})
 		}
 		return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{"tools": names}}
 	case "tools/call":

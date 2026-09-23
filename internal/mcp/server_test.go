@@ -94,6 +94,40 @@ func TestValidateToolInAnalysisOnly(t *testing.T) {
 	}
 }
 
+// TestToolsListSchemad verifies every advertised tool carries the schema MCP
+// requires (inputSchema = object with properties/required).
+func TestToolsListSchemas(t *testing.T) {
+	for _, tc := range []struct {
+		profile string
+		want    int
+	}{
+		{"", 11},
+		{"analysis", 14},
+		{"minimal", 3},
+		{"memory", 20},
+	} {
+		resp := serveOne(t, &Server{Profile: tc.profile}, `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
+		tools := resp["result"].(map[string]any)["tools"].([]any)
+		if len(tools) != tc.want {
+			t.Fatalf("[%q] tools = %d, want %d", tc.profile, len(tools), tc.want)
+		}
+		for _, tool := range tools {
+			td := tool.(map[string]any)
+			name, _ := td["name"].(string)
+			schema, ok := td["inputSchema"].(map[string]any)
+			if !ok {
+				t.Fatalf("[%q] %s: missing inputSchema", tc.profile, name)
+			}
+			if ty, _ := schema["type"].(string); ty != "object" {
+				t.Fatalf("[%q] %s: inputSchema.type = %q, want object", tc.profile, name, ty)
+			}
+			if _, ok := schema["properties"].(map[string]any); !ok {
+				t.Fatalf("[%q] %s: inputSchema.properties missing", tc.profile, name)
+			}
+		}
+	}
+}
+
 func TestParseError(t *testing.T) {
 	resp := serveOne(t, &Server{}, `{oops`)
 	if resp["error"] == nil {

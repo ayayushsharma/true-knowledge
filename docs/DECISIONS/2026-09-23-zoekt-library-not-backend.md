@@ -67,3 +67,13 @@ platform) buys nothing here that a function call doesn't do better.
 * The explicit-`source-search` doctrine (no magic routing, hard errors,
   Zoekt-never-answers-graph) stands unchanged — only the invocation
   mechanism moves in-process.
+
+## Appendix: deliberate config break (pre-release)
+
+Removing the `Backends` map means `config.json` files written by the brief
+spawn-based builds fail strict validation (`unknown field "backends"`) and
+fall back to a clear error, not silent defaults. Accepted because no
+released version ever wrote that field: the only affected homes are local
+`/tmp` test homes. Fix is `rm <config>/config.json && tk init` (or
+`TK_HOME=… tk init`). Strictness (`DisallowUnknownFields`) stays — silent
+schema drift is worse than a loud, one-time, pre-release break.

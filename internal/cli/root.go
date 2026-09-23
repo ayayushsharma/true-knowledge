@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/true-knowledge/tk/internal/cbmexec"
@@ -72,7 +73,24 @@ func load(g Globals) (*Ctx, error) {
 		c.Run = r
 		c.CBMOK = true
 	}
+	appendHistory(p)
 	return c, nil
+}
+
+// appendHistory records one JSON line per invocation (ts + argv) for
+// debugging agent sessions. Best-effort: never fails the command.
+// Exit codes and durations are deferred (needs main-level plumbing).
+func appendHistory(p paths.Paths) {
+	line, _ := json.Marshal(map[string]any{"ts": time.Now().Unix(), "argv": os.Args[1:]})
+	if len(os.Args) < 2 {
+		return // bare `tk` (help) is noise; skip it
+	}
+	f, err := os.OpenFile(p.HistoryFile(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.Write(append(line, '\n'))
 }
 
 func (c *Ctx) saveReg() error {

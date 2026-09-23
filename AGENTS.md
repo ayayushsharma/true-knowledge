@@ -6,7 +6,7 @@
 
 ## What this repo is
 
-* Single static Go binary `tk`: `setup/init/register/index/sync/status/find/search/explain/grep/source-search/arch/query/cbm/mcp/config/migrate/install/mcp-install/completion`.
+* Single static Go binary `tk`: `setup/init/register/index/sync/status/find/search/explain/grep/source-search/outline/impact/arch/query/cbm/daemon/mcp/config/migrate/install/mcp-install/completion`. `daemon` is CLI-only (never MCP).
 * No own indexer/parser/SQLite touch. Graph work = `codebase-memory-mcp cli <tool> --args-file` (raw-JSON argv is deprecated upstream) via one wrapper (`internal/cbmexec`); text work = explicit `source-search` via Zoekt linked as a Go library (`internal/zoekttext`, no magic routing, no subprocess).
 * tk installs ALL its external dependencies itself (`internal/backends` registry + `internal/installer`: pinned, checksum-verified, `<cache>/bin`; CBM today). Zoekt is a `go.mod` pin, not a backend — same-language links, cross-language spawns. No apt/brew/npm/toolchain at runtime. `tk setup` = init + install + opt-in register/client.
 * No `tk` supervisor daemon. CBM coordination daemon is shared per-account (first-starts/last-stops). `cli` mode is daemon-free one-shot.
@@ -15,9 +15,9 @@
 
 ```text
 ~/.config/true-knowledge/       config.json (tk source of truth)
-~/.local/share/true-knowledge/  tk.json (name→path), graph-refs.json
-~/.cache/true-knowledge/        == CBM_CACHE_DIR (_config.db, indexes)
-~/.local/state/true-knowledge/  logs/tk.log, history.jsonl, rendezvous/ (CBM_RUNTIME_DIR)
+~/.local/share/true-knowledge/  tk.json (name→path, heads, fingerprints)
+~/.cache/true-knowledge/        == CBM_CACHE_DIR (_config.db, indexes) + zoekt/ shards
+~/.local/state/true-knowledge/  logs/tk.log (deferred), history.jsonl, rendezvous/ (CBM_RUNTIME_DIR)
 ```
 
 * Never write `~/.tk`, `~/Library/*`, `%AppData%`. Always `true-knowledge/` subfolder.

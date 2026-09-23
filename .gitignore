@@ -10,3 +10,6 @@
 .vscode/
 *.swp
 .DS_Store
+
+# harness editor config (local only)
+opencode.json

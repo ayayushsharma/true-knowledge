@@ -8,7 +8,6 @@ import (
 )
 
 func cmdMCP(g *Globals) *cobra.Command {
-	var allowWrite bool
 	c := &cobra.Command{
 		Use:   "mcp",
 		Short: "Run MCP stdio proxy (scout + snippet + source_search), stdin EOF = instant exit",
@@ -17,7 +16,6 @@ func cmdMCP(g *Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_ = allowWrite
 			budget := ctx.budget("")
 			s := &mcp.Server{Budget: budget}
 			if ctx.CBMOK {
@@ -30,6 +28,5 @@ func cmdMCP(g *Globals) *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().BoolVar(&allowWrite, "allow-write", false, "reserved: index_repository stays approval-gated (no-op this build)")
 	return c
 }

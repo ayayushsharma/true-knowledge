@@ -47,7 +47,6 @@ type Status struct {
 type Plan struct {
 	Backend      backends.Backend
 	Pin          string
-	Tag          string
 	Archive      string
 	ArchiveURL   string
 	ChecksumsURL string
@@ -65,7 +64,6 @@ func ResolvePlan(cacheDir string, b backends.Backend, pin, goos, goarch string) 
 	return Plan{
 		Backend:      b,
 		Pin:          pin,
-		Tag:          tag,
 		Archive:      archive,
 		ArchiveURL:   base + "/" + archive,
 		ChecksumsURL: base + "/" + b.Checksums,

@@ -3,6 +3,7 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -54,7 +55,7 @@ func Load(path string) (Registry, error) {
 		}
 		return nil, err
 	}
-	if len(bytes_trim(raw)) == 0 {
+	if len(bytes.TrimSpace(raw)) == 0 {
 		return r, nil
 	}
 	if err := json.Unmarshal(raw, &r); err != nil {
@@ -65,8 +66,6 @@ func Load(path string) (Registry, error) {
 	}
 	return r, nil
 }
-
-func bytes_trim(b []byte) []byte { return []byte(strings.TrimSpace(string(b))) }
 
 // Save writes atomically with 0600.
 func Save(path string, r Registry) error {

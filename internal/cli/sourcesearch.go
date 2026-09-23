@@ -36,15 +36,6 @@ func ensureZoektIndex(ctx context.Context, c *Ctx, name, repoPath string) (strin
 	return "files", nil
 }
 
-func firstLine(s string) string {
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			return s[:i]
-		}
-	}
-	return s
-}
-
 func cmdSourceSearch(g *Globals) *cobra.Command {
 	var project, files string
 	var limit int

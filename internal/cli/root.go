@@ -119,14 +119,10 @@ func (c *Ctx) needCBM(ctx context.Context) (*cbmexec.Runner, context.Context, er
 	return nil, ctx, fail("codebase-memory-mcp not installed; run `tk install` (or set TK_CBM_BIN). Facts/graph unavailable — agent may continue without them.")
 }
 
-// projectNames for completion.
+// projectNames for completion (registry is the source; no live merge,
+// to keep TAB instant).
 func (c *Ctx) projectNames() []string {
-	names := c.Reg.Names()
-	if c.CBMOK && c.Run != nil {
-		// Best-effort live merge is skipped for completion speed; registry is source.
-		_ = os.Getenv("TK_LIVE_COMPLETION")
-	}
-	return names
+	return c.Reg.Names()
 }
 
 // freshness describes whether the serving index covers the live tree.

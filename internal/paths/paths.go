@@ -93,14 +93,11 @@ func (p Paths) CBMCacheDir() string { return p.Cache }
 // CBMRuntimeDir is what we export as CBM_RUNTIME_DIR.
 func (p Paths) CBMRuntimeDir() string { return filepath.Join(p.State, "rendezvous") }
 
-// ConfigFile, RegistryFile, GraphRefsFile, LogFile, HistoryFile
+// ConfigFile, RegistryFile, LogFile, HistoryFile
 func (p Paths) ConfigFile() string   { return filepath.Join(p.Config, "config.json") }
 func (p Paths) RegistryFile() string { return filepath.Join(p.Data, "tk.json") }
-func (p Paths) GraphRefsFile() string {
-	return filepath.Join(p.Data, "graph-refs.json")
-}
-func (p Paths) LogFile() string     { return filepath.Join(p.State, "logs", "tk.log") }
-func (p Paths) HistoryFile() string { return filepath.Join(p.State, "history.jsonl") }
+func (p Paths) LogFile() string      { return filepath.Join(p.State, "logs", "tk.log") }
+func (p Paths) HistoryFile() string  { return filepath.Join(p.State, "history.jsonl") }
 
 // ZoektDir is the root for per-project trigram shards: <cache>/zoekt/<project>/.
 func (p Paths) ZoektDir() string { return filepath.Join(p.Cache, "zoekt") }

@@ -73,7 +73,6 @@ var toolToCBM = map[string]string{
 type Server struct {
 	Run    *cbmexec.Runner
 	Budget int
-	Out    *os.File
 	// ShardsFor maps project -> zoekt shard dir.
 	ShardsFor func(project string) string
 	// In/Out override stdio (tests). Nil = os.Stdin/os.Stdout.

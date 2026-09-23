@@ -15,13 +15,3 @@ func Head(dir string) string {
 	}
 	return strings.TrimSpace(string(out))
 }
-
-// Root returns the worktree root or "".
-func Root(dir string) string {
-	cmd := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel")
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}

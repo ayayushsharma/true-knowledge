@@ -85,9 +85,6 @@ func cmdRegister(g *Globals) *cobra.Command {
 }
 
 func cmdIndex(g *Globals) *cobra.Command {
-	var mode, fast, full string
-	_ = fast
-	_ = full
 	var modeFlag string
 	var forceFull, forceFast bool
 	c := &cobra.Command{
@@ -109,8 +106,7 @@ func cmdIndex(g *Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			_ = mode
-			mode = ctx.Cfg.IndexMode
+			mode := ctx.Cfg.IndexMode
 			if modeFlag != "" {
 				mode = modeFlag
 			}

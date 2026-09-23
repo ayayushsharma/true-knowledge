@@ -96,7 +96,119 @@ func (r *Runner) Run(ctx context.Context, tool string, payload map[string]any) (
 	return out.String(), nil
 }
 
-// RunRaw passes raw argv for `tk cbm` passthrough: `cbm cli <argv...>`.
+// RunJSON invokes `cbm cli --json <tool> --args-file <json>` and unwraps
+// the MCP envelope to display text. Any failure (unsupported flag, bad
+// exit, non-envelope output) falls back to legacy Run: older binaries
+// keep working, newer ones return structured payloads.
+func (r *Runner) RunJSON(ctx context.Context, tool string, payload map[string]any) (string, error) {
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), defaultTimeout)
+		defer cancel()
+	}
+	clean := make(map[string]any, len(payload))
+	for k, v := range payload {
+		if s, ok := v.(string); ok && s == "" {
+			continue
+		}
+		clean[k] = v
+	}
+	rawJSON, _ := json.Marshal(clean)
+	tmp, err := os.CreateTemp("", "tk-args-*.json")
+	if err != nil {
+		return "", fmt.Errorf("args file: %w", err)
+	}
+	argsPath := tmp.Name()
+	if _, err := tmp.Write(rawJSON); err != nil {
+		_ = os.Remove(argsPath)
+		return "", fmt.Errorf("args file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(argsPath)
+		return "", fmt.Errorf("args file: %w", err)
+	}
+	defer os.Remove(argsPath)
+	cmd := exec.CommandContext(ctx, r.Bin, "cli", "--json", tool, "--args-file", argsPath)
+	cmd.Env = r.env()
+	var out, errb bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errb
+	if err := cmd.Run(); err != nil {
+		return r.Run(ctx, tool, payload)
+	}
+	text, isErr, msg := UnwrapEnvelope(out.String())
+	if isErr {
+		return "", fmt.Errorf("cbm %s failed: %s", tool, msg)
+	}
+	if text != "" {
+		return text, nil
+	}
+	// Exit 0 but no envelope: older binary ignored the flag.
+	// Prefer legacy output when it exists, else keep what we got.
+	if legacy, lerr := r.Run(ctx, tool, payload); lerr == nil && legacy != "" {
+		return legacy, nil
+	}
+	return out.String(), nil
+}
+
+// UnwrapEnvelope extracts display text from a CBM `cli --json` MCP
+// envelope. Returns isErr=true with the server message when the envelope
+// carries an error. Returns text="" when out is plain tree text from an
+// older binary (caller keeps raw output).
+func UnwrapEnvelope(out string) (text string, isErr bool, msg string) {
+	trimmed := strings.TrimSpace(out)
+	if !strings.HasPrefix(trimmed, "{") {
+		return "", false, ""
+	}
+	dec := json.NewDecoder(strings.NewReader(trimmed))
+	var raw map[string]json.RawMessage
+	if err := dec.Decode(&raw); err != nil {
+		return "", false, ""
+	}
+	if eraw, ok := raw["error"]; ok {
+		var em struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(eraw, &em) == nil && em.Message != "" {
+			return "", true, firstLine(em.Message)
+		}
+		return "", true, "unknown CBM error"
+	}
+	rraw, ok := raw["result"]
+	if !ok {
+		return "", false, ""
+	}
+	var res struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(rraw, &res) == nil {
+		for _, c := range res.Content {
+			if c.Text != "" {
+				return c.Text, false, ""
+			}
+		}
+	}
+	var s string
+	if json.Unmarshal(rraw, &s) == nil && s != "" {
+		return s, false, ""
+	}
+	return "", false, ""
+}
+
+// env builds the spawn environment (shared by all Run variants).
+func (r *Runner) env() []string {
+	env := append(os.Environ(),
+		"CBM_CACHE_DIR="+r.Paths.CBMCacheDir(),
+		"CBM_RUNTIME_DIR="+r.Paths.CBMRuntimeDir(),
+	)
+	if r.Cfg.AllowedRoot != "" {
+		env = append(env, "CBM_ALLOWED_ROOT="+r.Cfg.AllowedRoot)
+	}
+	return env
+}
 func (r *Runner) RunRaw(ctx context.Context, argv ...string) (string, error) {
 	if ctx == nil {
 		var cancel context.CancelFunc

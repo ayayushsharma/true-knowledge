@@ -2,7 +2,7 @@
 title: Roadmap — MVP1 through MVP4
 status: authoritative
 date: 2026-09-23
-supersedes: [compatible-implementation-spec.md §20, docs/DECISIONS/2026-09-22-thin-tk-over-cbm.md (scope)]
+supersedes: [compatible-implementation-spec.md §20, docs/DECISIONS/2026-09-22-thin-tk-over-cbm.md (scope), docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (mvp2 non-fleet scope)]
 superseded-by: null
 ---
 
@@ -26,9 +26,10 @@ Locked decisions: Go-only thin `tk` over CBM, Linux-style `true-knowledge/` dirs
 ## MVP2 — code-intel depth + cross-repo fleet
 
 *Why first:* flagged focus + unblocks 27B autonomy. Still delegated to CBM, no new stores.
-* `kg_*` facade: `kg_find` (regex→grep / ident→graph / NL→semantic router), `kg_explain` (def+snippet+callers+callees, one call), `kg_grep`; legacy `search/trace/arch/query` compat.
-* `analysis` profile: `query_graph` (read-only, `LIMIT` + timeout guardrails), `validate` (existence + near-miss). Shipped in MVP1: `get_file_outline` (`tk outline`), `detect_changes → impact` (`tk impact`).
-* Cross-repo: `tk index --cross --targets "*"` = base loop then `cross-repo-intelligence` pass; `CROSS_*` edges + fleet arch summary.
+* `kg_*` facade: `kg_find` (regex→grep / ident→graph / NL→semantic router), `kg_explain` (def+snippet+callers+callees, one call), `kg_grep`; legacy `search/trace/arch/query` compat. Shipped as Cobra aliases over `find/explain/grep`, zero behavior change (see envelope ADR).
+* `analysis` profile: `query_graph` (read-only, `LIMIT` + timeout guardrails), `validate` (existence + near-miss). Shipped in MVP1: `get_file_outline` (`tk outline`), `detect_changes → impact` (`tk impact`). `tk mcp --tool-profile scout(11)|analysis(14)|minimal(3)` filters tk-side; `manage_adr` passes through in `analysis`.
+* Wrapper: `cbmexec.RunJSON` (`cli --json` envelope unwrapped, legacy fallback) on all read paths; writes stay on legacy `Run`.
+* Cross-repo: PARKED per envelope ADR (fleet orchestration, `--cross/--targets`, generation record wait for dedicated fleet ADR). Upstream truth stands: one `cross-repo-intelligence` call with `target_projects=["*"]` links the fleet, no tk-driven two-pass loop; `get_architecture` reports `cross_repo_links` free.
 * Freshness: `head/current/fresh` envelopes shipped in MVP1; left for MVP2: coverage-before-absence enforcement in `scout`, stale-cursor protocol (no tk-issued cursors exist yet).
 * Done when: 27B answers `who calls X / what breaks if Y changes / outline Z` in ≤3 calls; 2-fixture fleet links `CROSS_HTTP_CALLS`.
 

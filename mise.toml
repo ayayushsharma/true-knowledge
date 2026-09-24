@@ -9,6 +9,6 @@ run = "mkdir -p dist && go build -o dist/tk ./cmd/tk"
 description = "Remove the built binary"
 run = "rm -f ./dist/tk"
 
-[tasks.docs.man]
+[tasks.docs-man]
 description = "Regenerate committed man pages (docs/man/tk*.1)"
 run = "go run ./cmd/genman"

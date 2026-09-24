@@ -252,6 +252,18 @@ type Server struct {
 	Profile string
 	// ShardsFor maps project -> zoekt shard dir.
 	ShardsFor func(project string) string
+	// EnsureIndex refreshes a project's zoekt shards before source_search
+	// (nil = trust the shards as-is). Closes the committed-staleness gap:
+	// a failed refresh is fail-open (search proceeds, staleness is noted).
+	EnsureIndex func(project string) error
+	// Staleness returns a "[...]" annotation when the served index does not
+	// cover the live tree (committed or worktree drift); "" = fresh. The
+	// note is prepended verbatim to source_search text; agents can gate
+	// absence claims on it. Nil = no annotation.
+	Staleness func(project string) string
+	// ProjectRoot maps project -> repo root for live snippet re-slicing of
+	// source_search hits (nil = return shard bytes as-is).
+	ProjectRoot func(project string) string
 	// In/Out override stdio (tests). Nil = os.Stdin/os.Stdout.
 	In   io.Reader
 	OutW io.Writer
@@ -339,12 +351,16 @@ func (s *Server) handle(ctx context.Context, req rpcReq) rpcResp {
 }
 
 // callTool dispatches one tool invocation (extracted for timing/records).
+// Profile enforcement is the first gate: tools hidden from the active profile
+// are unknown (-32601) even if callable in others. source_search is a regular
+// citizen here — minimal keeps its 3-tool surface hermetic despite the special
+// dispatch below.
 func (s *Server) callTool(ctx context.Context, id any, name string, args map[string]any) rpcResp {
-	if name == "source_search" {
-		return s.callSourceSearch(ctx, id, args)
-	}
 	if !s.hasTool(name) {
 		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32601, fmt.Sprintf("unknown tool %q (profile %s: %s)", name, s.profile(), strings.Join(s.toolNames(), ", "))}}
+	}
+	if name == "source_search" {
+		return s.callSourceSearch(ctx, id, args)
 	}
 	if args == nil {
 		args = map[string]any{}
@@ -446,6 +462,9 @@ coverage:
 // logCall appends one MCP record to tk.log (best-effort, never fails calls).
 // Coarser than CLI records by design: tool + timing + outcome, no backend
 // breakdown (the single CBM/zoekt call per tool is unambiguous).
+// Secrets: string params (mem_save value, ledger text, a search pattern that
+// looks secret) are whole-masked when secret-shaped; output/error use the
+// narrow trace.Redact set — precision first, legit code lines survive.
 func (s *Server) logCall(method, tool string, args map[string]any, t0 time.Time, resp rpcResp) {
 	if s.LogPath == "" {
 		return
@@ -454,7 +473,7 @@ func (s *Server) logCall(method, tool string, args map[string]any, t0 time.Time,
 		"v":      1,
 		"ts":     t0.Unix(),
 		"dur_ms": time.Since(t0).Milliseconds(),
-		"mcp":    map[string]any{"method": method, "tool": tool, "params": args},
+		"mcp":    map[string]any{"method": method, "tool": tool, "params": redactArgs(args)},
 		"exit":   0,
 	}
 	if resp.Error != nil {
@@ -465,6 +484,31 @@ func (s *Server) logCall(method, tool string, args map[string]any, t0 time.Time,
 		rec["output"] = map[string]any{"chars": len(text), "text": text}
 	}
 	trace.Append(s.LogPath, rec)
+}
+
+// redactArgs deep-copies args, whole-masking any string value that looks
+// secret (same policy as CLI argv) and span-masking the rest. Non-string
+// values pass through; the original map is never mutated. Inputs are masked
+// broadly — losing a search term in the log is acceptable, losing a secret
+// is not. Outputs stay on the narrow trace.Redact set (precision first, so
+// legit code-search lines survive).
+func redactArgs(args map[string]any) map[string]any {
+	if len(args) == 0 {
+		return args
+	}
+	out := make(map[string]any, len(args))
+	for k, v := range args {
+		if s, ok := v.(string); ok {
+			if len(memory.DetectSecret(s)) > 0 {
+				out[k] = "[REDACTED]"
+			} else {
+				out[k] = memory.SecretMask(trace.Redact(s))
+			}
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 func resultText(result any) string {
@@ -481,7 +525,10 @@ func resultText(result any) string {
 }
 
 // callSourceSearch serves the zoekt-backed tool (in-process library —
-// always present; a missing index surfaces as a `tk index` hint).
+// always present; a missing index surfaces as a `tk index` hint). Optional
+// hooks add the freshness contract: refresh before search, live-sliced
+// snippets, and a staleness annotation so agents never claim absence from
+// a stale index.
 func (s *Server) callSourceSearch(ctx context.Context, id any, args map[string]any) (resp rpcResp) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -505,9 +552,34 @@ func (s *Server) callSourceSearch(ctx context.Context, id any, args map[string]a
 	if s.ShardsFor == nil {
 		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, "text index not configured in this server"}}
 	}
-	text, err := QueryZoekt(ctx, s.ShardsFor(project), pattern, str("files"), limit)
+	notes := []string{}
+	if s.EnsureIndex != nil {
+		if err := s.EnsureIndex(project); err != nil {
+			// Fail-open: search the shards we have, but say they are stale.
+			notes = append(notes, "[source-search: index refresh failed: "+err.Error()+"]\n")
+		}
+	}
+	var text string
+	var err error
+	root := ""
+	if s.ProjectRoot != nil {
+		root = s.ProjectRoot(project)
+	}
+	if root != "" {
+		text, err = QueryZoektLive(ctx, s.ShardsFor(project), root, pattern, str("files"), limit)
+	} else {
+		text, err = QueryZoekt(ctx, s.ShardsFor(project), pattern, str("files"), limit)
+	}
 	if err != nil {
 		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, err.Error() + " (shards missing? run `tk index`)"}}
+	}
+	if s.Staleness != nil {
+		if n := s.Staleness(project); n != "" {
+			notes = append(notes, n)
+		}
+	}
+	for i := len(notes) - 1; i >= 0; i-- {
+		text = notes[i] + text
 	}
 	return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{
 		"content": []map[string]any{{"type": "text", "text": cbmexec.Truncate(text, s.Budget)}},

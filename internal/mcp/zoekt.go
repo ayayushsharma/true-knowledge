@@ -13,7 +13,17 @@ import (
 // The library is always linked in — there is no absent-backend case; a
 // missing index surfaces as a `tk index` hint instead.
 func QueryZoekt(ctx context.Context, shardsDir, pattern, files string, limit int) (string, error) {
-	matches, err := zoekttext.Search(shardsDir, pattern, files, limit)
+	matches, err := zoekttext.Search(ctx, shardsDir, pattern, files, limit)
+	if err != nil {
+		return "", err
+	}
+	return RenderMatches(matches), nil
+}
+
+// QueryZoektLive is QueryZoekt plus per-hit live-worktree reconcile (lines
+// re-sliced from disk bytes under root). Same semantics otherwise.
+func QueryZoektLive(ctx context.Context, shardsDir, root, pattern, files string, limit int) (string, error) {
+	matches, err := zoekttext.SearchLive(ctx, shardsDir, root, pattern, files, limit)
 	if err != nil {
 		return "", err
 	}

@@ -24,7 +24,7 @@ var secretRes = []struct {
 	{"openai-key", regexp.MustCompile(`sk-[A-Za-z0-9\-_]{20,}`)},
 	{"private-key", regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)},
 	{"jwt", regexp.MustCompile(`eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{4,}`)},
-	{"key-assignment", regexp.MustCompile(`(?i)(api[_-]?key|apikey|secret|password|passwd|token)\s*[:=]\s*\S{6,}`)},
+	{"key-assignment", regexp.MustCompile(`(?i)[a-z0-9_-]*(api[_-]?key|secret|password|passwd|token|credential)[a-z0-9_-]*\s*[:=]\s*\S{6,}`)},
 }
 
 // DetectSecret reports why a value looks secret; empty means clear to store.

@@ -1,6 +1,7 @@
 package zoekttext_test
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,7 +43,7 @@ func TestIndexRepoAndSearch(t *testing.T) {
 	})
 	shards := t.TempDir()
 
-	updated, err := zoekttext.IndexRepo(shards, repo, "demo")
+	updated, err := zoekttext.IndexRepo(context.Background(), shards, repo, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +52,7 @@ func TestIndexRepoAndSearch(t *testing.T) {
 	}
 
 	// Incremental no-op: SHA already covered.
-	updated, err = zoekttext.IndexRepo(shards, repo, "demo")
+	updated, err = zoekttext.IndexRepo(context.Background(), shards, repo, "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +60,7 @@ func TestIndexRepoAndSearch(t *testing.T) {
 		t.Fatal("second index should report updated=false (incremental no-op)")
 	}
 
-	matches, err := zoekttext.Search(shards, "ProcessOrder", "", 20)
+	matches, err := zoekttext.Search(context.Background(), shards, "ProcessOrder", "", 20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +72,7 @@ func TestIndexRepoAndSearch(t *testing.T) {
 	}
 
 	// Limit bounds output.
-	matches, err = zoekttext.Search(shards, "return", "", 1)
+	matches, err = zoekttext.Search(context.Background(), shards, "return", "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +81,7 @@ func TestIndexRepoAndSearch(t *testing.T) {
 	}
 
 	// No matches is empty, not an error.
-	matches, err = zoekttext.Search(shards, "nomatch_xyz_123", "", 20)
+	matches, err = zoekttext.Search(context.Background(), shards, "nomatch_xyz_123", "", 20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,10 +96,10 @@ func TestIndexDirPlain(t *testing.T) {
 		t.Fatal(err)
 	}
 	shards := t.TempDir()
-	if err := zoekttext.IndexDir(shards, dir, "plain"); err != nil {
+	if err := zoekttext.IndexDir(context.Background(), shards, dir, "plain"); err != nil {
 		t.Fatal(err)
 	}
-	matches, err := zoekttext.Search(shards, "hello", "", 20)
+	matches, err := zoekttext.Search(context.Background(), shards, "hello", "", 20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,8 +109,81 @@ func TestIndexDirPlain(t *testing.T) {
 }
 
 func TestSearchMissingShards(t *testing.T) {
-	_, err := zoekttext.Search(filepath.Join(t.TempDir(), "noshards"), "x", "", 20)
+	_, err := zoekttext.Search(context.Background(), filepath.Join(t.TempDir(), "noshards"), "x", "", 20)
 	if err == nil {
 		t.Fatal("expected error for missing shards")
+	}
+}
+
+// TestCancellationHonored proves every entry point honors the caller ctx:
+// a cancelled caller is refused at the boundary (index) and stops a query
+// that already has shards open (search). gitindex at this pin has no ctx, so
+// IndexRepo's mid-build window is bounded by the build itself — documented.
+func TestCancellationHonored(t *testing.T) {
+	repo := makeGitRepo(t, map[string]string{"a.txt": "hello world\n"})
+	shards := t.TempDir()
+	if _, err := zoekttext.IndexRepo(context.Background(), shards, repo, "demo"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := zoekttext.IndexRepo(ctx, shards, repo, "demo"); err == nil {
+		t.Fatal("IndexRepo must refuse a cancelled ctx")
+	}
+	if err := zoekttext.IndexDir(ctx, shards, t.TempDir(), "plain"); err == nil {
+		t.Fatal("IndexDir must refuse a cancelled ctx")
+	}
+	if _, err := zoekttext.Search(ctx, shards, "hello", "", 20); err == nil {
+		t.Fatal("Search must stop for a cancelled ctx")
+	}
+	if _, err := zoekttext.SearchLive(ctx, shards, repo, "hello", "", 20); err == nil {
+		t.Fatal("SearchLive must stop for a cancelled ctx")
+	}
+}
+
+func TestSearchLive(t *testing.T) {
+	repo := makeGitRepo(t, map[string]string{"a.txt": "line1 hello\nline2 world\n"})
+	shards := t.TempDir()
+	if _, err := zoekttext.IndexRepo(context.Background(), shards, repo, "demo"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Dirty the worktree: index still covers the old COMMIT, disk is newer.
+	liveFile := filepath.Join(repo, "a.txt")
+	if err := os.WriteFile(liveFile, []byte("line1 hello EDITED\nline2 world\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	shard, err := zoekttext.Search(context.Background(), shards, "hello", "", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shard) == 0 || shard[0].Text != "line1 hello" {
+		t.Fatalf("shard bytes should stay old, got %+v", shard)
+	}
+
+	live, err := zoekttext.SearchLive(context.Background(), shards, repo, "hello", "", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(live) == 0 || live[0].Text != "line1 hello EDITED" {
+		t.Fatalf("live text = %+v", live)
+	}
+	if live[0].File != "a.txt" || live[0].Line != 1 {
+		t.Fatalf("live match = %+v", live[0])
+	}
+
+	// Deleted-on-disk file stays, tagged.
+	if err := os.Remove(liveFile); err != nil {
+		t.Fatal(err)
+	}
+	gone, err := zoekttext.SearchLive(context.Background(), shards, repo, "hello", "", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gone) == 0 || gone[0].Text[:len("(worktree-missing)")] != "(worktree-missing)" {
+		t.Fatalf("missing file should be tagged, got %+v", gone)
 	}
 }

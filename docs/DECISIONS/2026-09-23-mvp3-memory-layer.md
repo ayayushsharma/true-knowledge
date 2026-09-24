@@ -3,7 +3,7 @@ title: tk-owned memory layer (facts/notes/ledger) on SQLite + optional embedding
 status: authoritative
 date: 2026-09-23
 supersedes: [compatible-implementation-spec.md §7 (memory stores), §8 (mem_*/note_*/ledger_* tool matrix)]
-superseded-by: null
+superseded-by: docs/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md (redaction doctrine: params broad, output narrow)
 ---
 
 # ADR — tk-owned memory layer: SQLite storage, endpoint embeddings, memory MCP profile

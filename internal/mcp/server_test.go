@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -233,7 +235,7 @@ func TestSourceSearchRoundTrip(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "w.go"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := zoekttext.IndexDir(shards, dir, "p"); err != nil {
+	if err := zoekttext.IndexDir(context.Background(), shards, dir, "p"); err != nil {
 		t.Fatal(err)
 	}
 	s := &Server{Budget: 6000, ShardsFor: func(string) string { return shards }}
@@ -352,5 +354,104 @@ func TestMemoryProfileGateKept(t *testing.T) {
 	errObj := resp["error"].(map[string]any)
 	if errObj["code"].(float64) != -32601 {
 		t.Fatalf("code = %v", errObj["code"])
+	}
+}
+
+// TestSourceSearchHiddenInMinimal: profile enforcement is the first gate, so
+// source_search — special-cased in dispatch — is still unknown to minimal.
+func TestSourceSearchHiddenInMinimal(t *testing.T) {
+	s := &Server{Profile: ProfileMinimal, ShardsFor: func(string) string { return t.TempDir() }}
+	resp := serveOne(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"source_search","arguments":{"pattern":"x","project":"p"}}}`)
+	errObj, ok := resp["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("source_search must be hidden in minimal, got %v", resp)
+	}
+	if errObj["code"].(float64) != -32601 {
+		t.Fatalf("code = %v", errObj["code"])
+	}
+}
+
+// TestMCPLogSecretRedaction: string params that look secret are whole-masked
+// in tk.log records; output/error get the span mask. The raw value never
+// lands on disk even though mem_save routes it to review.
+func TestMCPLogSecretRedaction(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "tk.log")
+	secret := "API_SECRET_KEY = superSekritValue123456789"
+	s := &Server{Profile: ProfileMemory, LogPath: logPath, Mem: openTestMemStore(t)}
+	req := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"mem_save","arguments":{"topic":"t","scope":"global","value":%q}}}`, secret)
+	resp := serveOne(t, s, req)
+	if resp["error"] != nil {
+		t.Fatalf("mem_save failed: %v", resp)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "superSekritValue123456789") {
+		t.Fatalf("secret leaked into MCP log: %s", data)
+	}
+	if !strings.Contains(string(data), "[REDACTED]") {
+		t.Fatalf("expected a redaction marker in the MCP log: %s", data)
+	}
+}
+
+// TestSourceSearchHooks: EnsureIndex runs before the search, live snippets
+// come from the worktree, and a Staleness note is prepended.
+func TestSourceSearchHooks(t *testing.T) {
+	dir, shards := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "w.go"), []byte("func Widget() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := zoekttext.IndexDir(context.Background(), shards, dir, "p"); err != nil {
+		t.Fatal(err)
+	}
+	// Dirty the worktree after indexing: shards hold the stale line.
+	if err := os.WriteFile(filepath.Join(dir, "w.go"), []byte("func Widget() {}  // edited\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	indexed := 0
+	s := &Server{
+		Budget:      6000,
+		ShardsFor:   func(string) string { return shards },
+		EnsureIndex: func(string) error { indexed++; return nil },
+		Staleness:   func(string) string { return "[source-search: 1 modified, 0 untracked in worktree not indexed]\n" },
+		ProjectRoot: func(string) string { return dir },
+	}
+	resp := serveOne(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"source_search","arguments":{"pattern":"Widget","project":"p"}}}`)
+	text := responseText(t, resp)
+	if indexed != 1 {
+		t.Fatalf("EnsureIndex ran %d times, want 1", indexed)
+	}
+	if !strings.Contains(text, "// edited") {
+		t.Fatalf("live snippet missing, got %q", text)
+	}
+	if !strings.Contains(text, "[source-search: 1 modified") {
+		t.Fatalf("staleness note missing, got %q", text)
+	}
+}
+
+// TestSourceSearchRefreshFailOpen: a failed refresh still searches the
+// shards it has, annotated as stale — it never blocks the tool.
+func TestSourceSearchRefreshFailOpen(t *testing.T) {
+	dir, shards := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "w.go"), []byte("func Alpha() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := zoekttext.IndexDir(context.Background(), shards, dir, "p"); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{
+		Budget:      6000,
+		ShardsFor:   func(string) string { return shards },
+		EnsureIndex: func(string) error { return errors.New("reindex boom") },
+		ProjectRoot: func(string) string { return dir },
+	}
+	resp := serveOne(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"source_search","arguments":{"pattern":"Alpha","project":"p"}}}`)
+	text := responseText(t, resp)
+	if !strings.Contains(text, "index refresh failed: reindex boom") {
+		t.Fatalf("fail-open note missing, got %q", text)
+	}
+	if !strings.Contains(text, "Alpha") {
+		t.Fatalf("search should still run on stale shards, got %q", text)
 	}
 }

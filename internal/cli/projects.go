@@ -140,22 +140,9 @@ func cmdIndex(g *Globals) *cobra.Command {
 				if err != nil {
 					return fail("index %q: %v", n, err)
 				}
-				head := gitx.Head(p.Path)
-				if head != "" {
-					ctx.Reg.Touch(n, head, mode)
-				} else if fp, ferr := store.Fingerprint(p.Path); ferr == nil {
-					// Non-git tree: fingerprint is the freshness key.
-					ctx.Reg.TouchFiles(n, fp, mode)
-				} else {
-					ctx.Reg.Touch(n, head, mode)
-				}
-				// Zoekt pass: in-process trigram index, same HEAD discipline as CBM.
-				if zhead, zerr := ensureZoektIndex(cmd.Context(), ctx, n, p.Path); zerr != nil {
+				// Zoekt pass: in-process trigram index, auto-refresh + registry.
+				if _, zerr := ctx.ensureZoektAndTouch(cmd.Context(), n, p.Path, mode); zerr != nil {
 					return fail("index %q: %v", n, zerr)
-				} else if zhead != "" {
-					proj := ctx.Reg[n]
-					proj.ZoektHead = zhead
-					ctx.Reg[n] = proj
 				}
 				_ = out
 			}
@@ -230,19 +217,8 @@ func cmdSync(g *Globals) *cobra.Command {
 				if _, err := ctx.cbmCall(cmd.Context(), "index_repository", map[string]any{"repo_path": p.Path, "mode": ctx.Cfg.IndexMode, "name": n}); err != nil {
 					return fail("sync %q: %v", n, err)
 				}
-				if head := gitx.Head(p.Path); head != "" {
-					ctx.Reg.Touch(n, head, ctx.Cfg.IndexMode)
-				} else if fp, ferr := store.Fingerprint(p.Path); ferr == nil {
-					ctx.Reg.TouchFiles(n, fp, ctx.Cfg.IndexMode)
-				} else {
-					ctx.Reg.Touch(n, "", ctx.Cfg.IndexMode)
-				}
-				if zhead, zerr := ensureZoektIndex(cmd.Context(), ctx, n, p.Path); zerr != nil {
+				if _, zerr := ctx.ensureZoektAndTouch(cmd.Context(), n, p.Path, ctx.Cfg.IndexMode); zerr != nil {
 					return fail("sync %q: %v", n, zerr)
-				} else if zhead != "" {
-					proj := ctx.Reg[n]
-					proj.ZoektHead = zhead
-					ctx.Reg[n] = proj
 				}
 			}
 			_ = ctx.saveReg()

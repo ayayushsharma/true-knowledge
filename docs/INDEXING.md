@@ -1,8 +1,8 @@
 ---
 title: Indexing — modes, discovery, watcher, zoekt text index
 status: authoritative
-date: 2026-09-23
-supersedes: [compatible-implementation-spec.md §7]
+date: 2026-09-24
+supersedes: [compatible-implementation-spec.md §7, docs/DECISIONS/2026-09-24-zoekt-staleness.md (source-search freshness contract), docs/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md (ctx cancellation)]
 superseded-by: null
 ---
 
@@ -24,9 +24,16 @@ cold index ~5s at k8s scale (29k files), incremental re-run instant,
 queries tens of ms. Library form additionally drops the ~42ms fork/exec tax
 and the base64 JSONL round-trip (structs out), and upgrades timeouts to
 context cancellation. `tk status --json` reports per-backend `head` +
-`zoekt_head`; Zoekt lags → callers use CBM `search_code`, never stale
-shards. Mandatory guards: import side-effect audit per pin, `recover()`
+`zoekt_head`, and source-search is never allowed to serve stale shards:
+before answering it refreshes to `git HEAD` (incremental no-op ~1ms on a
+clean tree, ~0.7s delta index on a real change), samples dirty-worktree hits
+from live disk bytes, and flags worktree drift in-band (see zoekt-staleness
+ADR). Structurally stale shards (pre-ADR legacy shape) still route to CBM
+`search_code`. Mandatory guards: import side-effect audit per pin, `recover()`
 middleware at handler boundaries, size caps before every index call.
+Builds are `IsDelta: true`: normal-build shards for the base, tiny delta
+shards appended on change, automatic normal fallback when a delta cannot
+apply.
 
 ## Modes (no `slow`; `full` is the slow one)
 

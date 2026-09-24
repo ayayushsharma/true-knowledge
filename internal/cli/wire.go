@@ -98,6 +98,12 @@ func finalize(buf *bytes.Buffer, start time.Time, err error) {
 		}
 	}
 	text := maskedText(buf.String())
+	evs := make([]trace.Event, 0, len(c.Events))
+	for _, ev := range c.Events {
+		ev.Detail = maskedText(ev.Detail)
+		ev.Error = maskedText(ev.Error)
+		evs = append(evs, ev)
+	}
 	rec := map[string]any{
 		"v":      1,
 		"ts":     start.Unix(),
@@ -105,7 +111,7 @@ func finalize(buf *bytes.Buffer, start time.Time, err error) {
 		"argv":   argv,
 		"cwd":    cwd(),
 		"exit":   code,
-		"events": c.Events,
+		"events": evs,
 		"output": map[string]any{"chars": len(text), "text": text},
 	}
 	if errText != "" {

@@ -33,6 +33,32 @@ func cmdMCP(g *Globals) *cobra.Command {
 			}
 			paths := ctx.Paths
 			s.ShardsFor = paths.ZoektShards
+			// source_search freshness contract: refresh before searching,
+			// live-slice results, and annotate any remaining staleness.
+			s.EnsureIndex = func(project string) error {
+				p, ok := ctx.Reg[project]
+				if !ok {
+					return fmt.Errorf("unknown project %q", project)
+				}
+				if _, zerr := ctx.ensureZoektAndTouch(cmd.Context(), project, p.Path, ctx.Cfg.IndexMode); zerr != nil {
+					return zerr
+				}
+				return ctx.saveReg()
+			}
+			s.Staleness = func(project string) string {
+				p, ok := ctx.Reg[project]
+				if !ok {
+					return ""
+				}
+				note, _, _ := zoektStaleNote(p)
+				return note
+			}
+			s.ProjectRoot = func(project string) string {
+				if p, ok := ctx.Reg[project]; ok {
+					return p.Path
+				}
+				return ""
+			}
 			s.LogPath = ctx.Paths.LogFile()
 			store, err := ctx.memoryStore(cmd.Context())
 			if err == nil {

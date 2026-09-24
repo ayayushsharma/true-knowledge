@@ -4,8 +4,8 @@
 // in-process instead of shelling out. No binaries to resolve, no downloads,
 // no subprocess tax. The pin lives in go.mod, not tk config.
 //
-// Exactly three entry points (the revert seam — callers must not reach
-// past them): IndexRepo, IndexDir, Search.
+// Exactly four entry points (the revert seam — callers must not reach
+// past them): IndexRepo, IndexDir, Search, SearchLive.
 //
 // Import audit @153817f643cd (re-run on pin bumps): the only init() in the
 // imported packages is index/builder.go reading the process umask
@@ -39,7 +39,17 @@ type Match struct {
 // IndexRepo indexes a git repo into shardsDir (created if missing).
 // Incremental: returns updated=false when the indexed SHAs already cover
 // HEAD — the free no-op behind `tk sync`. No daemon, one call.
-func IndexRepo(shardsDir, repoPath, name string) (bool, error) {
+// Delta builds are enabled: only changed blobs are re-indexed when HEAD
+// moves, so re-syncs scale with diff size instead of tree size. An
+// inapplicable delta (changed .gitignore, missing prior shards) falls back
+// to a normal build inside gitindex.
+// Cancellation: gitindex exposes no ctx at this pin; ctx is honored before
+// and after the build. A full 19s normal build cannot be interrupted mid-
+// flight here (a future zoekt pin with a ctx-aware gitindex removes that).
+func IndexRepo(ctx context.Context, shardsDir, repoPath, name string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	if err := os.MkdirAll(shardsDir, 0o700); err != nil {
 		return false, err
 	}
@@ -48,6 +58,7 @@ func IndexRepo(shardsDir, repoPath, name string) (bool, error) {
 		RepositoryDescription: zoekt.Repository{
 			Name: name,
 		},
+		IsDelta: true,
 	}
 	buildOpts.SetDefaults()
 	updated, err := gitindex.IndexGitRepo(gitindex.Options{
@@ -60,13 +71,20 @@ func IndexRepo(shardsDir, repoPath, name string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("zoekt index %q: %w", name, err)
 	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	return updated, nil
 }
 
 // IndexDir indexes a plain directory (non-git) into shardsDir.
 // No SHA to compare against, so this always rebuilds — fast at the sizes
-// tk allows for non-git trees.
-func IndexDir(shardsDir, dir, name string) error {
+// tk allows for non-git trees. ctx is checked between files, so a cancelled
+// caller stops the walk promptly.
+func IndexDir(ctx context.Context, shardsDir, dir, name string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(shardsDir, 0o700); err != nil {
 		return err
 	}
@@ -89,6 +107,9 @@ func IndexDir(shardsDir, dir, name string) error {
 		if err != nil || fi.IsDir() {
 			return nil
 		}
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
 		rel, err := filepath.Rel(dir, path)
 		if err != nil {
 			return nil
@@ -104,6 +125,9 @@ func IndexDir(shardsDir, dir, name string) error {
 		})
 	})
 	if err != nil {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
 		return fmt.Errorf("zoekt walk %q: %w", dir, err)
 	}
 	return builder.Finish()
@@ -111,8 +135,9 @@ func IndexDir(shardsDir, dir, name string) error {
 
 // Search runs one trigram query against a project's shards and returns up
 // to limit matches (<=0 = unbounded). files appends a zoekt `file:` filter.
-// Shards open per call (mmap, tens of ms): no daemon, context-cancelled.
-func Search(shardsDir, rawQuery, files string, limit int) ([]Match, error) {
+// Shards open per call (mmap, tens of ms): no daemon. The internal 60s cap
+// derives from ctx, so a caller deadline or disconnect cancels immediately.
+func Search(ctx context.Context, shardsDir, rawQuery, files string, limit int) ([]Match, error) {
 	q := rawQuery
 	if files != "" {
 		q += " file:" + files
@@ -126,7 +151,8 @@ func Search(shardsDir, rawQuery, files string, limit int) ([]Match, error) {
 		return nil, fmt.Errorf("zoekt open %q: %w (run `tk index`)", shardsDir, err)
 	}
 	defer searcher.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// WithTimeout over the caller ctx: whichever bound is sooner fires first.
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	opts := &zoekt.SearchOptions{MaxWallTime: 55 * time.Second}
 	if limit > 0 {
@@ -150,4 +176,30 @@ func Search(shardsDir, rawQuery, files string, limit int) ([]Match, error) {
 		}
 	}
 	return out, nil
+}
+
+// SearchLive is Search plus a per-hit reconcile against the live worktree
+// (root = project root the relative file paths live under). Line text of
+// each hit is re-sliced from the current disk bytes so rendered snippets
+// match the working tree, not the shard; hits whose file vanished on disk
+// stay but are tagged "(worktree-missing)". Bounded by the same limit, so
+// at most `limit` reads. Never a reindex — pure render-time correction.
+func SearchLive(ctx context.Context, shardsDir, root, rawQuery, files string, limit int) ([]Match, error) {
+	matches, err := Search(ctx, shardsDir, rawQuery, files, limit)
+	if err != nil {
+		return nil, err
+	}
+	for i := range matches {
+		m := &matches[i]
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(m.File)))
+		if err != nil {
+			m.Text = "(worktree-missing) " + m.Text
+			continue
+		}
+		lines := strings.Split(string(data), "\n")
+		if m.Line >= 1 && m.Line <= len(lines) {
+			m.Text = strings.TrimRight(lines[m.Line-1], "\r")
+		}
+	}
+	return matches, nil
 }

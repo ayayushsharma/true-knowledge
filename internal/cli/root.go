@@ -185,6 +185,8 @@ func (c *Ctx) projectNames() []string {
 
 // freshness describes whether the serving index covers the live tree.
 // Git repos compare HEADs; plain dirs compare mtime fingerprints.
+// zoekt_head/zoekt_fresh are the trigram-shard side of the same check
+// (registry reads only — worktree drift counts live in source-search).
 // Fields merge into --json envelopes so agents can gate absence claims.
 func (c *Ctx) freshness(proj string) map[string]any {
 	p, ok := c.Reg[proj]
@@ -192,13 +194,25 @@ func (c *Ctx) freshness(proj string) map[string]any {
 		return map[string]any{"fresh": false}
 	}
 	if head := gitx.Head(p.Path); head != "" {
-		return map[string]any{"head": p.Head, "current": head, "fresh": head == p.Head}
+		return map[string]any{
+			"head":        p.Head,
+			"current":     head,
+			"fresh":       head == p.Head,
+			"zoekt_head":  p.ZoektHead,
+			"zoekt_fresh": p.ZoektHead == head,
+		}
 	}
 	live, err := store.Fingerprint(p.Path)
 	if err != nil {
-		return map[string]any{"head": p.Fingerprint, "fresh": false}
+		return map[string]any{"head": p.Fingerprint, "fresh": false, "zoekt_head": p.ZoektHead, "zoekt_fresh": false}
 	}
-	return map[string]any{"head": p.Fingerprint, "current": live, "fresh": live == p.Fingerprint}
+	return map[string]any{
+		"head":        p.Fingerprint,
+		"current":     live,
+		"fresh":       live == p.Fingerprint,
+		"zoekt_head":  p.ZoektHead,
+		"zoekt_fresh": p.ZoektHead == "files" && live == p.Fingerprint,
+	}
 }
 
 // outFresh renders like out but merges freshness fields for proj.

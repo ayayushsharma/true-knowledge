@@ -2,20 +2,20 @@
 .TH "true-knowledge" "1" "Sep 2026" "true-knowledge" "tk (true-knowledge)"
 
 .SH NAME
-tk-ledger - Per-project working truths (append-only, five keys, history, human-only prune)
+tk-ledger-prune - Delete a project ledger permanently — interactive TTY confirmation only (no MCP tool; humans-only)
 
 
 .SH SYNOPSIS
-\fBtk ledger [flags]\fP
+\fBtk ledger prune  [flags]\fP
 
 
 .SH DESCRIPTION
-Per-project working truths (append-only, five keys, history, human-only prune)
+Delete a project ledger permanently — interactive TTY confirmation only (no MCP tool; humans-only)
 
 
 .SH OPTIONS
 \fB-h\fP, \fB--help\fP[=false]
-	help for ledger
+	help for prune
 
 
 .SH OPTIONS INHERITED FROM PARENT COMMANDS
@@ -31,5 +31,11 @@ Per-project working truths (append-only, five keys, history, human-only prune)
 	stable JSON envelope output
 
 
+.SH EXAMPLE
+.EX
+  tk ledger prune demo
+.EE
+
+
 .SH SEE ALSO
-\fBtk(1)\fP, \fBtk-ledger-get(1)\fP, \fBtk-ledger-history(1)\fP, \fBtk-ledger-prune(1)\fP, \fBtk-ledger-update(1)\fP
+\fBtk-ledger(1)\fP

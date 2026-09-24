@@ -1,8 +1,8 @@
 ---
 title: Roadmap — MVP1 through MVP4
 status: authoritative
-date: 2026-09-24
-supersedes: [compatible-implementation-spec.md §20, docs/DECISIONS/2026-09-22-thin-tk-over-cbm.md (scope), docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (mvp2 non-fleet scope), docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (mvp3 scope), docs/DECISIONS/2026-09-24-evals-harness.md (mvp4 evals design), docs/DECISIONS/2026-09-24-reindex-embed-cache.md (mvp3 reindex embed mechanics), docs/DECISIONS/2026-09-24-zoekt-staleness.md (zoekt-side freshness shipped), docs/DECISIONS/2026-09-24-mvp4-human-ux-picker-manpages.md (mvp4 human UX scope)]
+date: 2026-09-25
+supersedes: [compatible-implementation-spec.md §20, docs/DECISIONS/2026-09-22-thin-tk-over-cbm.md (scope), docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (mvp2 non-fleet scope), docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (mvp3 scope), docs/DECISIONS/2026-09-24-evals-harness.md (mvp4 evals design), docs/DECISIONS/2026-09-24-reindex-embed-cache.md (mvp3 reindex embed mechanics), docs/DECISIONS/2026-09-24-zoekt-staleness.md (zoekt-side freshness shipped), docs/DECISIONS/2026-09-24-mvp4-human-ux-picker-manpages.md (mvp4 human UX scope), docs/DECISIONS/2026-09-25-ledger-append-only-history-prune.md (ledger v2 scope)]
 superseded-by: null
 ---
 
@@ -40,11 +40,11 @@ Locked decisions: Go-only thin `tk` over CBM, Linux-style `true-knowledge/` dirs
 **Shipped (code complete, e2e both modes, real-binary verified):** see `docs/DECISIONS/2026-09-23-mvp3-memory-layer.md`.
 * `tk mem`: facts `(scope,project,topic)` UPSERT, global sentinel cross-project, provenance+timestamp, secret-detect → review queue (never silent store), approve/reject.
 * `tk note`: `notes/<project>/*.md` front-matter source-of-truth + FTS5 BM25 index + optional embedding fusion; capture→review→approve; title-only budgeted `toc`; `reindex` rebuilds from markdown.
-* `tk ledger`: bounded full-text-replace JSON per project (`ledger/<project>.json`), `ledger.enabled` gate + independent `budgets.ledger_chars` budget.
+* `tk ledger`: **v2 — append-only** `ledger/<project>.jsonl`, fixed five keys (`goal|next|done|decisions|open_questions`), `get` folds last write per key, `budgets.ledger_chars` is a retrieval-only cap, `history` = complete log, `prune` = human-only TTY-confirm. `ledger.enabled` gate. See ledger ADR.
 * Storage: `modernc.org/sqlite` (CGo-free) for `facts.db` + `notes/index.db`; schema-versioned, WAL, 0600. Embeddings via **external** Ollama-compatible `/api/embed` (never bundled); BM25 stays authoritative, RRF fusion, all-embed-failure fallback. `note reindex` embeds through a persistent content-keyed cache (`note_embeds`, schema v3): warm call + ⌈n/64⌉ chunked embeds, per-chunk fail-open, unchanged bodies hit the cache across rebuilds (see reindex-embed-cache ADR).
-* MCP `memory` profile: scout(11) + 9 in-process tools = 20; no CBM/daemon needed for memory tools.
-* Done when: facts survive sessions, notes require approval before searchable, ledger truncates by budget — all `0600` under `~/.local/share/true-knowledge/`.
-* Deferred: compaction/re-anchor protocol for ledgers; RRF tuning knobs beyond defaults.
+* MCP `memory` profile: scout(11) + 11 in-process tools = 22 (v1 shipped 9; v2 adds `ledger_get`/`ledger_history`, `ledger_update` gains `key`); no CBM/daemon needed for memory tools.
+* Done when: facts survive sessions, notes require approval before searchable, ledger appends verbatim and `get` trims by budget on retrieval — all `0600` under `~/.local/share/true-knowledge/`.
+* Deferred: RRF tuning knobs beyond defaults (ledger compaction/re-anchor resolved by design — append-only + human prune, see ledger ADR).
 
 ## MVP4 — human UX + hardening (deferred)
 
@@ -59,3 +59,7 @@ Locked decisions: Go-only thin `tk` over CBM, Linux-style `true-knowledge/` dirs
 ## Order logic
 
 Cross-repo rides MVP2 (one extra CBM pass, not a new store). Memory rides MVP3 (new stores + review risk). Human polish rides last (Cobra-standard already usable; agent correctness gates the rest).
+
+## Remaining-work backlog
+
+Detail for every deferred/parked item (fleet, ops/packaging, scout coverage, ledger compaction/RRF, stale cursors) plus permanently-rejected proposals lives in `docs/REMAINING-WORK.md` — re-read it when compacting code.

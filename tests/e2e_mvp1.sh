@@ -261,8 +261,9 @@ else
   pass=$((pass+1)); printf 'ok   live-ollama-skipped (no daemon on 127.0.0.1:11434)\n'
 fi
 
-# --- ledger layer ---
-check ledger-update 0 $TK_BIN ledger update demo "demo serves the public API; deploys weekly."
+# --- ledger layer (v2: append-only JSONL, five keys, last-write-wins fold) ---
+check ledger-update 0 $TK_BIN ledger update demo goal "demo serves the public API; deploys weekly."
+check ledger-update-key2 0 $TK_BIN ledger update demo next "ship the cross-repo fleet"
 check ledger-get 0 $TK_BIN ledger get demo
 shiftled=$(TK_HOME="$TK_HOME" $TK_BIN ledger get demo)
 if echo "$shiftled" | grep -q 'public API'; then
@@ -270,21 +271,55 @@ if echo "$shiftled" | grep -q 'public API'; then
 else
   fail=$((fail+1)); printf 'FAIL ledger-roundtrip\n'
 fi
+if echo "$shiftled" | grep -q 'ship the cross-repo fleet'; then
+  pass=$((pass+1)); printf 'ok   ledger-get-folds-both-keys\n'
+else
+  fail=$((fail+1)); printf 'FAIL ledger-get-folds-both-keys\n'
+fi
+hist=$(TK_HOME="$TK_HOME" $TK_BIN ledger history demo)
+if echo "$hist" | grep -q 'public API' && echo "$hist" | grep -q 'goal'; then
+  pass=$((pass+1)); printf 'ok   ledger-history-complete\n'
+else
+  fail=$((fail+1)); printf 'FAIL ledger-history-complete\n'
+fi
+if $TK_BIN ledger update demo bogus "nope" >/dev/null 2>&1; then
+  fail=$((fail+1)); printf 'FAIL ledger-bad-key-rejected\n'
+else
+  pass=$((pass+1)); printf 'ok   ledger-bad-key-rejected\n'
+fi
+if $TK_BIN ledger update demo goal "" >/dev/null 2>&1; then
+  fail=$((fail+1)); printf 'FAIL ledger-empty-value-rejected\n'
+else
+  pass=$((pass+1)); printf 'ok   ledger-empty-value-rejected\n'
+fi
+if $TK_BIN ledger prune demo >/dev/null 2>&1; then
+  fail=$((fail+1)); printf 'FAIL ledger-prune-refused-off-tty\n'
+else
+  pass=$((pass+1)); printf 'ok   ledger-prune-refused-off-tty\n'
+fi
 check ledger-budget 0 $TK_BIN config set budgets.ledger_chars 24
-check ledger-update-trunc 0 $TK_BIN ledger update demo "much longer ledger text that must be truncated aggressively here"
-shortled=$(TK_HOME="$TK_HOME" $TK_BIN ledger get demo --json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['ledger'])" 2>/dev/null)
+check ledger-update-trunc 0 $TK_BIN ledger update demo goal "much longer ledger text that must be truncated aggressively here"
+shortled=$(TK_HOME="$TK_HOME" $TK_BIN ledger get demo --json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['keys']['goal']['value'])" 2>/dev/null)
 if [ "${#shortled}" -le 24 ]; then
   pass=$((pass+1)); printf 'ok   ledger-budget-enforced\n'
 else
   fail=$((fail+1)); printf 'FAIL ledger-budget-enforced (%d chars)\n' "${#shortled}"
 fi
+# the cap is retrieval-only: history still holds the value whole
+longhist=$(TK_HOME="$TK_HOME" $TK_BIN ledger history demo --json 2>/dev/null | python3 -c "import json,sys; v=[e['value'] for e in json.load(sys.stdin)['entries'] if 'much longer ledger text' in e['value']]; print(v[-1] if v else '')" 2>/dev/null)
+if [ "${#longhist}" -gt 24 ]; then
+  pass=$((pass+1)); printf 'ok   ledger-history-uncapped\n'
+else
+  fail=$((fail+1)); printf 'FAIL ledger-history-uncapped\n'
+fi
 check ledger-disable 0 $TK_BIN config set ledger.enabled false
-if $TK_BIN ledger update demo "should fail when disabled" >/dev/null 2>&1; then
+if $TK_BIN ledger update demo goal "should fail when disabled" >/dev/null 2>&1; then
   fail=$((fail+1)); printf 'FAIL ledger-disabled-gate\n'
 else
   pass=$((pass+1)); printf 'ok   ledger-disabled-gate\n'
 fi
 check ledger-reenable 0 $TK_BIN config set ledger.enabled true
+check ledger-budget-reset 0 $TK_BIN config set budgets.ledger_chars 1500
 
 out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | $TK_BIN mcp)
 n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
@@ -300,7 +335,7 @@ if [ "$n" = "3" ]; then pass=$((pass+1)); printf 'ok   mcp-tools-minimal-3\n';
 else fail=$((fail+1)); printf 'FAIL mcp-tools-minimal (n=%s)\n' "$n"; fi
 out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | $TK_BIN mcp --tool-profile memory)
 n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
-if [ "$n" = "20" ]; then pass=$((pass+1)); printf 'ok   mcp-tools-memory-20\n';
+if [ "$n" = "22" ]; then pass=$((pass+1)); printf 'ok   mcp-tools-memory-22\n';
 else fail=$((fail+1)); printf 'FAIL mcp-tools-memory (n=%s)\n' "$n"; fi
 # profile is a runtime knob: TK_MCP_PROFILE env drives it, flag beats env, invalid env fails loudly
 out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | TK_MCP_PROFILE=analysis $TK_BIN mcp)
@@ -309,7 +344,7 @@ if [ "$n" = "14" ]; then pass=$((pass+1)); printf 'ok   mcp-env-analysis-14\n';
 else fail=$((fail+1)); printf 'FAIL mcp-env-analysis (n=%s)\n' "$n"; fi
 out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | TK_MCP_PROFILE=minimal $TK_BIN mcp --tool-profile memory)
 n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
-if [ "$n" = "20" ]; then pass=$((pass+1)); printf 'ok   mcp-flag-beats-env-20\n';
+if [ "$n" = "22" ]; then pass=$((pass+1)); printf 'ok   mcp-flag-beats-env-22\n';
 else fail=$((fail+1)); printf 'FAIL mcp-flag-beats-env (n=%s)\n' "$n"; fi
 if TK_MCP_PROFILE=bogus sh -c "printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}' | $TK_BIN mcp" 2>&1 | grep -q 'scout|analysis|minimal|memory'; then
   pass=$((pass+1)); printf 'ok   mcp-env-invalid-rejected\n'
@@ -357,10 +392,25 @@ case "$out" in
   *'tls config'*) pass=$((pass+1)); printf 'ok   mcp-note-search\n';;
   *) fail=$((fail+1)); printf 'FAIL mcp-note-search\n  %s\n' "$out";;
 esac
-out=$(printf '%s\n' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"ledger_update","arguments":{"project":"demo","text":"demo serves the API and owns the tls config"}}}' | $TK_BIN mcp --tool-profile memory 2>/dev/null)
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"ledger_update","arguments":{"project":"demo","key":"goal","text":"demo serves the API and owns the tls config"}}}' | $TK_BIN mcp --tool-profile memory 2>/dev/null)
 case "$out" in
-  *'updated ledger'*) pass=$((pass+1)); printf 'ok   mcp-ledger-update\n';;
+  *'appended ledger demo/goal'*) pass=$((pass+1)); printf 'ok   mcp-ledger-update\n';;
   *) fail=$((fail+1)); printf 'FAIL mcp-ledger-update\n  %s\n' "$out";;
+esac
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"ledger_get","arguments":{"project":"demo"}}}' | $TK_BIN mcp --tool-profile memory 2>/dev/null)
+case "$out" in
+  *'tls config'*) pass=$((pass+1)); printf 'ok   mcp-ledger-get\n';;
+  *) fail=$((fail+1)); printf 'FAIL mcp-ledger-get\n  %s\n' "$out";;
+esac
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"ledger_history","arguments":{"project":"demo"}}}' | $TK_BIN mcp --tool-profile memory 2>/dev/null)
+case "$out" in
+  *'public API'*) pass=$((pass+1)); printf 'ok   mcp-ledger-history\n';;
+  *) fail=$((fail+1)); printf 'FAIL mcp-ledger-history\n  %s\n' "$out";;
+esac
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"ledger_update","arguments":{"project":"demo","key":"bogus","text":"x"}}}' | $TK_BIN mcp --tool-profile memory 2>/dev/null)
+case "$out" in
+  *'error'*) pass=$((pass+1)); printf 'ok   mcp-ledger-bad-key-rejected\n';;
+  *) fail=$((fail+1)); printf 'FAIL mcp-ledger-bad-key-rejected\n  %s\n' "$out";;
 esac
 # NOTE: zoekt is a linked library, not a backend binary — the fake only
 # stubs CBM, so source_search genuinely succeeds in both modes.

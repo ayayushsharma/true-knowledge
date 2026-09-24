@@ -2,20 +2,20 @@
 .TH "true-knowledge" "1" "Sep 2026" "true-knowledge" "tk (true-knowledge)"
 
 .SH NAME
-tk-ledger - Per-project working truths (append-only, five keys, history, human-only prune)
+tk-ledger-history - Complete ledger log: every entry, chronological, uncapped (the audit trail)
 
 
 .SH SYNOPSIS
-\fBtk ledger [flags]\fP
+\fBtk ledger history  [flags]\fP
 
 
 .SH DESCRIPTION
-Per-project working truths (append-only, five keys, history, human-only prune)
+Complete ledger log: every entry, chronological, uncapped (the audit trail)
 
 
 .SH OPTIONS
 \fB-h\fP, \fB--help\fP[=false]
-	help for ledger
+	help for history
 
 
 .SH OPTIONS INHERITED FROM PARENT COMMANDS
@@ -31,5 +31,11 @@ Per-project working truths (append-only, five keys, history, human-only prune)
 	stable JSON envelope output
 
 
+.SH EXAMPLE
+.EX
+  tk ledger history demo
+.EE
+
+
 .SH SEE ALSO
-\fBtk(1)\fP, \fBtk-ledger-get(1)\fP, \fBtk-ledger-history(1)\fP, \fBtk-ledger-prune(1)\fP, \fBtk-ledger-update(1)\fP
+\fBtk-ledger(1)\fP

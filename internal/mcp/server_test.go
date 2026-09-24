@@ -51,7 +51,7 @@ func TestToolsListCount(t *testing.T) {
 		{"scout", 11, nil, nil},
 		{"analysis", 14, []string{"validate", "query_graph", "manage_adr"}, nil},
 		{"minimal", 3, []string{"check_index_coverage", "search_graph", "get_code_snippet"}, []string{"source_search", "detect_changes"}},
-		{"memory", 20, []string{"mem_save", "mem_recall", "mem_review", "note_save", "note_search", "note_toc", "note_reindex", "note_review", "ledger_update"}, []string{"validate"}},
+		{"memory", 22, []string{"mem_save", "mem_recall", "mem_review", "note_save", "note_search", "note_toc", "note_reindex", "note_review", "ledger_update", "ledger_get", "ledger_history"}, []string{"validate"}},
 	}
 	for _, tc := range tests {
 		resp := serveOne(t, &Server{Profile: tc.profile}, `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
@@ -106,7 +106,7 @@ func TestToolsListSchemas(t *testing.T) {
 		{"", 11},
 		{"analysis", 14},
 		{"minimal", 3},
-		{"memory", 20},
+		{"memory", 22},
 	} {
 		resp := serveOne(t, &Server{Profile: tc.profile}, `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)
 		tools := resp["result"].(map[string]any)["tools"].([]any)
@@ -325,9 +325,25 @@ func TestMemoryToolsWorkWithoutCBM(t *testing.T) {
 	if text := responseText(t, resp); !strings.Contains(text, "certs rotate monthly") {
 		t.Fatalf("note_search = %q", text)
 	}
-	resp = serveOne(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"ledger_update","arguments":{"project":"demo","text":"demo serves the API"}}}`)
-	if text := responseText(t, resp); !strings.Contains(text, "updated ledger") {
+	resp = serveOne(t, s, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"ledger_update","arguments":{"project":"demo","key":"goal","text":"demo serves the API"}}}`)
+	if text := responseText(t, resp); !strings.Contains(text, "appended ledger demo/goal") {
 		t.Fatalf("ledger_update = %q", text)
+	}
+	resp = serveOne(t, s, `{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"ledger_update","arguments":{"project":"demo","key":"goal","text":"demo serves the API and owns tls"}}}`)
+	resp = serveOne(t, s, `{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"ledger_get","arguments":{"project":"demo"}}}`)
+	if text := responseText(t, resp); !strings.Contains(text, "demo serves the API and owns tls") {
+		t.Fatalf("ledger_get winners = %q", text)
+	}
+	resp = serveOne(t, s, `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"ledger_history","arguments":{"project":"demo"}}}`)
+	text := responseText(t, resp)
+	// history is complete: the overwritten winner's line is still its own
+	// entry (ends at EOL) and the newer goal entry is present alongside it.
+	if !strings.Contains(text, "goal  demo serves the API and owns tls") || !strings.Contains(text, "goal  demo serves the API\n") {
+		t.Fatalf("ledger_history must contain every entry: %q", text)
+	}
+	resp = serveOne(t, s, `{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"ledger_update","arguments":{"project":"demo","key":"bogus","text":"x"}}}`)
+	if resp["error"] == nil {
+		t.Fatalf("unknown key must be rejected")
 	}
 }
 

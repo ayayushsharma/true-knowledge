@@ -1,8 +1,8 @@
 ---
 title: Paths and config — Linux-style everywhere
 status: authoritative
-date: 2026-09-24
-supersedes: [compatible-implementation-spec.md §6, docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (memory paths), docs/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md (MCP profile env), docs/DECISIONS/2026-09-24-mvp4-human-ux-picker-manpages.md (ui.picker config key)]
+date: 2026-09-25
+supersedes: [compatible-implementation-spec.md §6, docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (memory paths), docs/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md (MCP profile env), docs/DECISIONS/2026-09-24-mvp4-human-ux-picker-manpages.md (ui.picker config key), docs/DECISIONS/2026-09-25-ledger-append-only-history-prune.md (ledger storage + ledger_chars semantics)]
 superseded-by: null
 ---
 
@@ -10,7 +10,7 @@ superseded-by: null
 
 ## Config keys (dotted, `tk config set/list`)
 
-`index_mode`, `auto_index`, `auto_watch`, `watcher_enabled`, `allowed_root`, `cbm_binary`, `cbm_version_pin`, `budgets.default_chars|architecture_chars|notes_toc_chars|ledger_chars`, `embedding.enabled|endpoint|model|timeout_ms`, `ledger.enabled`, `mcp.profile`, `ui.picker` (fuzzy project picker on multi-project + TTY, default true; see human-UX ADR). Unknown keys error; `set` validates at write time (enabling embeddings requires an endpoint + model; `mcp.profile` must be one of `scout|analysis|minimal|memory` or empty).
+`index_mode`, `auto_index`, `auto_watch`, `watcher_enabled`, `allowed_root`, `cbm_binary`, `cbm_version_pin`, `budgets.default_chars|architecture_chars|notes_toc_chars|ledger_chars` (`ledger_chars` = retrieval-only cap on `ledger get`, never applied on write), `embedding.enabled|endpoint|model|timeout_ms`, `ledger.enabled`, `mcp.profile`, `ui.picker` (fuzzy project picker on multi-project + TTY, default true; see human-UX ADR). Unknown keys error; `set` validates at write time (enabling embeddings requires an endpoint + model; `mcp.profile` must be one of `scout|analysis|minimal|memory` or empty).
 
 ## Runtime env vars
 
@@ -22,7 +22,7 @@ Single resolver. No `os.UserConfigDir` branches. No `~/Library/*`, no `%AppData%
 
 ```text
 ~/.config/true-knowledge/       config.json (tk source of truth)
-~/.local/share/true-knowledge/  tk.json (name→path, heads, fingerprints), mem/ (facts.db), notes/ (<project>/*.md source-of-truth + index.db), ledger/ (<project>.json)
+~/.local/share/true-knowledge/  tk.json (name→path, heads, fingerprints), mem/ (facts.db), notes/ (<project>/*.md source-of-truth + index.db), ledger/ (<project>.jsonl append-only)
 ~/.cache/true-knowledge/        == CBM_CACHE_DIR (_config.db, indexes) + zoekt/ shards
 ~/.local/state/true-knowledge/  logs/tk.log (unified JSONL trace), rendezvous/ (CBM_RUNTIME_DIR)
 ```
@@ -34,7 +34,7 @@ tk-owned memory trees (all 0600 files, dirs 0700, CBM never touches them):
 <data>/notes/index.db      derived FTS5 BM25 index (rebuildable via `tk note reindex`)
 <data>/notes/<project>/    approved notes as front-matter markdown (the durable truth)
 <data>/notes/review/       <project>.jsonl captured notes awaiting approval
-<data>/ledger/<project>.json  bounded per-project working terms (full-text replace)
+<data>/ledger/<project>.jsonl  append-only log (5 keys, last-write-wins get fold, retrieval-only budget, human-only prune; see ledger ADR)
 ```
 
 Resolution: `$XDG_{CONFIG,DATA,CACHE,STATE}_HOME/true-knowledge/` or `$HOME/{.config,.local/share,.cache,.local/state}/true-knowledge/`. On Windows `$HOME` = `%USERPROFILE%` via `filepath.Join` (e.g. `C:\Users\you\.config\true-knowledge\`).

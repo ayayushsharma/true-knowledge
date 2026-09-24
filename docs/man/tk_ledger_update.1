@@ -2,15 +2,15 @@
 .TH "true-knowledge" "1" "Sep 2026" "true-knowledge" "tk (true-knowledge)"
 
 .SH NAME
-tk-ledger-update - Replace a project ledger (truncated to budgets.ledger_chars)
+tk-ledger-update - Append one immutable ledger entry (key=goal|next|done|decisions|open_questions)
 
 
 .SH SYNOPSIS
-\fBtk ledger update   [flags]\fP
+\fBtk ledger update    [flags]\fP
 
 
 .SH DESCRIPTION
-Replace a project ledger (truncated to budgets.ledger_chars)
+Append one immutable ledger entry (key=goal|next|done|decisions|open_questions)
 
 
 .SH OPTIONS
@@ -33,7 +33,8 @@ Replace a project ledger (truncated to budgets.ledger_chars)
 
 .SH EXAMPLE
 .EX
-  tk ledger update demo "demo serves the public API; deploys weekly; owned by platform."
+  tk ledger update demo goal "build a codebase-cognizant agent"
+  tk ledger update demo done "shipped picker + man pages"
 .EE
 
 

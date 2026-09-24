@@ -69,7 +69,7 @@ func cmdMCP(g *Globals) *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&profile, "tool-profile", mcp.ProfileScout,
-		"tool surface: scout (11) | analysis (14) | minimal (3) | memory (20); explicit flag beats TK_MCP_PROFILE and config mcp.profile")
+		"tool surface: scout (11) | analysis (14) | minimal (3) | memory (22); explicit flag beats TK_MCP_PROFILE and config mcp.profile")
 	_ = c.RegisterFlagCompletionFunc("tool-profile", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		return config.ValidProfiles(), cobra.ShellCompDirectiveNoFileComp
 	})

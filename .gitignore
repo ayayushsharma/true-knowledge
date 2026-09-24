@@ -1,5 +1,6 @@
 # built binary (48MB+; rebuild with: mise run build)
 /dist/
+/tk
 
 # Go build cache / test artifacts
 *.test

@@ -41,7 +41,7 @@ func memoryOut(text string, budget int) map[string]any {
 	}
 }
 
-// callMemory serves the 9 memory-profile tools entirely in-process. They
+// callMemory serves the 11 memory-profile tools entirely in-process. They
 // never need CBM (fail-open companions to the graph surface) and never
 // spawn external processes.
 func (s *Server) callMemory(ctx context.Context, id any, name string, args map[string]any) rpcResp {
@@ -172,11 +172,41 @@ func (s *Server) callMemory(ctx context.Context, id any, name string, args map[s
 			return memErr(id, fmt.Errorf("note_review action must be list|approve|reject"))
 		}
 	case "ledger_update":
-		text, err := s.Mem.LedgerUpdate(ctx, argStr(args, "project"), argStr(args, "text"))
+		entry, err := s.Mem.LedgerAppend(ctx, argStr(args, "project"), argStr(args, "key"), argStr(args, "text"))
 		if err != nil {
 			return memErr(id, err)
 		}
-		return memResult(id, s.Budget, fmt.Sprintf("updated ledger for %s (%d chars)", argStr(args, "project"), len(text)))
+		return memResult(id, s.Budget, fmt.Sprintf("appended ledger %s/%s (seq %d)", argStr(args, "project"), entry.Key, entry.Seq))
+	case "ledger_get":
+		fold, err := s.Mem.LedgerGet(ctx, argStr(args, "project"))
+		if err != nil {
+			return memErr(id, err)
+		}
+		if len(fold) == 0 {
+			return memResult(id, s.Budget, fmt.Sprintf("ledger %s is empty (use ledger_update to start)", argStr(args, "project")))
+		}
+		var b strings.Builder
+		for _, k := range memory.LedgerKeys {
+			e, ok := fold[k]
+			if !ok {
+				continue
+			}
+			fmt.Fprintf(&b, "%s  %s  [seq %d]  %s\n", e.TS, k, e.Seq, e.Value)
+		}
+		return memResult(id, s.Budget, strings.TrimRight(b.String(), "\n"))
+	case "ledger_history":
+		entries, err := s.Mem.LedgerHistory(ctx, argStr(args, "project"))
+		if err != nil {
+			return memErr(id, err)
+		}
+		if len(entries) == 0 {
+			return memResult(id, s.Budget, fmt.Sprintf("ledger %s is empty (use ledger_update to start)", argStr(args, "project")))
+		}
+		var b strings.Builder
+		for _, e := range entries {
+			fmt.Fprintf(&b, "%d  %s  %s  %s\n", e.Seq, e.TS, e.Key, e.Value)
+		}
+		return memResult(id, s.Budget, strings.TrimRight(b.String(), "\n"))
 	default:
 		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32601, "unknown memory tool " + name}}
 	}

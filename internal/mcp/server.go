@@ -90,7 +90,7 @@ func auditProps() map[string]any {
 
 // Profile names. scout (11) is default; analysis adds demo/power tools;
 // minimal keeps the fast filter trio for <8B models; memory joins the scout
-// surface with tk's 9 in-process memory tools (20 total) and works without CBM.
+// surface with tk's 11 in-process memory tools (22 total) and works without CBM.
 const (
 	ProfileScout    = "scout"
 	ProfileAnalysis = "analysis"
@@ -129,9 +129,16 @@ var memoryTools = []toolDef{
 		"project": strProp("Restrict to this project"),
 	})},
 	{"note_review", "Notes review queue: action=list | approve|reject with id", obj([]string{"action"}, auditProps())},
-	{"ledger_update", "Replace a project's working-truth ledger (bounded full-text)", obj([]string{"project", "text"}, map[string]any{
+	{"ledger_update", "Append one immutable entry to a project's ledger (key=goal|next|done|decisions|open_questions; last write per key wins — never rewrite prior entries, value appended verbatim)", obj([]string{"project", "key", "text"}, map[string]any{
 		"project": projectProp(),
-		"text":    strProp("New ledger content (bounded full-text)"),
+		"key":     enumProp(memory.LedgerKeys, "ledger key: the fixed five (goal|next|done|decisions|open_questions)"),
+		"text":    strProp("Ledger value, appended verbatim (never truncated on write)"),
+	})},
+	{"ledger_get", "Current ledger state: latest winning value per key (each value capped to the retrieval budget)", obj([]string{"project"}, map[string]any{
+		"project": projectProp(),
+	})},
+	{"ledger_history", "Complete ledger log: every entry, chronological, uncapped (the durable-facts audit trail)", obj([]string{"project"}, map[string]any{
+		"project": projectProp(),
 	})},
 }
 
@@ -248,7 +255,7 @@ type cbmRunner interface {
 type Server struct {
 	Run    cbmRunner
 	Budget int
-	// Profile selects the tool surface: scout (11) | analysis (14) | minimal (3).
+	// Profile selects the tool surface: scout (11) | analysis (14) | minimal (3) | memory (22).
 	Profile string
 	// ShardsFor maps project -> zoekt shard dir.
 	ShardsFor func(project string) string
@@ -478,7 +485,9 @@ func (s *Server) logCall(method, tool string, args map[string]any, t0 time.Time,
 	}
 	if resp.Error != nil {
 		rec["exit"] = 1
-		rec["error"] = trace.Redact(resp.Error.Message)
+		err := trace.Redact(resp.Error.Message)
+		rec["error"] = err
+		rec["output"] = map[string]any{"chars": len(err), "text": err}
 	} else if text := resultText(resp.Result); text != "" {
 		text = trace.Redact(text)
 		rec["output"] = map[string]any{"chars": len(text), "text": text}

@@ -70,11 +70,19 @@ func (s *Store) NoteReject(ctx context.Context, id string) error {
 	return s.Notes.Reject(ctx, id)
 }
 
-func (s *Store) LedgerGet(ctx context.Context, project string) (string, error) {
-	return s.Ledger.Get(project)
+// LedgerGet folds the latest entry per key with values capped to the
+// retrieval budget (LedgerBudget). Never truncates the stored log.
+func (s *Store) LedgerGet(ctx context.Context, project string) (map[string]LedgerEntry, error) {
+	return s.Ledger.Get(project, s.LedgerBudget)
 }
 
-// LedgerUpdate replaces a project ledger, bounded by the configured budget.
-func (s *Store) LedgerUpdate(ctx context.Context, project, text string) (string, error) {
-	return s.Ledger.Update(project, text, s.LedgerBudget)
+// LedgerHistory returns the complete, uncapped append log for a project.
+func (s *Store) LedgerHistory(ctx context.Context, project string) ([]LedgerEntry, error) {
+	return s.Ledger.History(project)
+}
+
+// LedgerAppend adds one immutable ledger entry verbatim (no budget applied on
+// the write path).
+func (s *Store) LedgerAppend(ctx context.Context, project, key, value string) (LedgerEntry, error) {
+	return s.Ledger.Append(project, key, value)
 }

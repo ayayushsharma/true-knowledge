@@ -3,7 +3,7 @@ title: Cross-repo fleet parked indefinitely — trigger-based revisit, not a pro
 status: authoritative
 date: 2026-09-25
 supersedes: [docs/ROADMAP.md MVP2 cross-repo line + done-when (fleet in MVP2 scope), docs/REMAINING-WORK.md §1 (fleet as P1, "needs a fleet ADR")]
-superseded-by: null
+superseded-by: docs/DECISIONS/2026-09-25-fleet-cohort-queries-parked-indefinitely.md (fleet-cohort queries slice, previously "not parked", now parked)
 ---
 
 > Authority: this file overrides older docs on conflict. See docs/00-AUTHORITY.md.

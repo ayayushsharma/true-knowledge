@@ -47,36 +47,41 @@ source)**, each after fresh bases, each wiping-and-rebuilding that source's
 is empty (FastAPI #678, Go Fiber #686). `get_architecture` reports
 `cross_repo_links` free (INDEXING.md:45).
 
-**Not parked (separable, open/unprioritized):** fleet-cohort **queries** —
-run the existing `find`/`grep`/`explain` across the registered cohort with
-coverage-before-absence annotation, using **no** CBM cross-repo primitive.
-Because it delegates to existing single-repo machinery (`annotateAbsence` +
-`freshness`), it is a candidate slice if fleet-wide "search the whole
-registry" value is ever wanted.
+**Fleet-cohort queries — PARKED INDEFINITELY too** per
+`docs/DECISIONS/2026-09-25-fleet-cohort-queries-parked-indefinitely.md`: the
+"search the whole registry" slice (existing single-repo
+`find`/`grep`/`explain` across the cohort, coverage-annotated, **no** CBM
+cross-repo primitive) is parked with the fleet — same trigger doctrine, no
+envelope shape designed, value scales with repo count and there is no
+consumer. Revisit alongside the fleet triggers or on concrete multi-repo
+workload/explicit cohort demand. §1 is therefore **fully parked**.
 
 ```
-today                      fleet queries (unprioritized, no CBM cross-repo)
+today                      fleet queries (PARKED INDEFINITELY — cohort ADR)
 projA graph ──┐             projA graph ──┐
 projB graph ──┼→ find X     projB graph ──┼→ find X → coverage-annotated,
 projC graph ──┘  one repo   projC graph ──┘   per-repo results across cohort
 ```
 
-## 2. Ops (P2) — trajectory, resource surfacing; delivery parked
+## 2. Ops (P2) — resource surfacing; trajectory + delivery parked
 
 ```
 state/
   logs/tk.log         per-invocation trace        (exists)
-  trajectory.ndjson   session/state-transition log (missing)
+  trajectory.ndjson   session/state-transition log (PARKED — trajectory ADR)
 status --json         freshness                    (exists)
                       index limits                (missing)
 delivery              dist/tk                     (exists)
                       brew/nix/npm + .zst cadence (PARKED — delivery ADR)
 ```
 
-- **`trajectory.ndjson`**: session-level state-transition stream
-  (register→index→query→re-index with head/fingerprint deltas), distinct from
-  tk.log's per-invocation records; deliberately OUT of the evals harness
-  (`docs/DECISIONS/2026-09-24-evals-harness.md:47`). Schema needs a small ops ADR.
+- **`trajectory.ndjson` — PARKED INDEFINITELY** per
+  `docs/DECISIONS/2026-09-25-trajectory-parked-indefinitely.md`: the
+  session/state-transition stream (register→index→query→re-index with
+  head/fingerprint deltas) is ops debt with no consumer and a flat design
+  cost — the schema direction (one JSONL record per transition, not
+  invocation; trace's safety contract) is recorded for a mechanical re-open.
+  Deliberately OUT of the evals harness (`docs/DECISIONS/2026-09-24-evals-harness.md:47`).
 - **Resource-limit surfacing**: CBM caps (`index_max_files/mb`, 512MiB,
   fail-whole-preserve-serving) exist (INDEXING.md:51); tk exposes none —
   `status --json` and search envelopes should surface caps/degradation.

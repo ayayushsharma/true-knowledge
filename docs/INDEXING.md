@@ -2,7 +2,7 @@
 title: Indexing — modes, discovery, watcher, zoekt text index
 status: authoritative
 date: 2026-09-25
-supersedes: [compatible-implementation-spec.md §7, docs/DECISIONS/2026-09-24-zoekt-staleness.md (source-search freshness contract), docs/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md (ctx cancellation)]
+supersedes: [compatible-implementation-spec.md §7, docs/DECISIONS/2026-09-24-zoekt-staleness.md (source-search freshness contract), docs/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md (ctx cancellation), docs/DECISIONS/2026-09-25-comments-pass-fixes.md (sync = both backends fresh, plain-dir skip/ignore, <config>/ignore)]
 superseded-by: null
 ---
 
@@ -58,4 +58,19 @@ Artifacts: explicit index = `Best (VACUUM INTO + zstd -9)`; watcher = `Fast (zst
 
 ## tk freshness contract
 
-`tk sync` = `git HEAD` (or mtime fingerprint for plain dirs) + `check_index_coverage` → clean = no-op, dirty = let watcher do it. Check coverage before negative claims. Query responses carry `head/current/fresh`; stale cursors deferred (no tk-issued cursors exist yet).
+`tk sync` = **both backends fresh**: git repos match `HEAD == head && zoekt_head == HEAD`, plain dirs match fingerprint **and** `zoekt_head == "files"` — a recorded state can never be reported clean while `source-search` would serve a stale index (projects indexed before zoekt existed get a text backfill on next sync). Clean = no-op, dirty = let watcher do it. Check coverage before negative claims. Query responses carry `head/current/fresh`; stale cursors deferred (no tk-issued cursors exist yet).
+
+## Plain-dir filters (non-git zoekt trees)
+
+`IndexDir` walks the whole tree minus a always-skipped core set of dependency/
+generated dirs: `.git/.hg/.svn` (VCS), `node_modules`, `vendor`, `venv`/
+`.venv`, `__pycache__`, `.tox`, `.pytest_cache`, `.mypy_cache`,
+`.ruff_cache`, `.next`, `.nuxt`. These are unconditional. Lockfiles are NOT
+skipped — small, exact-pinned, useful search targets. On top of the core set,
+the optional global file `<config>/ignore` (`paths.IgnoreFile()`) applies a
+gitignore-lite pattern list to plain-dir indexes only: `#` comments, leading
+`/` root-anchors to a project root, trailing `/` targets directory subtrees,
+any other line matches a component at any depth (e.g. `secrets/`, `*.min.js`
+— no glob magic, one component/prefix per line). Git-repo indexes keep using
+`.gitignore` via zoekt's git indexer and ignore this file entirely (zoekt-pin
+limitation, documented in the comments-pass ADR).

@@ -96,7 +96,7 @@ func TestIndexDirPlain(t *testing.T) {
 		t.Fatal(err)
 	}
 	shards := t.TempDir()
-	if err := zoekttext.IndexDir(context.Background(), shards, dir, "plain"); err != nil {
+	if err := zoekttext.IndexDir(context.Background(), shards, dir, "plain", nil); err != nil {
 		t.Fatal(err)
 	}
 	matches, err := zoekttext.Search(context.Background(), shards, "hello", "", 20)
@@ -105,6 +105,53 @@ func TestIndexDirPlain(t *testing.T) {
 	}
 	if len(matches) == 0 {
 		t.Fatal("expected a match in plain dir index")
+	}
+}
+
+// TestIndexDirSkipsCoreAndIgnore verifies the plain-dir filter: core
+// dependency dirs always go, global ignore rules prune both files and whole
+// subtrees, and lockfiles stay indexable.
+func TestIndexDirSkipsCoreAndIgnore(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod":                  "module needsLockfileTesting\n\ngo 1.26\n",
+		"sub/used.txt":            "keepme\n",
+		"vendor/dep.go":           "dropme\n",
+		"sub/__pycache__/gen.pyc": "dropme\n",
+	}
+	for name, content := range files {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// No ignore file: core skips only (vendor + __pycache__), used.txt stays.
+	shards := t.TempDir()
+	if err := zoekttext.IndexDir(context.Background(), shards, dir, "plain", nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, term := range []string{"keepme", "needsLockfileTesting"} {
+		if m, _ := zoekttext.Search(context.Background(), shards, term, "", 20); len(m) == 0 {
+			t.Fatalf("term %q must be indexed without ignores", term)
+		}
+	}
+	if m, _ := zoekttext.Search(context.Background(), shards, "dropme", "", 20); len(m) != 0 {
+		t.Fatalf("core dependency dirs must be skipped, got %d hits", len(m))
+	}
+
+	// Ignore "used.txt": the file is pruned, others unaffected.
+	shards2 := t.TempDir()
+	if err := zoekttext.IndexDir(context.Background(), shards2, dir, "plain", []string{"used.txt"}); err != nil {
+		t.Fatal(err)
+	}
+	if m, _ := zoekttext.Search(context.Background(), shards2, "keepme", "", 20); len(m) != 0 {
+		t.Fatalf("ignored file must be pruned, got %d hits", len(m))
+	}
+	if m, _ := zoekttext.Search(context.Background(), shards2, "needsLockfileTesting", "", 20); len(m) == 0 {
+		t.Fatal("go.mod must stay after ignore (lockfiles are useful)")
 	}
 }
 
@@ -132,7 +179,7 @@ func TestCancellationHonored(t *testing.T) {
 	if _, err := zoekttext.IndexRepo(ctx, shards, repo, "demo"); err == nil {
 		t.Fatal("IndexRepo must refuse a cancelled ctx")
 	}
-	if err := zoekttext.IndexDir(ctx, shards, t.TempDir(), "plain"); err == nil {
+	if err := zoekttext.IndexDir(ctx, shards, t.TempDir(), "plain", nil); err == nil {
 		t.Fatal("IndexDir must refuse a cancelled ctx")
 	}
 	if _, err := zoekttext.Search(ctx, shards, "hello", "", 20); err == nil {

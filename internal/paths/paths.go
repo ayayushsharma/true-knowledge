@@ -98,6 +98,13 @@ func (p Paths) ConfigFile() string   { return filepath.Join(p.Config, "config.js
 func (p Paths) RegistryFile() string { return filepath.Join(p.Data, "tk.json") }
 func (p Paths) LogFile() string      { return filepath.Join(p.State, "logs", "tk.log") }
 
+// IgnoreFile is the global plain-dir index ignore list (<config>/ignore).
+// Line-based, gitignore-lite (see zoekttext.parseIgnores): "#" comments, a
+// leading "/" pins to a project root, a trailing "/" targets directories,
+// anything else matches a component at any depth. Missing file = no ignores.
+// Git-repo indexes keep using .gitignore — this file only shapes non-git trees.
+func (p Paths) IgnoreFile() string { return filepath.Join(p.Config, "ignore") }
+
 // ZoektDir is the root for per-project trigram shards: <cache>/zoekt/<project>/.
 func (p Paths) ZoektDir() string { return filepath.Join(p.Cache, "zoekt") }
 

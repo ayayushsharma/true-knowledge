@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -38,7 +39,7 @@ func ensureZoektIndex(ctx context.Context, c *Ctx, name, repoPath string) (strin
 		return head, nil
 	}
 	t0 := time.Now()
-	err := zoekttext.IndexDir(ctx, shards, repoPath, name)
+	err := zoekttext.IndexDir(ctx, shards, repoPath, name, loadIgnoreLines(c))
 	ev := trace.Event{Backend: "zoekt", Op: "index", Ms: time.Since(t0).Milliseconds(), OK: err == nil, Detail: "plain-dir"}
 	if err != nil {
 		ev.Error = firstLine(err.Error())
@@ -48,6 +49,26 @@ func ensureZoektIndex(ctx context.Context, c *Ctx, name, repoPath string) (strin
 		return "", fmt.Errorf("zoekt index %q: %w", name, err)
 	}
 	return "files", nil
+}
+
+// loadIgnoreLines reads the global plain-dir ignore file, if any. Parsing
+// (comments, anchors, dir-only) happens inside zoekttext; here we just ship
+// the non-comment, non-blank lines (parseIgnores strips them again so the
+// file's #docstring lines can never leak into matching).
+func loadIgnoreLines(c *Ctx) []string {
+	raw, err := os.ReadFile(c.Paths.IgnoreFile())
+	if err != nil {
+		return nil
+	}
+	var lines []string
+	for _, ln := range strings.Split(string(raw), "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" || strings.HasPrefix(ln, "#") {
+			continue
+		}
+		lines = append(lines, ln)
+	}
+	return lines
 }
 
 // ensureZoektAndTouch refreshes a project's trigram shards in-process and

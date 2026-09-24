@@ -77,17 +77,93 @@ func IndexRepo(ctx context.Context, shardsDir, repoPath, name string) (bool, err
 	return updated, nil
 }
 
+// coreSkipDirs are dependency/generated folders that never yield useful
+// search results and are skipped from plain-dir indexes regardless of the
+// global ignore file (VCS mostly matters for fingerprint noise, the rest are
+// vendored/build trees that dominate trigram frequency). Lockfiles are NOT
+// here on purpose: they are small, meaningful (exact-pinned deps), and cheap
+// to index. Git-repo indexes are exempt — .gitignore and zoekt's own
+// goembedding handle those via the git indexer.
+var coreSkipDirs = map[string]bool{
+	".git": true, ".hg": true, ".svn": true,
+	"node_modules": true, "vendor": true,
+	"venv": true, ".venv": true, "__pycache__": true, ".tox": true,
+	".pytest_cache": true, ".mypy_cache": true, ".ruff_cache": true,
+	".next": true, ".nuxt": true,
+}
+
+// ignoreRule is one line of the global ignore file (<config>/ignore). The
+// format is deliberately simple, gitignore-lite: no glob magic.
+//   - "#" comments and blank lines are skipped
+//   - a leading "/" anchors to the tree root; otherwise a component match at
+//     any depth
+//   - a trailing "/" matches only directories (the whole subtree)
+//   - any other line matches a file or directory by component name or prefix
+func (r ignoreRule) match(rel string, isDir bool) bool {
+	if r.dirOnly && !isDir {
+		return false
+	}
+	if rel == r.pat || strings.HasPrefix(rel, r.pat+"/") {
+		return true
+	}
+	if !r.rootAnchored && strings.Contains("/"+rel+"/", "/"+r.pat+"/") {
+		return true
+	}
+	return false
+}
+
+type ignoreRule struct {
+	pat          string
+	rootAnchored bool
+	dirOnly      bool
+}
+
+func parseIgnores(lines []string) []ignoreRule {
+	var rules []ignoreRule
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		r := ignoreRule{pat: line}
+		if strings.HasPrefix(r.pat, "/") {
+			r.rootAnchored = true
+			r.pat = strings.TrimPrefix(r.pat, "/")
+		}
+		if strings.HasSuffix(r.pat, "/") {
+			r.dirOnly = true
+			r.pat = strings.TrimSuffix(r.pat, "/")
+		}
+		if r.pat == "" {
+			continue
+		}
+		rules = append(rules, r)
+	}
+	return rules
+}
+
+func matchIgnores(rules []ignoreRule, rel string, isDir bool) bool {
+	for _, r := range rules {
+		if r.match(rel, isDir) {
+			return true
+		}
+	}
+	return false
+}
+
 // IndexDir indexes a plain directory (non-git) into shardsDir.
 // No SHA to compare against, so this always rebuilds — fast at the sizes
 // tk allows for non-git trees. ctx is checked between files, so a cancelled
-// caller stops the walk promptly.
-func IndexDir(ctx context.Context, shardsDir, dir, name string) error {
+// caller stops the walk promptly. Core dependency dirs are always skipped;
+// ignores are the raw lines of the global ignore file (empty = none).
+func IndexDir(ctx context.Context, shardsDir, dir, name string, ignores []string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(shardsDir, 0o700); err != nil {
 		return err
 	}
+	rules := parseIgnores(ignores)
 	buildOpts := index.Options{
 		IndexDir: shardsDir,
 		RepositoryDescription: zoekt.Repository{
@@ -104,14 +180,27 @@ func IndexDir(ctx context.Context, shardsDir, dir, name string) error {
 	}
 	defer builder.Finish() // nolint:errcheck
 	err = filepath.Walk(dir, func(path string, fi os.FileInfo, err error) error {
-		if err != nil || fi.IsDir() {
+		if err != nil {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return nil
+		}
+		if fi.IsDir() {
+			base := fi.Name()
+			if rel == "." {
+				return nil
+			}
+			if coreSkipDirs[base] || matchIgnores(rules, rel, true) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if cerr := ctx.Err(); cerr != nil {
 			return cerr
 		}
-		rel, err := filepath.Rel(dir, path)
-		if err != nil {
+		if matchIgnores(rules, rel, false) {
 			return nil
 		}
 		content, err := os.ReadFile(path)

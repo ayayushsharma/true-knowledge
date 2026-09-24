@@ -4,6 +4,12 @@
 // ADR). get() folds the latest entry per key (last write wins); history()
 // returns the complete uncapped log; prune() is the human-only deletion
 // surface. Files are 0600 like every other tk-owned artifact.
+//
+// Concurrency-safe by construction, not by locking: appends are O_APPEND
+// single-writer lines and interleaving is a valid chronology; writes fold
+// latest-entry-wins under any order; reads tolerate a torn trailing line
+// (dropped, never garbage); and today only the single-threaded MCP dispatch
+// surface writes. No locks, no sqlite, no fsync-on-append are required.
 package memory
 
 import (

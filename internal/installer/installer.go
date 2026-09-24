@@ -9,7 +9,6 @@ package installer
 import (
 	"archive/tar"
 	"archive/zip"
-	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -31,6 +30,10 @@ import (
 var httpClient = &http.Client{Timeout: 5 * time.Minute}
 
 var semverRe = regexp.MustCompile(`\d+\.\d+\.\d+`)
+
+// maxArchiveBytes caps a downloaded archive. Kept for checksum-manifest
+// fetches and as the streaming download bound below.
+const maxArchiveBytes = 512 << 20
 
 // Status describes one backend's install state.
 type Status struct {
@@ -141,6 +144,9 @@ func Inspect(ctx context.Context, cacheDir string, b backends.Backend, pin, goos
 
 // Install downloads, checksum-verifies, and atomically installs the backend.
 // It is idempotent: byte-identical re-runs rewrite the same file.
+// The archive is streamed to a temp file while its sha256 is computed inline
+// (never buffered whole in memory — backend archives are hundreds of MB), then
+// verified against the manifest before the binary entry is streamed out.
 func Install(ctx context.Context, cacheDir string, b backends.Backend, pin, goos, goarch string) (Plan, error) {
 	plan, err := ResolvePlan(cacheDir, b, pin, goos, goarch)
 	if err != nil {
@@ -154,22 +160,23 @@ func Install(ctx context.Context, cacheDir string, b backends.Backend, pin, goos
 	if err != nil {
 		return Plan{}, fmt.Errorf("checksum manifest: %w", err)
 	}
-	blob, err := fetch(ctx, plan.ArchiveURL)
-	if err != nil {
-		return Plan{}, fmt.Errorf("fetch %s: %w", plan.ArchiveURL, err)
-	}
-	sum := sha256.Sum256(blob)
-	if hex.EncodeToString(sum[:]) != want {
-		return Plan{}, fmt.Errorf("checksum mismatch for %s (manifest %s…)", plan.Archive, short(want))
-	}
 	if err := os.MkdirAll(binDir(cacheDir), 0o700); err != nil {
 		return Plan{}, err
 	}
+	blob := filepath.Join(binDir(cacheDir), "tk-dl-"+plan.Archive+".tmp")
+	defer os.Remove(blob) // best-effort: leftover temp is overwritten next run
+	got, err := download(ctx, plan.ArchiveURL, blob)
+	if err != nil {
+		return Plan{}, fmt.Errorf("fetch %s: %w", plan.ArchiveURL, err)
+	}
+	if hex.EncodeToString(got[:]) != want {
+		return Plan{}, fmt.Errorf("checksum mismatch for %s (manifest %s…)", plan.Archive, short(want))
+	}
 	tmp := plan.Dest + ".tmp"
 	// Stream the entry straight to disk: backend binaries can exceed
-	// hundreds of MB (CBM embeds grammars + embeddings), so never cap
-	// the entry size and never buffer the whole binary in memory.
-	if err := extractBinaryToFile(blob, plan.Archive, b.BinaryName(goos), tmp); err != nil {
+	// hundreds of MB (CBM embeds grammars + embeddings), so never
+	// buffer the whole binary in memory.
+	if err := extractBinary(blob, plan.Archive, b.BinaryName(goos), tmp); err != nil {
 		_ = os.Remove(tmp)
 		return Plan{}, err
 	}
@@ -202,7 +209,44 @@ func fetch(ctx context.Context, url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %s", resp.Status)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 512<<20)) // 512MiB cap
+	return io.ReadAll(io.LimitReader(resp.Body, 512<<20)) // checksum manifests are tiny anyway; same guard
+}
+
+// download streams a URL body to path while hashing it, bounded to the same
+// maxArchiveBytes whole-archive cap as the old in-memory fetch. Memory stays
+// flat regardless of archive size.
+func download(ctx context.Context, url, path string) ([sha256.Size]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	req.Header.Set("User-Agent", "tk-installer")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return [sha256.Size]byte{}, fmt.Errorf("HTTP %s", resp.Status)
+	}
+	out, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	hasher := sha256.New()
+	n, err := io.Copy(io.MultiWriter(out, hasher), io.LimitReader(resp.Body, maxArchiveBytes+1))
+	if cerr := out.Close(); err == nil && cerr != nil {
+		err = cerr
+	}
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	if n > maxArchiveBytes {
+		return [sha256.Size]byte{}, fmt.Errorf("archive exceeds %d MiB cap", maxArchiveBytes>>20)
+	}
+	var sum [sha256.Size]byte
+	copy(sum[:], hasher.Sum(nil))
+	return sum, nil
 }
 
 // checksumFor finds "<sha256>  <filename>" (or *binary) lines.
@@ -224,32 +268,46 @@ func checksumFor(manifest []byte, archive string) (string, error) {
 	return "", fmt.Errorf("%s not listed in manifest", archive)
 }
 
-// extractBinaryToFile pulls the single named executable out of .tar.gz or
-// .zip and streams it to dest (no size cap, no full buffering — backend
-// binaries can be hundreds of MB). Only entry content is used — archive
-// paths never touch disk (no traversal).
-func extractBinaryToFile(blob []byte, archive, binary, dest string) error {
+// extractBinary pulls the single named executable out of a .tar.gz or .zip on
+// disk and streams it to dest (no size cap, no full buffering — backend
+// binaries can be hundreds of MB). Only entry content is used — archive paths
+// never touch disk (no traversal).
+func extractBinary(blob, archive, binary, dest string) error {
 	if strings.HasSuffix(archive, ".zip") {
 		return extractZipToFile(blob, binary, archive, dest)
 	}
 	return extractTarGzToFile(blob, binary, archive, dest)
 }
 
-func extractZipToFile(blob []byte, binary, archive, dest string) error {
-	zr, err := zip.NewReader(bytes.NewReader(blob), int64(len(blob)))
+func extractZipToFile(blob, binary, archive, dest string) error {
+	f, err := os.Open(blob)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	zr, err := zip.NewReader(f, fi.Size())
 	if err != nil {
 		return fmt.Errorf("open zip: %w", err)
 	}
-	for _, f := range zr.File {
-		if base(f.Name) == binary {
-			return streamEntry(f.Open, dest)
+	for _, zf := range zr.File {
+		if base(zf.Name) == binary {
+			return streamEntry(zf.Open, dest)
 		}
 	}
 	return fmt.Errorf("%s not found in %s", binary, archive)
 }
 
-func extractTarGzToFile(blob []byte, binary, archive, dest string) error {
-	gr, err := gzip.NewReader(bytes.NewReader(blob))
+func extractTarGzToFile(blob, binary, archive, dest string) error {
+	f, err := os.Open(blob)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gr, err := gzip.NewReader(f)
 	if err != nil {
 		return fmt.Errorf("open tar.gz: %w", err)
 	}

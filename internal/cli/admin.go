@@ -164,10 +164,10 @@ func getKey(c config.Config, key string) (string, error) {
 	case "ledger.enabled":
 		return strconv.FormatBool(c.Ledger.Enabled), nil
 	case "mcp.profile":
-		if c.MCPProfile == "" {
+		if c.MCP.Profile == "" {
 			return "scout (unset)", nil
 		}
-		return c.MCPProfile, nil
+		return c.MCP.Profile, nil
 	case "ui.picker":
 		return strconv.FormatBool(c.UI.Picker), nil
 	}
@@ -244,7 +244,7 @@ func setKey(c *config.Config, key, val string) error {
 		if val != "" && !slices.Contains(config.ValidProfiles(), val) {
 			return fmt.Errorf("want %s or empty to unset, got %q", strings.Join(config.ValidProfiles(), "|"), val)
 		}
-		c.MCPProfile = val
+		c.MCP.Profile = val
 	case "ui.picker":
 		b, err := strconv.ParseBool(val)
 		if err != nil {

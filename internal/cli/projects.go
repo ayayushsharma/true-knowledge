@@ -191,13 +191,7 @@ func cmdSync(g *Globals) *cobra.Command {
 				if !ok {
 					return fail("unknown project %q", n)
 				}
-				if head := gitx.Head(p.Path); head != "" {
-					if head == p.Head {
-						clean++
-						continue
-					}
-				} else if fp, ferr := store.Fingerprint(p.Path); ferr == nil && fp == p.Fingerprint && p.Fingerprint != "" {
-					// Non-git tree unchanged since index.
+				if syncFresh(p) {
 					clean++
 					continue
 				}
@@ -227,6 +221,22 @@ func cmdSync(g *Globals) *cobra.Command {
 		},
 	}
 	return c
+}
+
+// syncFresh reports whether BOTH backends already cover the live tree, making
+// `tk sync` a genuine no-op. Git repos: recorded HEAD matches AND the zoekt
+// shards cover that HEAD. Plain dirs: fingerprint matches AND the zoekt shards
+// were built ("files"). A missing/older zoekt head marks the project dirty so
+// the next sync also backfills the text index — sync can never claim "clean"
+// while source-search would serve a stale index.
+func syncFresh(p store.Project) bool {
+	if head := gitx.Head(p.Path); head != "" {
+		return head == p.Head && p.ZoektHead == head
+	}
+	if fp, ferr := store.Fingerprint(p.Path); ferr == nil && fp == p.Fingerprint && p.Fingerprint != "" {
+		return p.ZoektHead == "files"
+	}
+	return false
 }
 
 func cmdStatus(g *Globals) *cobra.Command {

@@ -235,7 +235,7 @@ func TestSourceSearchRoundTrip(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "w.go"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := zoekttext.IndexDir(context.Background(), shards, dir, "p"); err != nil {
+	if err := zoekttext.IndexDir(context.Background(), shards, dir, "p", nil); err != nil {
 		t.Fatal(err)
 	}
 	s := &Server{Budget: 6000, ShardsFor: func(string) string { return shards }}
@@ -438,7 +438,7 @@ func TestSourceSearchHooks(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "w.go"), []byte("func Widget() {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := zoekttext.IndexDir(context.Background(), shards, dir, "p"); err != nil {
+	if err := zoekttext.IndexDir(context.Background(), shards, dir, "p", nil); err != nil {
 		t.Fatal(err)
 	}
 	// Dirty the worktree after indexing: shards hold the stale line.
@@ -473,7 +473,7 @@ func TestSourceSearchRefreshFailOpen(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "w.go"), []byte("func Alpha() {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := zoekttext.IndexDir(context.Background(), shards, dir, "p"); err != nil {
+	if err := zoekttext.IndexDir(context.Background(), shards, dir, "p", nil); err != nil {
 		t.Fatal(err)
 	}
 	s := &Server{

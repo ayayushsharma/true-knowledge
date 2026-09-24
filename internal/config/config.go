@@ -47,6 +47,14 @@ type UI struct {
 	Picker bool `json:"picker"`
 }
 
+// MCP holds the tk MCP server's machine defaults. Profile is the tool surface
+// used when neither the --tool-profile flag nor TK_MCP_PROFILE is set; empty
+// = scout. Grouped under a nested object so the dotted key mcp.profile maps
+// to a real JSON "mcp" object, like budgets/embedding/ledger/ui.
+type MCP struct {
+	Profile string `json:"profile,omitempty"`
+}
+
 // Config is the tk source of truth stored in <config>/config.json.
 // External-binary pins live here (cbm_version_pin). Same-language
 // dependencies (zoekt) pin in go.mod instead — never in this file.
@@ -64,9 +72,9 @@ type Config struct {
 	Ledger         Ledger    `json:"ledger"`
 	// UI holds human-terminal affordances (see mvp4-human-ux ADR).
 	UI UI `json:"ui"`
-	// MCPProfile is the machine default MCP tool profile when neither the
-	// --tool-profile flag nor TK_MCP_PROFILE is set. Empty = scout.
-	MCPProfile string `json:"mcp_profile,omitempty"`
+	// MCP holds the tk MCP server machine defaults (mcp.profile). See the
+	// dynamic-mcp-profile-env ADR: profile resolution is flag > env > config.
+	MCP MCP `json:"mcp"`
 }
 
 // Defaults returns the Linux-first defaults.
@@ -93,6 +101,57 @@ func ValidModes() []string { return []string{"fast", "moderate", "full"} }
 
 // ValidProfiles for the MCP tool surface (also used by completion).
 func ValidProfiles() []string { return []string{"scout", "analysis", "minimal", "memory"} }
+
+// configDoc decodes the on-disk shape. The legacy flat "mcp_profile" scalar
+// (pre-comments-pass) is folded into the nested "mcp" object so existing
+// configs keep loading; Save rewrites the canonical nested shape.
+type configDoc struct {
+	Version        int       `json:"version"`
+	CBMBinary      string    `json:"cbm_binary,omitempty"`
+	CBMVersionPin  string    `json:"cbm_version_pin,omitempty"`
+	IndexMode      string    `json:"index_mode"`
+	AutoIndex      bool      `json:"auto_index"`
+	AutoWatch      bool      `json:"auto_watch"`
+	WatcherEnabled bool      `json:"watcher_enabled"`
+	AllowedRoot    string    `json:"allowed_root,omitempty"`
+	Budgets        Budgets   `json:"budgets"`
+	Embedding      Embedding `json:"embedding"`
+	Ledger         Ledger    `json:"ledger"`
+	UI             UI        `json:"ui"`
+	MCP            MCP       `json:"mcp"`
+	LegacyProfile  string    `json:"mcp_profile,omitempty"`
+}
+
+// UnmarshalJSON accepts both the nested "mcp" object and the legacy flat
+// "mcp_profile" scalar, folding the latter into MCP.Profile (a present legacy
+// field wins only when the nested form is empty). Unknown fields still error.
+func (c *Config) UnmarshalJSON(raw []byte) error {
+	var doc configDoc
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&doc); err != nil {
+		return err
+	}
+	*c = Config{
+		Version:        doc.Version,
+		CBMBinary:      doc.CBMBinary,
+		CBMVersionPin:  doc.CBMVersionPin,
+		IndexMode:      doc.IndexMode,
+		AutoIndex:      doc.AutoIndex,
+		AutoWatch:      doc.AutoWatch,
+		WatcherEnabled: doc.WatcherEnabled,
+		AllowedRoot:    doc.AllowedRoot,
+		Budgets:        doc.Budgets,
+		Embedding:      doc.Embedding,
+		Ledger:         doc.Ledger,
+		UI:             doc.UI,
+		MCP:            doc.MCP,
+	}
+	if c.MCP.Profile == "" && doc.LegacyProfile != "" {
+		c.MCP.Profile = doc.LegacyProfile
+	}
+	return c.Validate()
+}
 
 // Load reads path or returns Defaults when missing.
 func Load(path string) (Config, error) {
@@ -142,8 +201,8 @@ func (c Config) Validate() error {
 			return fmt.Errorf("embedding.timeout_ms must be positive")
 		}
 	}
-	if c.MCPProfile != "" && !slices.Contains(ValidProfiles(), c.MCPProfile) {
-		return fmt.Errorf("invalid mcp.profile %q (want %s)", c.MCPProfile, strings.Join(ValidProfiles(), "|"))
+	if c.MCP.Profile != "" && !slices.Contains(ValidProfiles(), c.MCP.Profile) {
+		return fmt.Errorf("invalid mcp.profile %q (want %s)", c.MCP.Profile, strings.Join(ValidProfiles(), "|"))
 	}
 	return nil
 }
@@ -220,7 +279,7 @@ func SetKey(cfg *Config, key, value string) error {
 		if p != "" && !slices.Contains(ValidProfiles(), p) {
 			return fmt.Errorf("invalid mcp.profile %q (want %s)", p, strings.Join(ValidProfiles(), "|"))
 		}
-		cfg.MCPProfile = p
+		cfg.MCP.Profile = p
 	case "ui.picker":
 		return setBool(&cfg.UI.Picker, value)
 	default:

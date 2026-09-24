@@ -22,7 +22,7 @@ func cmdMCP(g *Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			profile, err := resolveProfile(cmd.Flags().Changed("tool-profile"), profile, os.Getenv("TK_MCP_PROFILE"), ctx.Cfg.MCPProfile)
+			profile, err := resolveProfile(cmd.Flags().Changed("tool-profile"), profile, os.Getenv("TK_MCP_PROFILE"), ctx.Cfg.MCP.Profile)
 			if err != nil {
 				return err
 			}
@@ -64,7 +64,7 @@ func cmdMCP(g *Globals) *cobra.Command {
 			if err == nil {
 				s.Mem = store
 			}
-			_ = s.Serve(context.Background())
+			_ = s.Serve(cmd.Context())
 			return nil
 		},
 	}

@@ -111,7 +111,7 @@ if "$TK_BIN" mem recall deadtoken --project demo | grep -q 'E2ETestToken'; then
 else
   pass=$((pass+1)); printf 'ok   mem-rejected-not-stored\n'
 fi
-if command -v stat >/dev/null 2>&1 && [ "$(stat -c '%a' "$MEM/facts.db" 2>/dev/null)" = "600" ]; then
+if python3 -c 'import os,sys; print(int(oct(os.stat(sys.argv[1]).st_mode)[-3:]))' "$MEM/facts.db" 2>/dev/null | grep -q '^600$'; then
   pass=$((pass+1)); printf 'ok   mem-facts-db-0600\n'
 else
   fail=$((fail+1)); printf 'FAIL mem-facts-db-0600\n'
@@ -137,7 +137,12 @@ else
   pass=$((pass+1)); printf 'ok   note-rejected-not-stored\n'
 fi
 check note-reindex 0 $TK_BIN note reindex
-if command -v stat >/dev/null 2>&1 && [ "$(stat -c '%a' "$TK_HOME"/data/notes/demo/*.md 2>/dev/null | head -1)" = "600" ]; then
+md=$(python3 -c 'import os,sys
+p = sys.argv[1]
+import glob
+fs = sorted(glob.glob(p))
+print(int(oct(os.stat(fs[0]).st_mode)[-3:]) if fs else "", end="")' "$TK_HOME"/data/notes/demo/*.md 2>/dev/null)
+if [ "$md" = "600" ]; then
   pass=$((pass+1)); printf 'ok   note-md-0600\n'
 else
   fail=$((fail+1)); printf 'FAIL note-md-0600\n'

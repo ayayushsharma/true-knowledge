@@ -2,7 +2,7 @@
 title: Paths and config — Linux-style everywhere
 status: authoritative
 date: 2026-09-25
-supersedes: [compatible-implementation-spec.md §6, docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (memory paths), docs/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md (MCP profile env), docs/DECISIONS/2026-09-24-mvp4-human-ux-picker-manpages.md (ui.picker config key), docs/DECISIONS/2026-09-25-ledger-append-only-history-prune.md (ledger storage + ledger_chars semantics)]
+supersedes: [compatible-implementation-spec.md §6, docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (memory paths), docs/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md (MCP profile env), docs/DECISIONS/2026-09-24-mvp4-human-ux-picker-manpages.md (ui.picker config key), docs/DECISIONS/2026-09-25-ledger-append-only-history-prune.md (ledger storage + ledger_chars semantics), docs/DECISIONS/2026-09-25-comments-pass-fixes.md (nested mcp{} config shape, <config>/ignore file)]
 superseded-by: null
 ---
 
@@ -10,7 +10,7 @@ superseded-by: null
 
 ## Config keys (dotted, `tk config set/list`)
 
-`index_mode`, `auto_index`, `auto_watch`, `watcher_enabled`, `allowed_root`, `cbm_binary`, `cbm_version_pin`, `budgets.default_chars|architecture_chars|notes_toc_chars|ledger_chars` (`ledger_chars` = retrieval-only cap on `ledger get`, never applied on write), `embedding.enabled|endpoint|model|timeout_ms`, `ledger.enabled`, `mcp.profile`, `ui.picker` (fuzzy project picker on multi-project + TTY, default true; see human-UX ADR). Unknown keys error; `set` validates at write time (enabling embeddings requires an endpoint + model; `mcp.profile` must be one of `scout|analysis|minimal|memory` or empty).
+`index_mode`, `auto_index`, `auto_watch`, `watcher_enabled`, `allowed_root`, `cbm_binary`, `cbm_version_pin`, `budgets.default_chars|architecture_chars|notes_toc_chars|ledger_chars` (`ledger_chars` = retrieval-only cap on `ledger get`, never applied on write), `embedding.enabled|endpoint|model|timeout_ms`, `ledger.enabled`, `mcp.profile`, `ui.picker` (fuzzy project picker on multi-project + TTY, default true; see human-UX ADR). `mcp.profile` is stored under a nested JSON `mcp` object (like `budgets`/`embedding`/`ledger`/`ui`); the legacy flat `mcp_profile` key still loads and migrates to nested on the next `Save`. Unknown keys error; `set` validates at write time (enabling embeddings requires an endpoint + model; `mcp.profile` must be one of `scout|analysis|minimal|memory` or empty).
 
 ## Runtime env vars
 
@@ -21,11 +21,13 @@ superseded-by: null
 Single resolver. No `os.UserConfigDir` branches. No `~/Library/*`, no `%AppData%`, no `~/.tk` writes on fresh installs.
 
 ```text
-~/.config/true-knowledge/       config.json (tk source of truth)
+~/.config/true-knowledge/       config.json (tk source of truth) + ignore (per-line plain-dir index filter, gitignore-lite)
 ~/.local/share/true-knowledge/  tk.json (name→path, heads, fingerprints), mem/ (facts.db), notes/ (<project>/*.md source-of-truth + index.db), ledger/ (<project>.jsonl append-only)
 ~/.cache/true-knowledge/        == CBM_CACHE_DIR (_config.db, indexes) + zoekt/ shards
 ~/.local/state/true-knowledge/  logs/tk.log (unified JSONL trace), rendezvous/ (CBM_RUNTIME_DIR)
 ```
+
+`<config>/ignore` (optional) shapes plain-dir zoekt indexes: `#` comments, a leading `/` anchors to a project root, a trailing `/` targets directory subtrees, any other line matches a component at any depth. Core dependency dirs are always skipped regardless (see INDEXING.md). Missing file = no custom filters. Git-repo indexes keep using `.gitignore` (zoekt git indexer, not this file).
 
 tk-owned memory trees (all 0600 files, dirs 0700, CBM never touches them):
 

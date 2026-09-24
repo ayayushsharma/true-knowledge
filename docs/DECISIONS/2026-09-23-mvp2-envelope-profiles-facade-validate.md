@@ -3,7 +3,7 @@ title: MVP2 non-fleet scope — envelope, profiles, facade, validate, coverage
 status: authoritative
 date: 2026-09-23
 supersedes: []
-superseded-by: null
+superseded-by: docs/DECISIONS/2026-09-25-cross-repo-contract-verified.md (cross-repo framing: per-source `cross-repo-intelligence` pass, not a one-call fleet link)
 ---
 
 # ADR — MVP2 without fleet (envelope-first wrapper, profiles, facade, validate)

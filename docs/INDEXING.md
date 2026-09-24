@@ -1,7 +1,7 @@
 ---
 title: Indexing — modes, discovery, watcher, zoekt text index
 status: authoritative
-date: 2026-09-24
+date: 2026-09-25
 supersedes: [compatible-implementation-spec.md §7, docs/DECISIONS/2026-09-24-zoekt-staleness.md (source-search freshness contract), docs/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md (ctx cancellation)]
 superseded-by: null
 ---
@@ -42,7 +42,7 @@ apply.
 | `fast` | filtered (skips `docs/examples/testdata`, archives/media/lockfiles/`.min.js`) | skipped | watcher / auto-index default |
 | `moderate` | filtered (same) | on | `tk index` default (explicit) |
 | `full` (CBM default) | all (safety skips only) | on | `tk index --full` only, CI nightly |
-| `cross-repo-intelligence` | no extraction | — | second pass only, after fresh bases, `target_projects=["*"]` → `CROSS_*` edges |
+| `cross-repo-intelligence` | no extraction | on (protocol edges only) | per-**source** pass, after fresh bases, `target_projects=["*"]` → `CROSS_*` edges; N sources link an N-repo clique (contract ADR) |
 
 Perf anchors: avg repo `ms`, Django `~6s (49k nodes)`, kernel `full 3min / fast 1m12s`. Queries: Cypher `<1ms`, search/trace `<10ms`.
 

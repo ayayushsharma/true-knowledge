@@ -2,7 +2,7 @@
 title: Roadmap — MVP1 through MVP4
 status: authoritative
 date: 2026-09-25
-supersedes: [compatible-implementation-spec.md §20, docs/DECISIONS/2026-09-22-thin-tk-over-cbm.md (scope), docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (mvp2 non-fleet scope), docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (mvp3 scope), docs/DECISIONS/2026-09-24-evals-harness.md (mvp4 evals design), docs/DECISIONS/2026-09-24-reindex-embed-cache.md (mvp3 reindex embed mechanics), docs/DECISIONS/2026-09-24-zoekt-staleness.md (zoekt-side freshness shipped), docs/DECISIONS/2026-09-24-mvp4-human-ux-picker-manpages.md (mvp4 human UX scope), docs/DECISIONS/2026-09-25-ledger-append-only-history-prune.md (ledger v2 scope)]
+supersedes: [compatible-implementation-spec.md §20, docs/DECISIONS/2026-09-22-thin-tk-over-cbm.md (scope), docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (mvp2 non-fleet scope), docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (mvp3 scope), docs/DECISIONS/2026-09-24-evals-harness.md (mvp4 evals design), docs/DECISIONS/2026-09-24-reindex-embed-cache.md (mvp3 reindex embed mechanics), docs/DECISIONS/2026-09-24-zoekt-staleness.md (zoekt-side freshness shipped), docs/DECISIONS/2026-09-24-mvp4-human-ux-picker-manpages.md (mvp4 human UX scope), docs/DECISIONS/2026-09-25-ledger-append-only-history-prune.md (ledger v2 scope), docs/DECISIONS/2026-09-25-cross-repo-contract-verified.md (cross-repo contract), docs/DECISIONS/2026-09-25-fleet-parked-indefinitely.md (fleet parked), docs/DECISIONS/2026-09-25-delivery-parked-download-scripts.md (delivery parked)]
 superseded-by: null
 ---
 
@@ -23,15 +23,15 @@ Locked decisions: Go-only thin `tk` over CBM, Linux-style `true-knowledge/` dirs
 * No supervisor, no facts/notes/ledger, no graph code in `tk`.
 * Done when: `TK_HOME=/tmp/x` smoke (`setup → register → index → sync no-op → status --json → mcp tools/list` = 11) passes with zero `~/.tk`/`Library` writes — verified against real CBM 0.11.0 + zoekt @153817f6 (spawn spike; library port per zoekt-library ADR).
 
-## MVP2 — code-intel depth + cross-repo fleet
+## MVP2 — code-intel depth (cross-repo fleet parked indefinitely)
 
 *Why first:* flagged focus + unblocks 27B autonomy. Still delegated to CBM, no new stores.
 * `kg_*` facade: `kg_find` (regex→grep / ident→graph / NL→semantic router), `kg_explain` (def+snippet+callers+callees, one call), `kg_grep`; legacy `search/trace/arch/query` compat. Shipped as Cobra aliases over `find/explain/grep`, zero behavior change (see envelope ADR).
 * `analysis` profile: `query_graph` (read-only, `LIMIT` + timeout guardrails), `validate` (existence + near-miss). Shipped in MVP1: `get_file_outline` (`tk outline`), `detect_changes → impact` (`tk impact`). `tk mcp --tool-profile scout(11)|analysis(14)|minimal(3)` filters tk-side; `manage_adr` passes through in `analysis`.
 * Wrapper: `cbmexec.RunJSON` (`cli --json` envelope unwrapped, legacy fallback) on all read paths; writes stay on legacy `Run`.
-* Cross-repo: PARKED per envelope ADR (fleet orchestration, `--cross/--targets`, generation record wait for dedicated fleet ADR). Upstream truth stands: one `cross-repo-intelligence` call with `target_projects=["*"]` links the fleet, no tk-driven two-pass loop; `get_architecture` reports `cross_repo_links` free.
+* Cross-repo: PARKED INDEFINITELY per `docs/DECISIONS/2026-09-25-fleet-parked-indefinitely.md` (fleet orchestration for `CROSS_*` edges — `--cross/--targets`, N-source link pass, generation record — waits on a listed trigger: upstream generic cross-repo edge classes #56/#398, concrete fleet-wide protocol-edge demand, or a cost collapse; un-parking needs a new ADR. Generic cross-repo call graphs stay out of tk scope permanently). Contract verified upstream (cross-repo-contract ADR): `cross-repo-intelligence` is a per-**source-project** `index_repository` mode — `target_projects=["*"]` expands targets only, an N-repo clique needs **N runs (each member as source)** after fresh bases, scope = `CROSS_*` protocol edges; `get_architecture` reports `cross_repo_links` free.
 * Freshness: `head/current/fresh` envelopes shipped in MVP1. Zoekt-side staleness eliminated (auto-refresh + live worktree bytes + delta indexing — zoekt-staleness ADR); left open: coverage-before-absence enforcement in `scout`, stale-cursor protocol (no tk-issued cursors exist yet).
-* Done when: 27B answers `who calls X / what breaks if Y changes / outline Z` in ≤3 calls; 2-fixture fleet links `CROSS_HTTP_CALLS`.
+* Done when: 27B answers `who calls X / what breaks if Y changes / outline Z` in ≤3 calls (single-repo; fleet-wide `CROSS_*` and multi-repo call graphs are parked — see fleet-parked ADR).
 
 ## MVP3 — memory layer (tk-owned; CBM has no equivalent)
 
@@ -53,7 +53,7 @@ Locked decisions: Go-only thin `tk` over CBM, Linux-style `true-knowledge/` dirs
   * Man pages: `spf13/cobra/doc` gen via dev-only `cmd/genman` (mise task `docs.man`) → committed `docs/man/tk*.1`, deterministic.
 * **Rejected** (doctrine kept — see same ADR): `history` (trace.go:6; jq reads tk.log, replay would re-run redacted argv), `completion-install` (`tk completion <shell>` prints the script; humans wire their own rc), `status --watch` (`watch -n2 tk status`; `--json` one-shot serves agents).
 * Evals: frozen-SHA `PASS/PARTIAL/FAIL` + tokens/tool-calls for 27B + <8B filter smoke. **Design locked (not built):** `docs/DECISIONS/2026-09-24-evals-harness.md` — committed frozen fixture + `tests/evals/run.sh` (fake-CBM default, `TK_LIVE=1` opt-in), rule-based record verdicts, `est_tokens = chars/4` proxy, no `tk eval` subcommand, self-judging 27B scorer deferred to phase 2.
-* Ops: diagnostics (`trajectory.ndjson`), resource-limit surfacing, packaging (`brew/nix/npm`), team `.zst` cadence.
+* Ops: diagnostics (`trajectory.ndjson`), resource-limit surfacing; packaging (`brew/nix/npm`) + team `.zst` cadence PARKED per `docs/DECISIONS/2026-09-25-delivery-parked-download-scripts.md` (future path: GitHub-release platform binaries + `install.sh`/`install.ps1` download scripts, not built yet).
 * Done when: human-only register→index→explain→sync completes with TAB everywhere, no agent.
 
 ## Order logic

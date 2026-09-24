@@ -49,7 +49,7 @@ jq -r 'select(.mcp.tool=="source_search") | .output.text' tk.log
 ## Conventions for agents (human or AI)
 
 1. **Delegate, don't reimplement:** parsing, FTS, embeddings, watcher, `install` matrix (45 clients), UI `:9749`, `.zst` artifacts = CBM. If you touch `*.db` directly or write client `mcp.json` by hand, it's a bug — call `cbm cli` / `cbm install --dry-run`.
-2. **Indexing:** default `moderate`; `fast` for watcher/auto, `full` explicit only; `cross-repo-intelligence` only after fresh bases + `target_projects=["*"]`. Check `check_index_coverage` before negative claims. Respect `.cbmignore` order + `512MiB` cap + `index_max_*` (fail-whole-preserve-serving).
+2. **Indexing:** default `moderate`; `fast` for watcher/auto, `full` explicit only; `cross-repo-intelligence` only after fresh bases + `target_projects=["*"]`, per **source** project (N runs link an N-repo clique — `docs/DECISIONS/2026-09-25-cross-repo-contract-verified.md`; fleet orchestration for `CROSS_*` is **parked indefinitely** — `docs/DECISIONS/2026-09-25-fleet-parked-indefinitely.md`). Check `check_index_coverage` before negative claims. Respect `.cbmignore` order + `512MiB` cap + `index_max_*` (fail-whole-preserve-serving).
 3. **Freshness:** `tk sync` = `git HEAD` + coverage → no-op or let watcher do it. Never force full on save.
 4. **Fail-open + budgets:** CBM down → clear `tk install` hint, never block agent. Truncate by whole records + `...truncated`.
 5. **Completion:** Cobra only. Dynamic: projects (from `tk.json` + `list_projects`), config keys, `--client pi,opencode,claude,codex`, `--tool-profile scout,analysis,minimal,memory`. Test `tk __complete`.

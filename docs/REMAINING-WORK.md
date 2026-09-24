@@ -26,27 +26,42 @@ Permanently rejected (never re-propose as "what's next"):
 
 ---
 
-## 1. Cross-repo fleet (P1, parked, needs ADR)
+## 1. Cross-repo fleet (PARKED INDEFINITELY, trigger-based)
 
-Single-repo queries only today; fleet = symbol/CALL edges that span the
-registered set (`CROSS_*`), fleet-wide absence claims.
+**Decision: `docs/DECISIONS/2026-09-25-fleet-parked-indefinitely.md`** — tk
+fleet orchestration for `CROSS_*` edges (cohort model, N-source link pass,
+generation record, `--cross/--targets`, `CROSS_*` envelopes) is parked
+indefinitely. Revisit only on a trigger: upstream generic cross-repo edge
+classes land (#56/#398), a concrete user workload needs fleet-wide
+protocol-edge links, or the pass becomes effectively free. Un-parking needs a
+new ADR. Generic multi-repo call graphs stay permanently out of tk scope
+(CBM-BOUNDARY); they live or die upstream.
 
-- tk has zero fleet code: no `--cross/--targets`, no link pass, no generation
-  record (`docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md:53-56`).
-- CBM primitive exists: one `cross-repo-intelligence` call, `target_projects=["*"]`,
-  `get_architecture` reports `cross_repo_links` free (INDEXING.md:45).
-- To build: cohort model (registry as fleet vs explicit `--targets`), link pass
-  after *fresh* bases, **generation record** (SHA-cohort provenance → staleness),
-  surface `CROSS_*` in `arch`/`impact`/`explain` envelopes. Needs a fleet ADR first.
+The verified upstream contract stands (for reuse when/if un-parked):
+`cross-repo-intelligence` is a per-**source-project** `index_repository` mode
+(`docs/DECISIONS/2026-09-25-cross-repo-contract-verified.md`) — `["*"]` expands
+only the *targets*; a full N-repo clique needs **N runs (every member as
+source)**, each after fresh bases, each wiping-and-rebuilding that source's
+`CROSS_*` edges bidirectionally. Scope is protocol edges only
+(HTTP/async/channel/gRPC/GraphQL/tRPC); matcher holes exist where `Route.path`
+is empty (FastAPI #678, Go Fiber #686). `get_architecture` reports
+`cross_repo_links` free (INDEXING.md:45).
+
+**Not parked (separable, open/unprioritized):** fleet-cohort **queries** —
+run the existing `find`/`grep`/`explain` across the registered cohort with
+coverage-before-absence annotation, using **no** CBM cross-repo primitive.
+Because it delegates to existing single-repo machinery (`annotateAbsence` +
+`freshness`), it is a candidate slice if fleet-wide "search the whole
+registry" value is ever wanted.
 
 ```
-today                      fleet (goal)
+today                      fleet queries (unprioritized, no CBM cross-repo)
 projA graph ──┐             projA graph ──┐
-projB graph ──┼→ find X     projB graph ──┼→ find X → CROSS_* edge
-projC graph ──┘  one repo   projC graph ──┘   → repo+symbol
+projB graph ──┼→ find X     projB graph ──┼→ find X → coverage-annotated,
+projC graph ──┘  one repo   projC graph ──┘   per-repo results across cohort
 ```
 
-## 2. Ops + packaging (P2) — four independent sub-items
+## 2. Ops (P2) — trajectory, resource surfacing; delivery parked
 
 ```
 state/
@@ -55,7 +70,7 @@ state/
 status --json         freshness                    (exists)
                       index limits                (missing)
 delivery              dist/tk                     (exists)
-                      brew/nix/npm + .zst cadence (missing)
+                      brew/nix/npm + .zst cadence (PARKED — delivery ADR)
 ```
 
 - **`trajectory.ndjson`**: session-level state-transition stream
@@ -65,9 +80,13 @@ delivery              dist/tk                     (exists)
 - **Resource-limit surfacing**: CBM caps (`index_max_files/mb`, 512MiB,
   fail-whole-preserve-serving) exist (INDEXING.md:51); tk exposes none —
   `status --json` and search envelopes should surface caps/degradation.
-- **Packaging**: brew/nix/npm formula sources for the static binary.
-- **Team `.zst` cadence**: distribution schedule for committed `graph.db.zst`
-  artifacts (CBM-owned); tk surfaces artifact age/last-built in `status`.
+- **Delivery — PARKED INDEFINITELY** per `docs/DECISIONS/2026-09-25-delivery-parked-download-scripts.md`:
+  brew/nix/npm formulas and the team `.zst` ship cadence are deferred
+  (revisit only on package-manager/tabular demand). The recorded future path,
+  deliberately not built yet: platform binaries + `checksums.txt` on the
+  GitHub release page fetched by simple `install.sh` / `install.ps1` download
+  scripts (curl / Invoke-WebRequest, latest-or-pinned tag). `.zst` artifacts
+  stay CBM-owned as today; `tk install` (CBM installer) is unaffected.
 
 ## 3. Scout coverage-before-absence (P2) — smallest honest gap
 

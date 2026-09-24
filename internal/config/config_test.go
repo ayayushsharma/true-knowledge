@@ -38,6 +38,34 @@ func TestRejectBadMode(t *testing.T) {
 	}
 }
 
+func TestUIPickerDefaultsAndKnownKey(t *testing.T) {
+	if !config.Defaults().UI.Picker {
+		t.Fatal("default ui.picker must be true (humans get the picker)")
+	}
+	found := false
+	for _, k := range config.KnownKeys() {
+		if k == "ui.picker" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("ui.picker missing from KnownKeys")
+	}
+}
+
+func TestSetKeyUIPicker(t *testing.T) {
+	cfg := config.Defaults()
+	if err := config.SetKey(&cfg, "ui.picker", "false"); err != nil || cfg.UI.Picker {
+		t.Fatalf("set false: off=%v err=%v", !cfg.UI.Picker, err)
+	}
+	if err := config.SetKey(&cfg, "ui.picker", "true"); err != nil || !cfg.UI.Picker {
+		t.Fatalf("set true: on=%v err=%v", cfg.UI.Picker, err)
+	}
+	if err := config.SetKey(&cfg, "ui.picker", "notabool"); err == nil {
+		t.Fatal("expected error for non-bool ui.picker")
+	}
+}
+
 func TestLoadRejectsUnknownFields(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "config.json")

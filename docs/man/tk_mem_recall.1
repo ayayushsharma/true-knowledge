@@ -1,0 +1,46 @@
+.nh
+.TH "true-knowledge" "1" "Sep 2026" "true-knowledge" "tk (true-knowledge)"
+
+.SH NAME
+tk-mem-recall - Recall facts: named project first, then global (or all + global)
+
+
+.SH SYNOPSIS
+\fBtk mem recall  [flags]\fP
+
+
+.SH DESCRIPTION
+Recall facts: named project first, then global (or all + global)
+
+
+.SH OPTIONS
+\fB-h\fP, \fB--help\fP[=false]
+	help for recall
+
+.PP
+\fB--project\fP=""
+	narrow recall to one project (default: all + global)
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB--budget\fP=0
+	char budget override (0 = config defaults)
+
+.PP
+\fB--home\fP=""
+	override base home (TK_HOME equivalent: config+data+cache+state under it)
+
+.PP
+\fB--json\fP[=false]
+	stable JSON envelope output
+
+
+.SH EXAMPLE
+.EX
+  tk mem recall db --project demo
+  tk mem recall api-base
+.EE
+
+
+.SH SEE ALSO
+\fBtk-mem(1)\fP

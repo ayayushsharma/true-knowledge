@@ -1,0 +1,54 @@
+.nh
+.TH "true-knowledge" "1" "Sep 2026" "true-knowledge" "tk (true-knowledge)"
+
+.SH NAME
+tk-mem-save - Store a fact; secret-looking values queue for review instead
+
+
+.SH SYNOPSIS
+\fBtk mem save   [flags]\fP
+
+
+.SH DESCRIPTION
+Store a fact; secret-looking values queue for review instead
+
+
+.SH OPTIONS
+\fB-h\fP, \fB--help\fP[=false]
+	help for save
+
+.PP
+\fB--project\fP=""
+	project name (required for project scope)
+
+.PP
+\fB--provenance\fP=""
+	origin note for the fact
+
+.PP
+\fB--scope\fP="project"
+	global|project
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB--budget\fP=0
+	char budget override (0 = config defaults)
+
+.PP
+\fB--home\fP=""
+	override base home (TK_HOME equivalent: config+data+cache+state under it)
+
+.PP
+\fB--json\fP[=false]
+	stable JSON envelope output
+
+
+.SH EXAMPLE
+.EX
+  tk mem save db postgres --project demo
+  tk mem save deploy-cadence "2 week sprints" --scope global --provenance standup
+.EE
+
+
+.SH SEE ALSO
+\fBtk-mem(1)\fP

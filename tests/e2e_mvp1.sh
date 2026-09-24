@@ -77,6 +77,12 @@ check impact 0 $TK_BIN impact demo
 check source-search 0 $TK_BIN source-search Demo demo
 check config-get 0 $TK_BIN config get index_mode
 check config-validate 0 $TK_BIN config validate
+check config-picker-get 0 $TK_BIN config get ui.picker
+check config-picker-off 0 $TK_BIN config set ui.picker false
+picker_val=$("$TK_BIN" config get ui.picker)
+if [ "$picker_val" = "false" ]; then pass=$((pass+1)); printf 'ok   config-picker-off-value\n';
+else fail=$((fail+1)); printf 'FAIL config-picker-off-value (ui.picker=%s)\n' "$picker_val"; fi
+check config-picker-back 0 $TK_BIN config set ui.picker true
 check daemon-status 0 $TK_BIN daemon status
 check completion 0 $TK_BIN completion bash
 check complete-projects 0 $TK_BIN __complete index ""

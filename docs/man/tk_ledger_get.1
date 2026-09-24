@@ -1,0 +1,42 @@
+.nh
+.TH "true-knowledge" "1" "Sep 2026" "true-knowledge" "tk (true-knowledge)"
+
+.SH NAME
+tk-ledger-get - Print one project ledger, or all ledgers
+
+
+.SH SYNOPSIS
+\fBtk ledger get [project] [flags]\fP
+
+
+.SH DESCRIPTION
+Print one project ledger, or all ledgers
+
+
+.SH OPTIONS
+\fB-h\fP, \fB--help\fP[=false]
+	help for get
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB--budget\fP=0
+	char budget override (0 = config defaults)
+
+.PP
+\fB--home\fP=""
+	override base home (TK_HOME equivalent: config+data+cache+state under it)
+
+.PP
+\fB--json\fP[=false]
+	stable JSON envelope output
+
+
+.SH EXAMPLE
+.EX
+  tk ledger get
+  tk ledger get demo
+.EE
+
+
+.SH SEE ALSO
+\fBtk-ledger(1)\fP

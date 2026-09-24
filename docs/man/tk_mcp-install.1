@@ -1,0 +1,54 @@
+.nh
+.TH "true-knowledge" "1" "Sep 2026" "true-knowledge" "tk (true-knowledge)"
+
+.SH NAME
+tk-mcp-install - Point an agent client at \fBtk mcp\fR (Pi slipped this build)
+
+
+.SH SYNOPSIS
+\fBtk mcp-install [flags]\fP
+
+
+.SH DESCRIPTION
+Point an agent client at \fBtk mcp\fR (Pi slipped this build)
+
+
+.SH OPTIONS
+\fB--client\fP=""
+	pi|opencode|claude|codex (required)
+
+.PP
+\fB--dry-run\fP[=false]
+	print without writing
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for mcp-install
+
+.PP
+\fB--tool-profile\fP=""
+	tool surface (scout|analysis|minimal|memory); emitted as TK_MCP_PROFILE env, default scout
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB--budget\fP=0
+	char budget override (0 = config defaults)
+
+.PP
+\fB--home\fP=""
+	override base home (TK_HOME equivalent: config+data+cache+state under it)
+
+.PP
+\fB--json\fP[=false]
+	stable JSON envelope output
+
+
+.SH EXAMPLE
+.EX
+  tk mcp-install --client opencode --dry-run
+  tk mcp-install --client claude --tool-profile memory
+.EE
+
+
+.SH SEE ALSO
+\fBtk(1)\fP

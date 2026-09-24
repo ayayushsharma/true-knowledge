@@ -41,6 +41,12 @@ type Embedding struct {
 	TimeoutMS int    `json:"timeout_ms"`
 }
 
+// UI gates interactive terminal affordances for humans (never agents: TTY
+// + !--json only). The picker is a convenience over recall, default-on.
+type UI struct {
+	Picker bool `json:"picker"`
+}
+
 // Config is the tk source of truth stored in <config>/config.json.
 // External-binary pins live here (cbm_version_pin). Same-language
 // dependencies (zoekt) pin in go.mod instead — never in this file.
@@ -56,6 +62,8 @@ type Config struct {
 	Budgets        Budgets   `json:"budgets"`
 	Embedding      Embedding `json:"embedding"`
 	Ledger         Ledger    `json:"ledger"`
+	// UI holds human-terminal affordances (see mvp4-human-ux ADR).
+	UI UI `json:"ui"`
 	// MCPProfile is the machine default MCP tool profile when neither the
 	// --tool-profile flag nor TK_MCP_PROFILE is set. Empty = scout.
 	MCPProfile string `json:"mcp_profile,omitempty"`
@@ -73,6 +81,7 @@ func Defaults() Config {
 		Budgets:        Budgets{DefaultChars: 6000, ArchitectureChars: 2200, NotesTocChars: 700, LedgerChars: 1500},
 		Embedding:      Embedding{Enabled: false, Endpoint: "http://127.0.0.1:11434", TimeoutMS: 3000},
 		Ledger:         Ledger{Enabled: true},
+		UI:             UI{Picker: true},
 	}
 }
 
@@ -168,6 +177,7 @@ func KnownKeys() []string {
 		"embedding.enabled", "embedding.endpoint", "embedding.model", "embedding.timeout_ms",
 		"ledger.enabled",
 		"mcp.profile",
+		"ui.picker",
 	}
 }
 
@@ -211,6 +221,8 @@ func SetKey(cfg *Config, key, value string) error {
 			return fmt.Errorf("invalid mcp.profile %q (want %s)", p, strings.Join(ValidProfiles(), "|"))
 		}
 		cfg.MCPProfile = p
+	case "ui.picker":
+		return setBool(&cfg.UI.Picker, value)
 	default:
 		return fmt.Errorf("unknown config key %q", key)
 	}

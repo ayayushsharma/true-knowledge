@@ -168,6 +168,8 @@ func getKey(c config.Config, key string) (string, error) {
 			return "scout (unset)", nil
 		}
 		return c.MCPProfile, nil
+	case "ui.picker":
+		return strconv.FormatBool(c.UI.Picker), nil
 	}
 	return "", fmt.Errorf("unknown key %q (see `tk config list` / known keys)", key)
 }
@@ -243,6 +245,12 @@ func setKey(c *config.Config, key, val string) error {
 			return fmt.Errorf("want %s or empty to unset, got %q", strings.Join(config.ValidProfiles(), "|"), val)
 		}
 		c.MCPProfile = val
+	case "ui.picker":
+		b, err := strconv.ParseBool(val)
+		if err != nil {
+			return fmt.Errorf("want true|false: %w", err)
+		}
+		c.UI.Picker = b
 	default:
 		return fmt.Errorf("unknown key %q", key)
 	}

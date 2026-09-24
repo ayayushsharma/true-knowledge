@@ -28,9 +28,16 @@ func resolveProject(c *Ctx, flag string, args []string) string {
 
 // requireProject resolves or fails with a routing hint.
 // CBM requires project on nearly every tool; tk never sends "".
+// On interactive TTY (+ !--json + ui.picker) the failure becomes a project
+// picker first — agents/scripts never see it (picker is gated off).
 func requireProject(c *Ctx, flag string, args []string) (string, error) {
 	if p := resolveProject(c, flag, args); p != "" {
 		return p, nil
+	}
+	if pickerEnabled(c) {
+		if p, err := pickProject(c); err == nil && p != "" {
+			return p, nil
+		}
 	}
 	return "", fail("pass --project (registered: %s); see `tk status`", listNames(c))
 }

@@ -1,0 +1,50 @@
+.nh
+.TH "true-knowledge" "1" "Sep 2026" "true-knowledge" "tk (true-knowledge)"
+
+.SH NAME
+tk-note-search - BM25 search over approved notes only
+
+
+.SH SYNOPSIS
+\fBtk note search  [flags]\fP
+
+
+.SH DESCRIPTION
+BM25 search over approved notes only
+
+
+.SH OPTIONS
+\fB-h\fP, \fB--help\fP[=false]
+	help for search
+
+.PP
+\fB--limit\fP=10
+	max results (1-100)
+
+.PP
+\fB--project\fP=""
+	narrow search to one project (default: all)
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB--budget\fP=0
+	char budget override (0 = config defaults)
+
+.PP
+\fB--home\fP=""
+	override base home (TK_HOME equivalent: config+data+cache+state under it)
+
+.PP
+\fB--json\fP[=false]
+	stable JSON envelope output
+
+
+.SH EXAMPLE
+.EX
+  tk note search "http client" --project demo
+  tk note search incident --limit 5
+.EE
+
+
+.SH SEE ALSO
+\fBtk-note(1)\fP

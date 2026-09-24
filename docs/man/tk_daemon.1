@@ -1,0 +1,35 @@
+.nh
+.TH "true-knowledge" "1" "Sep 2026" "true-knowledge" "tk (true-knowledge)"
+
+.SH NAME
+tk-daemon - Inspect/stop the shared CBM daemon (human use only, never MCP)
+
+
+.SH SYNOPSIS
+\fBtk daemon [flags]\fP
+
+
+.SH DESCRIPTION
+Inspect/stop the shared CBM daemon (human use only, never MCP)
+
+
+.SH OPTIONS
+\fB-h\fP, \fB--help\fP[=false]
+	help for daemon
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB--budget\fP=0
+	char budget override (0 = config defaults)
+
+.PP
+\fB--home\fP=""
+	override base home (TK_HOME equivalent: config+data+cache+state under it)
+
+.PP
+\fB--json\fP[=false]
+	stable JSON envelope output
+
+
+.SH SEE ALSO
+\fBtk(1)\fP, \fBtk-daemon-status(1)\fP, \fBtk-daemon-stop(1)\fP

@@ -1,0 +1,51 @@
+.nh
+.TH "true-knowledge" "1" "Sep 2026" "true-knowledge" "tk (true-knowledge)"
+
+.SH NAME
+tk-grep - Project-scoped source-text search
+
+
+.SH SYNOPSIS
+\fBtk grep  [project] [flags]\fP
+
+
+.SH DESCRIPTION
+Project-scoped source-text search
+
+
+.SH OPTIONS
+\fB--files\fP=""
+	file glob filter
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for grep
+
+.PP
+\fB--limit\fP=20
+	max results
+
+.PP
+\fB--project\fP=""
+	project name
+
+.PP
+\fB--regex\fP[=false]
+	treat pattern as regex (validation error on bad regex)
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB--budget\fP=0
+	char budget override (0 = config defaults)
+
+.PP
+\fB--home\fP=""
+	override base home (TK_HOME equivalent: config+data+cache+state under it)
+
+.PP
+\fB--json\fP[=false]
+	stable JSON envelope output
+
+
+.SH SEE ALSO
+\fBtk(1)\fP

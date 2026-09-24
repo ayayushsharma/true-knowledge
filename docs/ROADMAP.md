@@ -2,7 +2,7 @@
 title: Roadmap — MVP1 through MVP4
 status: authoritative
 date: 2026-09-24
-supersedes: [compatible-implementation-spec.md §20, docs/DECISIONS/2026-09-22-thin-tk-over-cbm.md (scope), docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (mvp2 non-fleet scope), docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (mvp3 scope), docs/DECISIONS/2026-09-24-evals-harness.md (mvp4 evals design), docs/DECISIONS/2026-09-24-reindex-embed-cache.md (mvp3 reindex embed mechanics), docs/DECISIONS/2026-09-24-zoekt-staleness.md (zoekt-side freshness shipped)]
+supersedes: [compatible-implementation-spec.md §20, docs/DECISIONS/2026-09-22-thin-tk-over-cbm.md (scope), docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (mvp2 non-fleet scope), docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (mvp3 scope), docs/DECISIONS/2026-09-24-evals-harness.md (mvp4 evals design), docs/DECISIONS/2026-09-24-reindex-embed-cache.md (mvp3 reindex embed mechanics), docs/DECISIONS/2026-09-24-zoekt-staleness.md (zoekt-side freshness shipped), docs/DECISIONS/2026-09-24-mvp4-human-ux-picker-manpages.md (mvp4 human UX scope)]
 superseded-by: null
 ---
 
@@ -48,7 +48,10 @@ Locked decisions: Go-only thin `tk` over CBM, Linux-style `true-knowledge/` dirs
 
 ## MVP4 — human UX + hardening (deferred)
 
-* Rich terminal: fuzzy picker, `history`, `completion-install`, man pages, `status --watch`.
+* **Shipped (this phase):** fuzzy project picker + committed man pages. See `docs/DECISIONS/2026-09-24-mvp4-human-ux-picker-manpages.md`.
+  * Fuzzy picker: promptui over `requireProject`'s error path only — TTY-gated (`ui.picker` config), never on `--json`/non-TTY/CI, abort = the identical routing error.
+  * Man pages: `spf13/cobra/doc` gen via dev-only `cmd/genman` (mise task `docs.man`) → committed `docs/man/tk*.1`, deterministic.
+* **Rejected** (doctrine kept — see same ADR): `history` (trace.go:6; jq reads tk.log, replay would re-run redacted argv), `completion-install` (`tk completion <shell>` prints the script; humans wire their own rc), `status --watch` (`watch -n2 tk status`; `--json` one-shot serves agents).
 * Evals: frozen-SHA `PASS/PARTIAL/FAIL` + tokens/tool-calls for 27B + <8B filter smoke. **Design locked (not built):** `docs/DECISIONS/2026-09-24-evals-harness.md` — committed frozen fixture + `tests/evals/run.sh` (fake-CBM default, `TK_LIVE=1` opt-in), rule-based record verdicts, `est_tokens = chars/4` proxy, no `tk eval` subcommand, self-judging 27B scorer deferred to phase 2.
 * Ops: diagnostics (`trajectory.ndjson`), resource-limit surfacing, packaging (`brew/nix/npm`), team `.zst` cadence.
 * Done when: human-only register→index→explain→sync completes with TAB everywhere, no agent.

@@ -1,0 +1,65 @@
+.nh
+.TH "true-knowledge" "1" "Sep 2026" "true-knowledge" "tk (true-knowledge)"
+
+.SH NAME
+tk-setup - Make this machine ready: init + install backends (+ optional register/client)
+
+
+.SH SYNOPSIS
+\fBtk setup [flags]\fP
+
+
+.SH DESCRIPTION
+Idempotent fresh-machine setup. Re-running changes nothing when up-to-date.
+Steps: init dirs/config → install all backends at pins → (opt-in) register cwd → (opt-in) client snippet.
+
+
+.SH OPTIONS
+\fB--client\fP=""
+	print MCP snippet for pi|opencode|claude|codex
+
+.PP
+\fB--dry-run\fP[=false]
+	print plan without downloading or writing
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for setup
+
+.PP
+\fB--name\fP=""
+	project name for --register (default: directory base)
+
+.PP
+\fB--register\fP[=false]
+	register the current directory as a project (opt-in)
+
+.PP
+\fB--tool-profile\fP=""
+	tool surface for --client (scout|analysis|minimal|memory); emitted as TK_MCP_PROFILE env so per-project overrides work
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB--budget\fP=0
+	char budget override (0 = config defaults)
+
+.PP
+\fB--home\fP=""
+	override base home (TK_HOME equivalent: config+data+cache+state under it)
+
+.PP
+\fB--json\fP[=false]
+	stable JSON envelope output
+
+
+.SH EXAMPLE
+.EX
+  tk setup
+  tk setup --dry-run
+  tk setup --register --name demo
+  tk setup --client opencode
+.EE
+
+
+.SH SEE ALSO
+\fBtk(1)\fP

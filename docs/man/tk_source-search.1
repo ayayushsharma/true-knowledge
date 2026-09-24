@@ -1,0 +1,54 @@
+.nh
+.TH "true-knowledge" "1" "Sep 2026" "true-knowledge" "tk (true-knowledge)"
+
+.SH NAME
+tk-source-search - Trigram text search via zoekt (explicit, in-process, auto-refresh)
+
+
+.SH SYNOPSIS
+\fBtk source-search  [project] [flags]\fP
+
+
+.SH DESCRIPTION
+Trigram text search via zoekt (explicit, in-process, auto-refresh)
+
+
+.SH OPTIONS
+\fB--files\fP=""
+	file glob filter (zoekt file:)
+
+.PP
+\fB-h\fP, \fB--help\fP[=false]
+	help for source-search
+
+.PP
+\fB--limit\fP=20
+	max matches
+
+.PP
+\fB--project\fP=""
+	project name
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB--budget\fP=0
+	char budget override (0 = config defaults)
+
+.PP
+\fB--home\fP=""
+	override base home (TK_HOME equivalent: config+data+cache+state under it)
+
+.PP
+\fB--json\fP[=false]
+	stable JSON envelope output
+
+
+.SH EXAMPLE
+.EX
+  tk source-search ProcessOrder demo
+  tk source-search "ok:" demo --files '*.go' --limit 20
+.EE
+
+
+.SH SEE ALSO
+\fBtk(1)\fP

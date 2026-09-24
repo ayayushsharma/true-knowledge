@@ -27,7 +27,7 @@ case "$tool" in
   index_repository) echo '{"status":"indexed"}';;
   search_graph|search_code)
     if grep -q 'Demo' "$4" 2>/dev/null; then echo '{"ok":true,"results":[{"name":"Demo","path":"main.go"}]}'
-    else echo '{"ok":true,"results":[]}'; fi;;
+    else echo 'no results (fake miss)'; fi;;
   get_code_snippet) echo 'func Demo() {} // fake';;
   trace_path) echo '{"callers":[],"callees":[]}';;
   get_architecture|query_graph|list_projects|index_status|get_file_outline|detect_changes) echo '{"ok":true,"coverage":"clean"}';;
@@ -418,6 +418,18 @@ out=$(printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"na
 case "$out" in
   *'main.go'*Demo*) pass=$((pass+1)); printf 'ok   mcp-source-search-hit\n';;
   *) fail=$((fail+1)); printf 'FAIL mcp-source-search\n  %s\n' "$out";;
+esac
+# coverage-before-absence: an empty search_graph must carry the coverage
+# verdict (scout-only profiles standardized), and a hit stays bare.
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_graph","arguments":{"name_pattern":"TotalMiss","project":"demo"}}}' | $TK_BIN mcp 2>/dev/null)
+case "$out" in
+  *'(coverage: clean'*) pass=$((pass+1)); printf 'ok   mcp-scout-absence-annotated\n';;
+  *) fail=$((fail+1)); printf 'FAIL mcp-scout-absence-annotated\n  %s\n' "$out";;
+esac
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_graph","arguments":{"name_pattern":"Demo","project":"demo"}}}' | $TK_BIN mcp 2>/dev/null)
+case "$out" in
+  *'Demo'*'main.go'*) pass=$((pass+1)); printf 'ok   mcp-scout-search-hit\n';;
+  *) fail=$((fail+1)); printf 'FAIL mcp-scout-search-hit\n  %s\n' "$out";;
 esac
 
 printf '\npass=%d fail=%d\n' "$pass" "$fail"

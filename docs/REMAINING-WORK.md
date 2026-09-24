@@ -88,19 +88,20 @@ delivery              dist/tk                     (exists)
   scripts (curl / Invoke-WebRequest, latest-or-pinned tag). `.zst` artifacts
   stay CBM-owned as today; `tk install` (CBM installer) is unaffected.
 
-## 3. Scout coverage-before-absence (P2) — smallest honest gap
+## 3. Scout coverage-before-absence (SHIPPED)
 
-CLI paths already enforce: `find`/`grep` → `annotateAbsence` on empty
-(`internal/cli/query.go:118,202`), verdict via `check_index_coverage`
-(`internal/cli/validate.go:26`). The **MCP scout profile** does NOT:
+**Decision: `docs/DECISIONS/2026-09-25-scout-coverage-before-absence.md`** —
+enforcement now applies at the tool level (all profiles): `search_graph` /
+`search_code` empty results trigger a whole-project `check_index_coverage`
+probe and append the verdict, byte-consistent with the CLI
+(`internal/mcp/server.go`, `annotateAbsence` shared with `callValidate`);
+probe failure on empty results is a hard error envelope (never silent
+absence). No new tools — profile counts unchanged (11/14/3/22).
 
 ```
 find/grep   empty → coverage check → CLI annotates   ✅ query.go:118,202
-scout tools empty → search_graph/search_code served bare ❌ mcp/server.go:431,544
+scout tools empty → search_graph/search_code annotated ✅ mcp/server.go
 ```
-
-Fix = mirror `annotateAbsence` inside the scout handlers. No new tools, no
-scout tool-count change, byte-consistent with the CLI. ROADMAP:33 "left open".
 
 ## 4. RRF tuning (P3) — memory-layer deferred
 

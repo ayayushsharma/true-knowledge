@@ -396,6 +396,15 @@ func (s *Server) callTool(ctx context.Context, id any, name string, args map[str
 	if err != nil {
 		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, err.Error()}}
 	}
+	// Coverage-before-absence: an empty search needs a whole-project coverage
+	// probe before the absence is reported (never silent absence).
+	if isAbsenceTool(cbmTool) {
+		if proj, ok := args["project"].(string); ok && proj != "" && cbmexec.LooksEmpty(out) {
+			if out, err = s.annotateAbsence(ctx, proj, out); err != nil {
+				return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, err.Error()}}
+			}
+		}
+	}
 	out = cbmexec.Truncate(out, s.Budget)
 	return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{
 		"content": []map[string]any{{"type": "text", "text": out}},
@@ -419,6 +428,38 @@ func (s *Server) toolNames() []string {
 		names[i] = t.Name
 	}
 	return names
+}
+
+// isAbsenceTool reports whether a CBM tool triggers coverage-before-absence
+// annotation on empty results (the search tools — never check_index_coverage
+// itself, list_projects, or the other inventory tools).
+func isAbsenceTool(cbmTool string) bool {
+	return cbmTool == "search_graph" || cbmTool == "search_code"
+}
+
+// coverageVerdict probes whole-project coverage (scopes=.) via CBM.
+func (s *Server) coverageVerdict(ctx context.Context, project string) (string, error) {
+	out, err := s.Run.RunJSON(ctx, "check_index_coverage",
+		map[string]any{"project": project, "scopes": []string{"."}})
+	if err != nil {
+		return "", err
+	}
+	return cbmexec.CoverageVerdict(out), nil
+}
+
+// annotateAbsence appends a coverage verdict to empty output, byte-consistent
+// with the CLI. Clean coverage verifies absence; a gap warns it unverified; a
+// failed coverage call on empty results is a hard error (fail loudly, never
+// silent absence — same doctrine as cli.annotateAbsence).
+func (s *Server) annotateAbsence(ctx context.Context, project, out string) (string, error) {
+	verdict, err := s.coverageVerdict(ctx, project)
+	if err != nil {
+		return "", fmt.Errorf("no results and coverage check failed: %v — absence unverified", err)
+	}
+	if strings.HasPrefix(verdict, "coverage: GAP") {
+		return out + "\n(" + verdict + "; absence unverified)", nil
+	}
+	return out + "\n(" + verdict + ")", nil
 }
 
 // callValidate implements the analysis-profile validate tool: exact symbol
@@ -449,11 +490,10 @@ func (s *Server) callValidate(ctx context.Context, id any, args map[string]any) 
 		}}
 	}
 coverage:
-	out, cerr := s.Run.RunJSON(ctx, "check_index_coverage", map[string]any{"project": project, "scopes": []string{"."}})
+	verdict, cerr := s.coverageVerdict(ctx, project)
 	if cerr != nil {
 		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, "no exact hit and coverage check failed: " + cerr.Error() + " — absence unverified"}}
 	}
-	verdict := cbmexec.CoverageVerdict(out)
 	cands := "(no candidates)"
 	if toks := cbmexec.NearMissTokens(sym); len(toks) > 0 {
 		if near, nerr := s.Run.RunJSON(ctx, "search_graph", map[string]any{"name_pattern": toks[0], "project": project, "limit": limit}); nerr == nil && !cbmexec.LooksEmpty(near) {

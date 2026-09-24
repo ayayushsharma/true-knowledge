@@ -471,3 +471,135 @@ func TestSourceSearchRefreshFailOpen(t *testing.T) {
 		t.Fatalf("search should still run on stale shards, got %q", text)
 	}
 }
+
+// seqRunner answers per-tool with canned output/error and records call order.
+type seqRunner struct {
+	outs  map[string]string
+	errs  map[string]error
+	order []string
+}
+
+func (r *seqRunner) RunJSON(_ context.Context, tool string, _ map[string]any) (string, error) {
+	r.order = append(r.order, tool)
+	if err := r.errs[tool]; err != nil {
+		return "", err
+	}
+	return r.outs[tool], nil
+}
+
+const cleanCoverage = "generation_matches: true\nhash_records_complete: true\nrecording_status: complete\n"
+
+// TestEmptySearchAnnotatedClean: an empty search_graph result must trigger a
+// whole-project coverage probe and carry the clean verdict — never bare absence.
+func TestEmptySearchAnnotatedClean(t *testing.T) {
+	run := &seqRunner{outs: map[string]string{
+		"search_graph":         "",
+		"check_index_coverage": cleanCoverage,
+	}}
+	resp := serveOne(t, &Server{Profile: ProfileScout, Budget: 1024, Run: run},
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_graph","arguments":{"name_pattern":"Nope","project":"p"}}}`)
+	if resp["error"] != nil {
+		t.Fatalf("search failed: %v", resp)
+	}
+	if len(run.order) != 2 || run.order[1] != "check_index_coverage" {
+		t.Fatalf("call order = %v, want [search_graph check_index_coverage]", run.order)
+	}
+	text := responseText(t, resp)
+	if !strings.Contains(text, "(coverage: clean") {
+		t.Fatalf("clean verdict missing, got %q", text)
+	}
+}
+
+// TestEmptySearchAnnotatedGap: a coverage gap marks absence unverified (same
+// suffix string as the CLI).
+func TestEmptySearchAnnotatedGap(t *testing.T) {
+	run := &seqRunner{outs: map[string]string{
+		"search_graph":         "",
+		"check_index_coverage": "generation_matches: false\n",
+	}}
+	resp := serveOne(t, &Server{Profile: ProfileScout, Budget: 1024, Run: run},
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_graph","arguments":{"name_pattern":"Nope","project":"p"}}}`)
+	if resp["error"] != nil {
+		t.Fatalf("search failed: %v", resp)
+	}
+	text := responseText(t, resp)
+	if !strings.Contains(text, "; absence unverified)") {
+		t.Fatalf("gap suffix missing, got %q", text)
+	}
+}
+
+// TestEmptySearchCoverageFailureHardError: probe failure on empty results is a
+// hard error — never silent absence (CLI doctrine mirrored).
+func TestEmptySearchCoverageFailureHardError(t *testing.T) {
+	run := &seqRunner{outs: map[string]string{"search_graph": ""},
+		errs: map[string]error{"check_index_coverage": errors.New("cbm down")}}
+	resp := serveOne(t, &Server{Profile: ProfileScout, Budget: 1024, Run: run},
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_graph","arguments":{"name_pattern":"Nope","project":"p"}}}`)
+	errObj, ok := resp["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected hard error, got %v", resp)
+	}
+	if errObj["code"].(float64) != -32000 {
+		t.Fatalf("code = %v", errObj["code"])
+	}
+	if !strings.Contains(errObj["message"].(string), "absence unverified") {
+		t.Fatalf("message = %q", errObj["message"])
+	}
+}
+
+// TestNonEmptySearchSkipsProbe: results mean no probe and no annotation.
+func TestNonEmptySearchSkipsProbe(t *testing.T) {
+	run := &seqRunner{outs: map[string]string{"search_graph": "mock-out"}}
+	resp := serveOne(t, &Server{Profile: ProfileScout, Budget: 1024, Run: run},
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_graph","arguments":{"name_pattern":"Demo","project":"p"}}}`)
+	if len(run.order) != 1 || run.order[0] != "search_graph" {
+		t.Fatalf("call order = %v, want [search_graph]", run.order)
+	}
+	if text := responseText(t, resp); text != "mock-out" {
+		t.Fatalf("text = %q, want unannotated mock-out", text)
+	}
+}
+
+// TestSearchCodeEmptyAnnotated: grep's search_code gets the same treatment.
+func TestSearchCodeEmptyAnnotated(t *testing.T) {
+	run := &seqRunner{outs: map[string]string{
+		"search_code":          "",
+		"check_index_coverage": cleanCoverage,
+	}}
+	resp := serveOne(t, &Server{Profile: ProfileScout, Budget: 1024, Run: run},
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_code","arguments":{"pattern":"zzz","project":"p"}}}`)
+	if resp["error"] != nil {
+		t.Fatalf("search failed: %v", resp)
+	}
+	if len(run.order) != 2 || run.order[1] != "check_index_coverage" {
+		t.Fatalf("call order = %v, want [search_code check_index_coverage]", run.order)
+	}
+	if text := responseText(t, resp); !strings.Contains(text, "(coverage: clean") {
+		t.Fatalf("verdict missing, got %q", text)
+	}
+}
+
+// TestInventoryEmptyNotAnnotated: list_projects is not an absence-capable
+// search tool — empty means no probe.
+func TestInventoryEmptyNotAnnotated(t *testing.T) {
+	run := &seqRunner{outs: map[string]string{"list_projects": ""}}
+	resp := serveOne(t, &Server{Profile: ProfileScout, Budget: 1024, Run: run},
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_projects","arguments":{}}}`)
+	if resp["error"] != nil {
+		t.Fatalf("list_projects failed: %v", resp)
+	}
+	if len(run.order) != 1 || run.order[0] != "list_projects" {
+		t.Fatalf("call order = %v, want [list_projects]", run.order)
+	}
+}
+
+// TestEmptySearchNoProjectSkipsProbe: without a project there is nothing to
+// probe — the empty result passes through untouched.
+func TestEmptySearchNoProjectSkipsProbe(t *testing.T) {
+	run := &seqRunner{outs: map[string]string{"search_graph": ""}}
+	serveOne(t, &Server{Profile: ProfileScout, Budget: 1024, Run: run},
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_graph","arguments":{"name_pattern":"Nope"}}}`)
+	if len(run.order) != 1 || run.order[0] != "search_graph" {
+		t.Fatalf("call order = %v, want [search_graph]", run.order)
+	}
+}

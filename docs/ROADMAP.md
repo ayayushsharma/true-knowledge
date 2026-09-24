@@ -2,7 +2,7 @@
 title: Roadmap — MVP1 through MVP4
 status: authoritative
 date: 2026-09-25
-supersedes: [compatible-implementation-spec.md §20, docs/DECISIONS/2026-09-22-thin-tk-over-cbm.md (scope), docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (mvp2 non-fleet scope), docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (mvp3 scope), docs/DECISIONS/2026-09-24-evals-harness.md (mvp4 evals design), docs/DECISIONS/2026-09-24-reindex-embed-cache.md (mvp3 reindex embed mechanics), docs/DECISIONS/2026-09-24-zoekt-staleness.md (zoekt-side freshness shipped), docs/DECISIONS/2026-09-24-mvp4-human-ux-picker-manpages.md (mvp4 human UX scope), docs/DECISIONS/2026-09-25-ledger-append-only-history-prune.md (ledger v2 scope), docs/DECISIONS/2026-09-25-cross-repo-contract-verified.md (cross-repo contract), docs/DECISIONS/2026-09-25-fleet-parked-indefinitely.md (fleet parked), docs/DECISIONS/2026-09-25-delivery-parked-download-scripts.md (delivery parked), docs/DECISIONS/2026-09-25-scout-coverage-before-absence.md (scout coverage-before-absence shipped)]
+supersedes: [compatible-implementation-spec.md §20, docs/DECISIONS/2026-09-22-thin-tk-over-cbm.md (scope), docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (mvp2 non-fleet scope), docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (mvp3 scope), docs/DECISIONS/2026-09-24-evals-harness.md (mvp4 evals design), docs/DECISIONS/2026-09-24-reindex-embed-cache.md (mvp3 reindex embed mechanics), docs/DECISIONS/2026-09-24-zoekt-staleness.md (zoekt-side freshness shipped), docs/DECISIONS/2026-09-24-mvp4-human-ux-picker-manpages.md (mvp4 human UX scope), docs/DECISIONS/2026-09-25-ledger-append-only-history-prune.md (ledger v2 scope), docs/DECISIONS/2026-09-25-cross-repo-contract-verified.md (cross-repo contract), docs/DECISIONS/2026-09-25-fleet-parked-indefinitely.md (fleet parked), docs/DECISIONS/2026-09-25-delivery-parked-download-scripts.md (delivery parked), docs/DECISIONS/2026-09-25-scout-coverage-before-absence.md (scout coverage-before-absence shipped), docs/DECISIONS/2026-09-25-rrf-tuning-parked-indefinitely.md (rrf tuning parked)]
 superseded-by: null
 ---
 
@@ -44,7 +44,7 @@ Locked decisions: Go-only thin `tk` over CBM, Linux-style `true-knowledge/` dirs
 * Storage: `modernc.org/sqlite` (CGo-free) for `facts.db` + `notes/index.db`; schema-versioned, WAL, 0600. Embeddings via **external** Ollama-compatible `/api/embed` (never bundled); BM25 stays authoritative, RRF fusion, all-embed-failure fallback. `note reindex` embeds through a persistent content-keyed cache (`note_embeds`, schema v3): warm call + ⌈n/64⌉ chunked embeds, per-chunk fail-open, unchanged bodies hit the cache across rebuilds (see reindex-embed-cache ADR).
 * MCP `memory` profile: scout(11) + 11 in-process tools = 22 (v1 shipped 9; v2 adds `ledger_get`/`ledger_history`, `ledger_update` gains `key`); no CBM/daemon needed for memory tools.
 * Done when: facts survive sessions, notes require approval before searchable, ledger appends verbatim and `get` trims by budget on retrieval — all `0600` under `~/.local/share/true-knowledge/`.
-* Deferred: RRF tuning knobs beyond defaults (ledger compaction/re-anchor resolved by design — append-only + human prune, see ledger ADR).
+* **RRF tuning knobs: PARKED INDEFINITELY** (future scope — canonical `k=60` + authoritative BM25, revisit on an evals signal; see rrf-tuning ADR). Ledger compaction/re-anchor **resolved by design** — append-only + human prune, see ledger ADR.
 
 ## MVP4 — human UX + hardening (deferred)
 

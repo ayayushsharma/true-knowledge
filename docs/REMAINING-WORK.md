@@ -103,21 +103,31 @@ find/grep   empty → coverage check → CLI annotates   ✅ query.go:118,202
 scout tools empty → search_graph/search_code annotated ✅ mcp/server.go
 ```
 
-## 4. RRF tuning (P3) — memory-layer deferred
+## 4. RRF tuning (PARKED INDEFINITELY — future scope)
+
+**Decision: `docs/DECISIONS/2026-09-25-rrf-tuning-parked-indefinitely.md`** —
+`k`/fusion-weight configurability is parked indefinitely. Today's fusion is
+canonical RRF `k=60` (`memory/embed.go:120,146`) over an authoritative BM25
+with embeddings as a fail-open enhancement — there is no evidence of
+misordering and no evals harness to judge one, so knobs without measurement
+are config-for-config's-sake.
 
 ```
 note search fusion      BM25 ─┐
                         cosine─┤ RRF k=60 hard-coded (memory/embed.go:120,146)
-                        fused ─┘ ✗ k/weights not configurable
+                        fused ─┘ P k/weights: PARKED (future scope)
 ```
 
-Ledger compaction/re-anchor is **resolved by design** — the ledger is
+**Future scope, explicitly:** retrieval quality is a core feature and the knobs
+are its natural lever once evidence exists. Revisit when any trigger fires
+(evals harness built + shows misordering, embeddings become mandatory/critical
+path, measured regression tied to `k=60`, or evidence-backed demand). Un-parking
+needs a new ADR.
+
+Ledger compaction/re-anchor stays **resolved by design** — the ledger is
 append-only JSONL with a retrieval-only budget and a human-only `prune`
 (`docs/DECISIONS/2026-09-25-ledger-append-only-history-prune.md`); nothing
 truncates or rewrites stored entries, so anchors can never be dropped.
-
-Remaining: **RRF tuning** — promote `k=60` and fusion weights to config keys
-(use the `ui.picker` plumbing pattern). Cosmetic; ROADMAP:47.
 
 ## 5. Stale-cursor protocol (P3, blocked)
 

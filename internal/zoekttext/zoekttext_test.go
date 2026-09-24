@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/true-knowledge/tk/internal/zoekttext"
+	"github.com/ayayushsharma/true-knowledge/internal/zoekttext"
 )
 
 // makeGitRepo creates a tiny committed repo for indexing tests.

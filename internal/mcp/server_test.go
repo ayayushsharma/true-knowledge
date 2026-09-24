@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/true-knowledge/tk/internal/memory"
-	"github.com/true-knowledge/tk/internal/zoekttext"
+	"github.com/ayayushsharma/true-knowledge/internal/memory"
+	"github.com/ayayushsharma/true-knowledge/internal/zoekttext"
 )
 
 // serveOne runs a Server over a single NDJSON request line.

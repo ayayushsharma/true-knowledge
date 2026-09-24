@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/true-knowledge/tk/internal/cbmexec"
-	"github.com/true-knowledge/tk/internal/config"
-	"github.com/true-knowledge/tk/internal/paths"
+	"github.com/ayayushsharma/true-knowledge/internal/cbmexec"
+	"github.com/ayayushsharma/true-knowledge/internal/config"
+	"github.com/ayayushsharma/true-knowledge/internal/paths"
 )
 
 func TestTruncateWholeLines(t *testing.T) {

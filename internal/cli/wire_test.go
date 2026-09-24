@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/true-knowledge/tk/internal/paths"
-	"github.com/true-knowledge/tk/internal/trace"
+	"github.com/ayayushsharma/true-knowledge/internal/paths"
+	"github.com/ayayushsharma/true-knowledge/internal/trace"
 )
 
 // TestFinalizeMasksEventSecrets: backend event Detail/Error strings reach

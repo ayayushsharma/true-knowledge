@@ -6,13 +6,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ayayushsharma/true-knowledge/internal/cbmexec"
+	"github.com/ayayushsharma/true-knowledge/internal/gitx"
+	"github.com/ayayushsharma/true-knowledge/internal/mcp"
+	"github.com/ayayushsharma/true-knowledge/internal/store"
+	"github.com/ayayushsharma/true-knowledge/internal/trace"
+	"github.com/ayayushsharma/true-knowledge/internal/zoekttext"
 	"github.com/spf13/cobra"
-	"github.com/true-knowledge/tk/internal/cbmexec"
-	"github.com/true-knowledge/tk/internal/gitx"
-	"github.com/true-knowledge/tk/internal/mcp"
-	"github.com/true-knowledge/tk/internal/store"
-	"github.com/true-knowledge/tk/internal/trace"
-	"github.com/true-knowledge/tk/internal/zoekttext"
 )
 
 // ensureZoektIndex refreshes a project's trigram shards, in-process.

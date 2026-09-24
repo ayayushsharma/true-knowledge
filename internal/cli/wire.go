@@ -6,9 +6,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/ayayushsharma/true-knowledge/internal/memory"
+	"github.com/ayayushsharma/true-knowledge/internal/trace"
 	"github.com/spf13/cobra"
-	"github.com/true-knowledge/tk/internal/memory"
-	"github.com/true-knowledge/tk/internal/trace"
 )
 
 // NewRoot builds the full tk command tree.

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/true-knowledge/tk/internal/cbmexec"
-	"github.com/true-knowledge/tk/internal/memory"
+	"github.com/ayayushsharma/true-knowledge/internal/cbmexec"
+	"github.com/ayayushsharma/true-knowledge/internal/memory"
 )
 
 // isMemoryTool reports whether name is one of tk's in-process memory tools.

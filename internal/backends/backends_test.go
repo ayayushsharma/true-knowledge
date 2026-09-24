@@ -3,7 +3,7 @@ package backends_test
 import (
 	"testing"
 
-	"github.com/true-knowledge/tk/internal/backends"
+	"github.com/ayayushsharma/true-knowledge/internal/backends"
 )
 
 func TestCBMArchiveNames(t *testing.T) {

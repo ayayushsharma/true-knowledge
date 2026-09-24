@@ -6,10 +6,10 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ayayushsharma/true-knowledge/internal/config"
+	"github.com/ayayushsharma/true-knowledge/internal/mcp"
+	"github.com/ayayushsharma/true-knowledge/internal/memory"
 	"github.com/spf13/cobra"
-	"github.com/true-knowledge/tk/internal/config"
-	"github.com/true-knowledge/tk/internal/mcp"
-	"github.com/true-knowledge/tk/internal/memory"
 )
 
 func cmdMCP(g *Globals) *cobra.Command {

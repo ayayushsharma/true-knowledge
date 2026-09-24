@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ayayushsharma/true-knowledge/internal/cbmexec"
+	"github.com/ayayushsharma/true-knowledge/internal/config"
+	"github.com/ayayushsharma/true-knowledge/internal/gitx"
+	"github.com/ayayushsharma/true-knowledge/internal/paths"
+	"github.com/ayayushsharma/true-knowledge/internal/store"
+	"github.com/ayayushsharma/true-knowledge/internal/trace"
 	"github.com/spf13/cobra"
-	"github.com/true-knowledge/tk/internal/cbmexec"
-	"github.com/true-knowledge/tk/internal/config"
-	"github.com/true-knowledge/tk/internal/gitx"
-	"github.com/true-knowledge/tk/internal/paths"
-	"github.com/true-knowledge/tk/internal/store"
-	"github.com/true-knowledge/tk/internal/trace"
 )
 
 // currentCtx is the invocation under trace. Set by load, read by finalize.

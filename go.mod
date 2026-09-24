@@ -1,4 +1,4 @@
-module github.com/true-knowledge/tk
+module github.com/ayayushsharma/true-knowledge
 
 go 1.26.0
 

@@ -1,0 +1,10 @@
+[env]
+_.path = "dist"
+
+[tasks.build]
+description = "Build the tk binary into ./dist"
+run = "mkdir -p dist && go build -o dist/tk ./cmd/tk"
+
+[tasks.clean]
+description = "Remove the built binary"
+run = "rm -f ./dist/tk"

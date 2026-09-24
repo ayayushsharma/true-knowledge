@@ -1,5 +1,5 @@
-# built binary (48MB+; rebuild with: go build -o tk ./cmd/tk)
-/tk
+# built binary (48MB+; rebuild with: mise run build)
+/dist/
 
 # Go build cache / test artifacts
 *.test

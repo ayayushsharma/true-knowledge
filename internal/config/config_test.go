@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/true-knowledge/tk/internal/config"
+	"github.com/ayayushsharma/true-knowledge/internal/config"
 )
 
 func TestDefaultsValidate(t *testing.T) {

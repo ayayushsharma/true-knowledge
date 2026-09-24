@@ -16,9 +16,9 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/true-knowledge/tk/internal/cbmresolve"
-	"github.com/true-knowledge/tk/internal/config"
-	"github.com/true-knowledge/tk/internal/paths"
+	"github.com/ayayushsharma/true-knowledge/internal/cbmresolve"
+	"github.com/ayayushsharma/true-knowledge/internal/config"
+	"github.com/ayayushsharma/true-knowledge/internal/paths"
 )
 
 // ErrNotFound is returned when the CBM binary is missing (fail-open upstream).

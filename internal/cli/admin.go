@@ -10,10 +10,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ayayushsharma/true-knowledge/internal/backends"
+	"github.com/ayayushsharma/true-knowledge/internal/config"
+	"github.com/ayayushsharma/true-knowledge/internal/installer"
 	"github.com/spf13/cobra"
-	"github.com/true-knowledge/tk/internal/backends"
-	"github.com/true-knowledge/tk/internal/config"
-	"github.com/true-knowledge/tk/internal/installer"
 )
 
 var backendVersionRe = regexp.MustCompile(`^(\d+\.\d+\.\d+|[0-9a-f]{7,40})$`)

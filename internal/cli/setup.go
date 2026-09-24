@@ -8,12 +8,12 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/ayayushsharma/true-knowledge/internal/backends"
+	"github.com/ayayushsharma/true-knowledge/internal/config"
+	"github.com/ayayushsharma/true-knowledge/internal/installer"
+	"github.com/ayayushsharma/true-knowledge/internal/mcp"
+	"github.com/ayayushsharma/true-knowledge/internal/store"
 	"github.com/spf13/cobra"
-	"github.com/true-knowledge/tk/internal/backends"
-	"github.com/true-knowledge/tk/internal/config"
-	"github.com/true-knowledge/tk/internal/installer"
-	"github.com/true-knowledge/tk/internal/mcp"
-	"github.com/true-knowledge/tk/internal/store"
 )
 
 // mcpSnippet renders the manual-paste MCP client snippet shared by

@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ayayushsharma/true-knowledge/internal/cbmexec"
+	"github.com/ayayushsharma/true-knowledge/internal/config"
+	"github.com/ayayushsharma/true-knowledge/internal/gitx"
+	"github.com/ayayushsharma/true-knowledge/internal/store"
 	"github.com/spf13/cobra"
-	"github.com/true-knowledge/tk/internal/cbmexec"
-	"github.com/true-knowledge/tk/internal/config"
-	"github.com/true-knowledge/tk/internal/gitx"
-	"github.com/true-knowledge/tk/internal/store"
 )
 
 func cmdInit(g *Globals) *cobra.Command {

@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/true-knowledge/tk/internal/cbmexec"
-	"github.com/true-knowledge/tk/internal/memory"
-	"github.com/true-knowledge/tk/internal/trace"
+	"github.com/ayayushsharma/true-knowledge/internal/cbmexec"
+	"github.com/ayayushsharma/true-knowledge/internal/memory"
+	"github.com/ayayushsharma/true-knowledge/internal/trace"
 )
 
 type rpcReq struct {

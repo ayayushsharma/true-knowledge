@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/true-knowledge/tk/internal/backends"
-	"github.com/true-knowledge/tk/internal/installer"
+	"github.com/ayayushsharma/true-knowledge/internal/backends"
+	"github.com/ayayushsharma/true-knowledge/internal/installer"
 )
 
 // fakeRelease serves checksums.txt + a tar.gz containing one executable script.

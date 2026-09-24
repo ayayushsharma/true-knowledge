@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/true-knowledge/tk/internal/backends"
+	"github.com/ayayushsharma/true-knowledge/internal/backends"
 )
 
 var httpClient = &http.Client{Timeout: 5 * time.Minute}

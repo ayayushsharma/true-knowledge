@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/true-knowledge/tk/internal/store"
+	"github.com/ayayushsharma/true-knowledge/internal/store"
 )
 
 func TestNormalize(t *testing.T) {

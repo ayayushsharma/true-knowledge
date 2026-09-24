@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/ayayushsharma/true-knowledge/internal/cbmexec"
 	"github.com/spf13/cobra"
-	"github.com/true-knowledge/tk/internal/cbmexec"
 )
 
 // coverageVerdict probes whole-project coverage (scopes=.) via CBM.

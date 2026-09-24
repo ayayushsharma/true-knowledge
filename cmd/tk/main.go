@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/true-knowledge/tk/internal/cli"
+	"github.com/ayayushsharma/true-knowledge/internal/cli"
 )
 
 func main() {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/true-knowledge/tk/internal/zoekttext"
+	"github.com/ayayushsharma/true-knowledge/internal/zoekttext"
 )
 
 // QueryZoekt runs one trigram query against a project's shards and returns

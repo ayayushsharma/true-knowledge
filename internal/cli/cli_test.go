@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/true-knowledge/tk/internal/mcp"
-	"github.com/true-knowledge/tk/internal/store"
+	"github.com/ayayushsharma/true-knowledge/internal/mcp"
+	"github.com/ayayushsharma/true-knowledge/internal/store"
 )
 
 func testCtx(reg store.Registry) *Ctx {

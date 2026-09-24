@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/true-knowledge/tk/internal/paths"
+	"github.com/ayayushsharma/true-knowledge/internal/paths"
 )
 
 func TestResolveTKHomeIsolation(t *testing.T) {

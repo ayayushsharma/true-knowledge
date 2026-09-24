@@ -63,14 +63,14 @@ projB graph ──┼→ find X     projB graph ──┼→ find X → coverage
 projC graph ──┘  one repo   projC graph ──┘   per-repo results across cohort
 ```
 
-## 2. Ops (P2) — resource surfacing; trajectory + delivery parked
+## 2. Ops (P2) — fully parked (trajectory + resource surfacing + delivery)
 
 ```
 state/
   logs/tk.log         per-invocation trace        (exists)
   trajectory.ndjson   session/state-transition log (PARKED — trajectory ADR)
 status --json         freshness                    (exists)
-                      index limits                (missing)
+                      index limits                (PARKED — resource-surfacing ADR)
 delivery              dist/tk                     (exists)
                       brew/nix/npm + .zst cadence (PARKED — delivery ADR)
 ```
@@ -82,9 +82,17 @@ delivery              dist/tk                     (exists)
   cost — the schema direction (one JSONL record per transition, not
   invocation; trace's safety contract) is recorded for a mechanical re-open.
   Deliberately OUT of the evals harness (`docs/DECISIONS/2026-09-24-evals-harness.md:47`).
-- **Resource-limit surfacing**: CBM caps (`index_max_files/mb`, 512MiB,
-  fail-whole-preserve-serving) exist (INDEXING.md:51); tk exposes none —
-  `status --json` and search envelopes should surface caps/degradation.
+- **Resource-limit surfacing — PARKED INDEFINITELY** per
+  `docs/DECISIONS/2026-09-25-resource-limit-surfacing-parked-indefinitely.md`:
+  surfacing CBM caps (`index_max_files`/`index_max_source_mb`, default `off`,
+  512MiB per-file, fail-whole-preserve-serving) in `status --json` / search
+  envelopes is parked. Verified upstream: **query tools never surface caps** —
+  `index_max_*` appears nowhere in MCP server code; only the `index_repository`
+  error envelope carries limit values; `check_index_coverage`'s
+  `not_indexed`/`skipped` counts are the cap-visible signal today. Revisit on a
+  trigger (a capped repo causing an unexplained false-absence report, caps
+  becoming non-default upstream, systematic cap use at scale, or cap state
+  becoming observable for free). Un-parking needs a new ADR.
 - **Delivery — PARKED INDEFINITELY** per `docs/DECISIONS/2026-09-25-delivery-parked-download-scripts.md`:
   brew/nix/npm formulas and the team `.zst` ship cadence are deferred
   (revisit only on package-manager/tabular demand). The recorded future path,

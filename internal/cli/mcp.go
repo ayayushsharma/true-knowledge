@@ -124,6 +124,7 @@ func (c *Ctx) memoryStore(ctx context.Context) (*memory.Store, error) {
 		Facts:          facts,
 		Notes:          notes,
 		Ledger:         ledger,
+		LedgerEnabled:  c.Cfg.Ledger.Enabled,
 		LedgerBudget:   c.Cfg.Budgets.LedgerChars,
 		NotesTocBudget: c.Cfg.Budgets.NotesTocChars,
 	}, nil

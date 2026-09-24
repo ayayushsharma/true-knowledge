@@ -318,6 +318,12 @@ if $TK_BIN ledger update demo goal "should fail when disabled" >/dev/null 2>&1; 
 else
   pass=$((pass+1)); printf 'ok   ledger-disabled-gate\n'
 fi
+# the gate must hold on the MCP write path with the same message (parity)
+mcpdis=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ledger_update","arguments":{"project":"demo","key":"goal","text":"must fail while disabled"}}}' | TK_HOME="$TK_HOME" $TK_BIN mcp --tool-profile memory 2>/dev/null)
+case "$mcpdis" in
+  *'"error"'*'ledger is disabled'*) pass=$((pass+1)); printf 'ok   mcp-ledger-disabled-gate\n';;
+  *) fail=$((fail+1)); printf 'FAIL mcp-ledger-disabled-gate\n  %s\n' "$mcpdis";;
+esac
 check ledger-reenable 0 $TK_BIN config set ledger.enabled true
 check ledger-budget-reset 0 $TK_BIN config set budgets.ledger_chars 1500
 

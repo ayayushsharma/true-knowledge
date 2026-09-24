@@ -14,6 +14,7 @@ type Store struct {
 	Facts          *Facts
 	Notes          *Notes
 	Ledger         *Ledger
+	LedgerEnabled  bool
 	LedgerBudget   int
 	NotesTocBudget int
 }
@@ -82,7 +83,12 @@ func (s *Store) LedgerHistory(ctx context.Context, project string) ([]LedgerEntr
 }
 
 // LedgerAppend adds one immutable ledger entry verbatim (no budget applied on
-// the write path).
+// the write path). It honors the ledger.enabled gate exactly like the CLI:
+// writes fail with ErrLedgerDisabled while reads (LedgerGet/LedgerHistory)
+// stay open.
 func (s *Store) LedgerAppend(ctx context.Context, project, key, value string) (LedgerEntry, error) {
+	if !s.LedgerEnabled {
+		return LedgerEntry{}, ErrLedgerDisabled
+	}
 	return s.Ledger.Append(project, key, value)
 }

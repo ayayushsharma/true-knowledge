@@ -50,7 +50,7 @@ func ledgerUpdate(g *Globals) *cobra.Command {
 			}
 			project, key, value := args[0], args[1], args[2]
 			if !ctx.Cfg.Ledger.Enabled {
-				return fail("ledger is disabled (tk config set ledger.enabled true)")
+				return fail("%v", memory.ErrLedgerDisabled)
 			}
 			l, err := openLedger(ctx)
 			if err != nil {

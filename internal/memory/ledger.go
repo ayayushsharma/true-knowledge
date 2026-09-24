@@ -30,6 +30,11 @@ const (
 // deterministic.
 var LedgerKeys = []string{KeyGoal, KeyNext, KeyDone, KeyDecisions, KeyOpenQuestions}
 
+// ErrLedgerDisabled is returned by the ledger write path when
+// ledger.enabled is false. Shared by the CLI and MCP surfaces so both gate
+// with the exact same message.
+var ErrLedgerDisabled = errors.New("ledger is disabled (tk config set ledger.enabled true)")
+
 // ValidLedgerKey reports whether key is one of the fixed five.
 func ValidLedgerKey(key string) bool {
 	for _, k := range LedgerKeys {

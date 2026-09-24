@@ -284,7 +284,7 @@ func openTestMemStore(t *testing.T) *memory.Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = notes.Close() })
-	return &memory.Store{Facts: facts, Notes: notes, Ledger: ldg, LedgerBudget: 1500, NotesTocBudget: 700}
+	return &memory.Store{Facts: facts, Notes: notes, Ledger: ldg, LedgerEnabled: true, LedgerBudget: 1500, NotesTocBudget: 700}
 }
 
 // TestMemoryToolsWorkWithoutCBM: memory-profile tools must succeed even when
@@ -344,6 +344,26 @@ func TestMemoryToolsWorkWithoutCBM(t *testing.T) {
 	resp = serveOne(t, s, `{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"ledger_update","arguments":{"project":"demo","key":"bogus","text":"x"}}}`)
 	if resp["error"] == nil {
 		t.Fatalf("unknown key must be rejected")
+	}
+}
+
+// TestLedgerEnabledGateMatchesCLI: the MCP write path must honor
+// ledger.enabled exactly like `tk ledger update` — writes fail, reads stay
+// open.
+func TestLedgerEnabledGateMatchesCLI(t *testing.T) {
+	s := &Server{Profile: ProfileMemory, Budget: 6000, Mem: openTestMemStore(t)}
+	s.Mem.LedgerEnabled = false
+	resp := serveOne(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ledger_update","arguments":{"project":"demo","key":"goal","text":"must be rejected"}}}`)
+	errObj, ok := resp["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected gate error, got %v", resp)
+	}
+	if msg := errObj["message"].(string); msg != memory.ErrLedgerDisabled.Error() {
+		t.Fatalf("message = %q, want %q", msg, memory.ErrLedgerDisabled)
+	}
+	resp = serveOne(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"ledger_get","arguments":{"project":"demo"}}}`)
+	if text := responseText(t, resp); !strings.Contains(text, "is empty") {
+		t.Fatalf("ledger_get must stay open when disabled: %q", text)
 	}
 }
 

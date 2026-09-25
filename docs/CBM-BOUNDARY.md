@@ -1,8 +1,8 @@
 ---
 title: CBM boundary — what tk never does
 status: authoritative
-date: 2026-09-24
-supersedes: [compatible-implementation-spec.md §5.2, §5.3, §12, §13, docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (envelope-first wrapper), docs/DECISIONS/2026-09-24-mcp-inputschema-spec.md (tools/list advertises inputSchema), docs/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md (mcp log redaction + profile gate)]
+date: 2026-09-26
+supersedes: [compatible-implementation-spec.md §5.2, §5.3, §12, §13, docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (envelope-first wrapper), docs/DECISIONS/2026-09-24-mcp-inputschema-spec.md (tools/list advertises inputSchema), docs/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md (mcp log redaction + profile gate), docs/DECISIONS/2026-09-26-structured-cbm-payloads.md (structured CBM passthrough; two read paths over one spawn) ]
 superseded-by: null
 ---
 
@@ -27,7 +27,8 @@ CBM owns: parsing, graph, store, daemon, watcher, install matrix, UI, artifacts.
 
 * XDG `true-knowledge/` path resolution (see `PATHS-CONFIG.md`).
 * `config.json` source of truth → propagate via env (`CBM_CACHE_DIR`, `CBM_RUNTIME_DIR`, `CBM_ALLOWED_ROOT`) + `cbm config set`.
-* Single spawn wrapper `internal/cbmexec`: `codebase-memory-mcp cli <tool> --args-file <json>` (raw-JSON argv is deprecated upstream) + env + budget truncation + fail-open (`tk install` hint, never block agent). Reads prefer `RunJSON` (`cli --json` envelope unwrapped to text, legacy fallback on any failure). Project required — tk never sends `""`.
+* Single spawn wrapper `internal/cbmexec`: `codebase-memory-mcp cli <tool> --args-file <json>` (raw-JSON argv is deprecated upstream) + env + budget truncation + fail-open (`tk install` hint, never block agent). Two read paths, deliberately (structured-payloads ADR): humans use `RunJSON` (`cli --json` envelope unwrapped to **text**, legacy fallback on any failure), `--json` callers use `RunStructured` (injects `format:"json"`, returns the engine's `structuredContent` **verbatim** under `data`). tk never re-models CBM's schema, and never slices JSON to fit a budget — `BudgetResult` drops whole rows and marks what it dropped. Project required — tk never sends `""`.
+* Two tk-owned assertions about a payload tk merely forwards: an absence is only claimed when an engine counter says zero (nil/unknown is never "empty"), and an absence from a gated read carries `check_index_coverage`'s verdict. Both exist so a negative answer cannot be mistaken for a fact about the code.
 * `tk mcp` stdio proxy: `--tool-profile scout(11)|analysis(14)|minimal(3)` filter, snippet + `source_search`. `analysis` adds `query_graph`, `manage_adr` passthrough, `validate`. `index_repository` gated behind explicit approval. `tools/list` advertises every tool with an MCP-spec `inputSchema` (JSON Schema, `type: object` + `properties`/`required`). Profile enforcement is the first dispatch gate — hidden tools are `-32601`, never silently callable. Per-call tk.log records redact secret-shaped `params` (broad, whole-value) and keep output on the narrow precision mask. CBM tools' args are validated server-side by CBM — tk is a thin pass-through that never re-validates argument shapes or values (it only gates profiles and envelope-wrap errors); tk-owned memory tools validate their own args in-process.
 * `tk daemon status|stop` is CLI-ONLY: model-facing MCP must never control daemon lifecycle (stopping the shared daemon would strand other agents' watchers). Exists for the documented `watcher_enabled`-flip flow.
 * Cobra completion + `--json` + `--help` for human use without agents.

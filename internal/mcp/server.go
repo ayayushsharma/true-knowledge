@@ -6,6 +6,7 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -219,7 +220,10 @@ func tools(profile string) []toolDef {
 			})},
 			toolDef{"manage_adr", "Persist architectural decisions alongside the graph (passthrough)", obj(nil, map[string]any{
 				"project": projectProp(),
-				"mode":    enumProp([]string{"get", "update", "set_sections", "sections", "list", "delete"}, "ADR operation"),
+				// The engine's own vocabulary, in its order. `list` and `delete`
+				// are not modes: an agent offered them gets a validation error
+				// back from a tool whose schema promised them.
+				"mode": enumProp([]string{"outline", "get", "sections", "set_sections", "update"}, "ADR operation"),
 			})},
 			toolDef{"validate", "Symbol existence + near-miss candidates, coverage-annotated", obj([]string{"project", "symbol"}, map[string]any{
 				"project": projectProp(),
@@ -249,6 +253,72 @@ var toolToCBM = map[string]string{
 // *cbmexec.Runner; interface keeps tests free of a real binary.
 type cbmRunner interface {
 	RunJSON(ctx context.Context, tool string, payload map[string]any) (string, error)
+	RunStructured(ctx context.Context, tool string, payload map[string]any) (cbmexec.Result, error)
+}
+
+// mcpProtocols are the revisions tk answers to, newest first. It answers to
+// the revision a client asks for when it knows that revision, and to its own
+// newest when it does not — which is what the handshake is for.
+var mcpProtocols = []string{"2025-06-18", "2025-03-26", "2024-11-05"}
+
+// mcpStructuredSince is the revision that introduced structuredContent. A
+// client older than this never receives the field: it would be an unknown
+// member of the result object, and sending it would imply an answer shape
+// the client has no way to read.
+const mcpStructuredSince = "2025-06-18"
+
+// negotiateProtocol resolves the handshake. An unknown request is answered
+// with the newest revision tk speaks rather than refused, so a client newer
+// than tk still gets a session.
+func negotiateProtocol(requested string) string {
+	for _, p := range mcpProtocols {
+		if p == requested {
+			return p
+		}
+	}
+	return mcpProtocols[0]
+}
+
+// protocolRank is a revision's position in mcpProtocols, or -1 if unknown.
+func protocolRank(v string) int {
+	for i, p := range mcpProtocols {
+		if p == v {
+			return i
+		}
+	}
+	return -1
+}
+
+// structuredFor reports whether a client on negotiated reads structuredContent.
+// mcpProtocols is newest-first, so "new enough" means "ranks at or below the
+// revision that introduced it" — stated that way rather than by comparing
+// date strings, so adding a revision later cannot silently invert it.
+func structuredFor(negotiated string) bool {
+	got, since := protocolRank(negotiated), protocolRank(mcpStructuredSince)
+	return got >= 0 && since >= 0 && got <= since
+}
+
+// structuredCBMTools are the read tools tk answers with the engine's payload
+// rather than a rendered table. Every one of them accepts format:"json" in
+// CBM 0.11.0 and then fills the reply's structuredContent with real typed
+// data: cols/rows tables, integer counters, hint strings.
+//
+// manage_adr is deliberately absent. It also writes, and a write is reported
+// in prose — a caller needs to read "updated" or the new revision id, not
+// parse a payload that may or may not exist depending on the mode.
+var structuredCBMTools = map[string]bool{
+	"search_graph":         true,
+	"query_graph":          true,
+	"trace_path":           true,
+	"search_code":          true,
+	"get_code_snippet":     true,
+	"get_file_outline":     true,
+	"get_graph_schema":     true,
+	"get_architecture":     true,
+	"list_projects":        true,
+	"index_status":         true,
+	"check_index_coverage": true,
+	"detect_changes":       true,
 }
 
 // Server proxies tool calls to `cbm cli`, except source_search (zoekt library).
@@ -271,6 +341,11 @@ type Server struct {
 	// ProjectRoot maps project -> repo root for live snippet re-slicing of
 	// source_search hits (nil = return shard bytes as-is).
 	ProjectRoot func(project string) string
+	// proto is the negotiated protocol revision, set by initialize. It is
+	// owned by the request loop, which handles one message at a time, so it
+	// needs no lock; it is empty until a client initializes, and an
+	// uninitialized client is served the oldest dialect.
+	proto string
 	// In/Out override stdio (tests). Nil = os.Stdin/os.Stdout.
 	In   io.Reader
 	OutW io.Writer
@@ -324,8 +399,13 @@ func (s *Server) handle(ctx context.Context, req rpcReq) rpcResp {
 	id := req.ID
 	switch req.Method {
 	case "initialize":
+		var p struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		}
+		_ = json.Unmarshal(req.Params, &p)
+		s.proto = negotiateProtocol(p.ProtocolVersion)
 		return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{
-			"protocolVersion": "2024-11-05",
+			"protocolVersion": s.proto,
 			"serverInfo":      map[string]any{"name": "tk", "version": "0.1.0", "profile": s.profile()},
 			"capabilities":    map[string]any{"tools": map[string]any{}},
 		}}
@@ -392,6 +472,11 @@ func (s *Server) callTool(ctx context.Context, id any, name string, args map[str
 			args["scopes"] = []string{"."} // whole-project probe
 		}
 	}
+	if structuredCBMTools[cbmTool] {
+		return s.callStructured(ctx, id, cbmTool, args)
+	}
+	// Writes and admin passthroughs answer in prose: there is no stable
+	// payload shape to hand a parser, only an outcome to read.
 	out, err := s.Run.RunJSON(ctx, cbmTool, args)
 	if err != nil {
 		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, err.Error()}}
@@ -409,6 +494,85 @@ func (s *Server) callTool(ctx context.Context, id any, name string, args map[str
 	return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{
 		"content": []map[string]any{{"type": "text", "text": out}},
 	}}
+}
+
+// callStructured answers a read tool with the engine's payload.
+//
+// One answer, two encodings. structuredContent is the field a 2025-06-18+
+// client reads; the text block carries the same bytes compacted, because
+// every client reads the text block, and a client that cannot see
+// structuredContent must not be handed a different answer than one that can.
+// The budget is spent once, on the payload, so the two encodings cannot
+// disagree about what was dropped.
+func (s *Server) callStructured(ctx context.Context, id any, tool string, args map[string]any) rpcResp {
+	res, err := s.Run.RunStructured(ctx, tool, args)
+	if err != nil {
+		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, err.Error()}}
+	}
+	extra := map[string]any{}
+	if res.Data == nil {
+		// An engine older than format:"json". The text block is the only
+		// payload there is, so the reply stays exactly as it was — and the
+		// coverage gate still runs, because silence about emptiness is not
+		// evidence of it.
+		out := res.Text
+		if isAbsenceTool(tool) {
+			if proj, ok := args["project"].(string); ok && proj != "" && cbmexec.LooksEmpty(out) {
+				if out, err = s.annotateAbsence(ctx, proj, out); err != nil {
+					return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, err.Error()}}
+				}
+			}
+		}
+		return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{
+			"content": []map[string]any{{"type": "text", "text": cbmexec.Truncate(out, s.Budget)}},
+		}}
+	}
+	data := cbmexec.BudgetResult(res.Data, s.Budget)
+	if isAbsenceTool(tool) {
+		if proj, ok := args["project"].(string); ok && proj != "" && cbmexec.LooksEmptyData(res.Data) {
+			cov, cerr := s.coverageData(ctx, proj)
+			if cerr != nil {
+				return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, "no results and coverage check failed: " + cerr.Error() + " — absence unverified"}}
+			}
+			// A sibling of content, not a member of structuredContent: the
+			// engine's payload is passed through untouched, and the evidence
+			// for an absence claim is tk's to add.
+			extra["coverage"] = cov
+		}
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, data); err != nil {
+		compact.Reset()
+		compact.WriteString(res.Text)
+	}
+	result := map[string]any{
+		"content": []map[string]any{{"type": "text", "text": compact.String()}},
+	}
+	if structuredFor(s.proto) {
+		result["structuredContent"] = data
+	}
+	for k, v := range extra {
+		result[k] = v
+	}
+	return rpcResp{JSONRPC: "2.0", ID: id, Result: result}
+}
+
+// coverageData is the structured twin of coverageVerdict: the absence gate
+// hands back the engine's coverage payload so an agent can gate on the same
+// fields tk reads, instead of on a rendered verdict string.
+func (s *Server) coverageData(ctx context.Context, project string) (any, error) {
+	res, err := s.Run.RunStructured(ctx, "check_index_coverage", map[string]any{"project": project, "scopes": []string{"."}})
+	if err != nil {
+		return nil, err
+	}
+	if res.Data != nil {
+		return json.RawMessage(res.Data), nil
+	}
+	verdict, err := s.coverageVerdict(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	return verdict, nil
 }
 
 // hasTool reports whether name is exposed in the active profile.
@@ -482,11 +646,15 @@ func (s *Server) callValidate(ctx context.Context, id any, args map[string]any) 
 	if v, ok := args["limit"].(float64); ok && v > 0 {
 		limit = int(v)
 	}
-	hit, err := s.Run.RunJSON(ctx, "search_graph", map[string]any{"name_pattern": sym, "project": project, "limit": limit})
+	// The same lookup the CLI makes, on the same tree, for the same reason:
+	// the engine searches the leaf name, so a qualified symbol is not in the
+	// reply to be found, and a substring test would match the project row of
+	// a reply that found nothing. One call, judged on the row's first column.
+	hit, err := s.Run.RunJSON(ctx, "search_graph", map[string]any{"name_pattern": cbmexec.LeafName(sym), "project": project, "limit": limit})
 	if err != nil {
 		goto coverage
 	}
-	if !cbmexec.LooksEmpty(hit) && strings.Contains(strings.ToLower(hit), strings.ToLower(sym)) {
+	if cbmexec.MatchSymbol(cbmexec.QualifiedNamesFromText(hit), sym) != "" {
 		return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{
 			"content": []map[string]any{{"type": "text", "text": cbmexec.Truncate("valid: "+sym+" found\n"+hit, s.Budget)}},
 		}}
@@ -498,7 +666,7 @@ coverage:
 	}
 	cands := "(no candidates)"
 	if toks := cbmexec.NearMissTokens(sym); len(toks) > 0 {
-		if near, nerr := s.Run.RunJSON(ctx, "search_graph", map[string]any{"name_pattern": toks[0], "project": project, "limit": limit}); nerr == nil && !cbmexec.LooksEmpty(near) {
+		if near, nerr := s.Run.RunJSON(ctx, "search_graph", map[string]any{"name_pattern": cbmexec.LeafName(toks[0]), "project": project, "limit": limit}); nerr == nil && !cbmexec.LooksEmpty(near) {
 			cands = near
 		}
 	}

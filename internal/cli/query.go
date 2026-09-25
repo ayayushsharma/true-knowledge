@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -102,6 +103,80 @@ func keywords(q string) []string {
 	return out
 }
 
+// cbmReadArgs is one CBM read and how to render it.
+type cbmReadArgs struct {
+	proj    string
+	tool    string
+	payload map[string]any
+	kind    string         // budget kind: "" default, "arch" for the architecture brief
+	fields  map[string]any // extra --json fields (project is added here)
+	gate    bool           // prove emptiness against whole-project coverage
+}
+
+// cbmRead is the single exit for every CBM read command, so the dual path is
+// decided in one place: a --json caller gets the engine's own payload, and
+// every other caller keeps the rendered table it has always been given.
+//
+// gate is per command on purpose. It changes what a human reads — an empty
+// reply is annotated with a coverage verdict — so a tool that never makes
+// negative claims is left alone. On the JSON face there is no text to append
+// to, so the gate becomes a `coverage` field instead.
+func (c *Ctx) cbmRead(cmd *cobra.Command, a cbmReadArgs) error {
+	if a.fields == nil {
+		a.fields = map[string]any{}
+	}
+	// Before the branch, not after: both faces carry the same envelope
+	// metadata. A --json caller otherwise cannot tell which project an answer
+	// is about without re-reading its own argv, and for payloads that do not
+	// name the project themselves (search_code, get_architecture) there is
+	// nothing left to infer it from.
+	a.fields["project"] = a.proj
+	if c.G.JSON {
+		res, err := c.cbmCallStructured(cmd.Context(), a.tool, a.payload)
+		if err != nil {
+			return fail("%v", err)
+		}
+		if a.gate && c.emptyResult(res) {
+			cov, err := c.coverageData(cmd.Context(), a.proj)
+			if err != nil {
+				return fail("no results and coverage check failed: %v — absence unverified", err)
+			}
+			a.fields["coverage"] = cov
+		}
+		return c.outDataFresh(cmd, a.proj, res, a.fields)
+	}
+	out, err := c.cbmCallJSON(cmd.Context(), a.tool, a.payload)
+	if err != nil {
+		return fail("%v", err)
+	}
+	if a.gate && cbmexec.LooksEmpty(out) {
+		if out, err = annotateAbsence(cmd.Context(), c, a.proj, out); err != nil {
+			return err
+		}
+	}
+	return c.outFresh(cmd, a.proj, cbmexec.Truncate(out, c.budget(a.kind)), a.fields)
+}
+
+// coverageData is the structured twin of coverageVerdict: on the JSON face
+// the absence gate hands back the engine's own coverage payload, so an agent
+// can gate on the same fields tk reads instead of on a rendered verdict
+// string. An engine without format support degrades to the verdict text
+// rather than leaving the field empty.
+func (c *Ctx) coverageData(ctx context.Context, proj string) (any, error) {
+	res, err := c.cbmCallStructured(ctx, "check_index_coverage", map[string]any{"project": proj, "scopes": []string{"."}})
+	if err != nil {
+		return nil, err
+	}
+	if res.Data != nil {
+		return json.RawMessage(res.Data), nil
+	}
+	verdict, err := coverageVerdict(ctx, c, proj)
+	if err != nil {
+		return nil, err
+	}
+	return verdict, nil
+}
+
 func cmdFind(g *Globals) *cobra.Command {
 	var project, query, label string
 	var limit int
@@ -143,18 +218,10 @@ func cmdFind(g *Globals) *cobra.Command {
 			if label != "" {
 				payload["label"] = label
 			}
-			out, err := ctx.cbmCallJSON(cmd.Context(), tool, payload)
-			if err != nil {
-				return fail("%v", err)
-			}
-			if cbmexec.LooksEmpty(out) {
-				out, err = annotateAbsence(cmd.Context(), ctx, proj, out)
-				if err != nil {
-					return err
-				}
-			}
-			out = cbmexec.Truncate(out, ctx.budget(""))
-			return ctx.outFresh(cmd, proj, out, map[string]any{"route": tool, "project": proj})
+			return ctx.cbmRead(cmd, cbmReadArgs{
+				proj: proj, tool: tool, payload: payload, gate: true,
+				fields: map[string]any{"route": tool},
+			})
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
@@ -187,6 +254,27 @@ func cmdExplain(g *Globals) *cobra.Command {
 			if _, _, err := ctx.needCBM(cmd.Context()); err != nil {
 				return err
 			}
+			if ctx.G.JSON {
+				// explain answers one question with two calls, so the JSON
+				// face is two engine payloads under their own keys. Joining
+				// them into one string would hand a parser prose where it
+				// expects data, which is the thing this change exists to end.
+				snip, err := ctx.cbmCallStructured(cmd.Context(), "get_code_snippet", map[string]any{"qualified_name": sym, "project": proj})
+				if err != nil {
+					return fail("%v", err)
+				}
+				data := map[string]any{"definition": payloadOf(snip)}
+				tr, terr := tracePathStructured(cmd.Context(), ctx, proj, sym, "both", 1)
+				if terr != nil {
+					// The text face tolerates a dead traversal and says so
+					// inline; the JSON face says it with a field.
+					data["traversal"] = nil
+					data["traversal_error"] = firstLine(terr.Error())
+				} else {
+					data["traversal"] = payloadOf(tr)
+				}
+				return ctx.outEnvelope(cmd, proj, data, map[string]any{"symbol": sym, "project": proj})
+			}
 			snip, err := ctx.cbmCallJSON(cmd.Context(), "get_code_snippet", map[string]any{"qualified_name": sym, "project": proj})
 			if err != nil {
 				return fail("%v", err)
@@ -207,13 +295,31 @@ func cmdExplain(g *Globals) *cobra.Command {
 	return c
 }
 
-// tracePath is the single trace_path spawn shared by `trace` and `explain`
-// (and nothing else calls trace_path), so the two surfaces can never drift
-// in payload shape. direction is inbound|outbound|both; depth is 1-5.
+// tracePayload is the one trace_path argument set in the product, shared by
+// `trace` and `explain` on both faces, so the two surfaces can never drift in
+// payload shape. direction is inbound|outbound|both; depth is 1-5.
+func tracePayload(proj, sym, direction string, depth int) map[string]any {
+	return map[string]any{"project": proj, "function_name": sym, "direction": direction, "depth": depth}
+}
+
+// tracePath is the rendered-tree spawn.
 func tracePath(ctx context.Context, c *Ctx, proj, sym, direction string, depth int) (string, error) {
-	return c.cbmCallJSON(ctx, "trace_path", map[string]any{
-		"project": proj, "function_name": sym, "direction": direction, "depth": depth,
-	})
+	return c.cbmCallJSON(ctx, "trace_path", tracePayload(proj, sym, direction, depth))
+}
+
+// tracePathStructured is the same call asking for the engine's payload.
+func tracePathStructured(ctx context.Context, c *Ctx, proj, sym, direction string, depth int) (cbmexec.Result, error) {
+	return c.cbmCallStructured(ctx, "trace_path", tracePayload(proj, sym, direction, depth))
+}
+
+// payloadOf is one composite key's worth of engine output. On an engine that
+// predates format:"json" it degrades to the rendered text, because a
+// composite that returns null where a value belongs helps nobody.
+func payloadOf(res cbmexec.Result) any {
+	if res.Data != nil {
+		return json.RawMessage(res.Data)
+	}
+	return res.Text
 }
 
 // traceDirections and the traceDepth bounds mirror the engine's own
@@ -277,23 +383,16 @@ func cmdTrace(g *Globals) *cobra.Command {
 			if _, _, err := ctx.needCBM(cmd.Context()); err != nil {
 				return err
 			}
-			out, err := tracePath(cmd.Context(), ctx, proj, sym, direction, depth)
-			if err != nil {
-				return fail("%v", err)
-			}
 			// Zero callers/callees is a negative claim ("nothing calls X"), and
 			// the engine's usual cause is a name-resolution miss — so an empty
 			// traversal must prove itself against whole-project coverage before
 			// it is reported. Same rule the search tools follow on both surfaces.
-			if cbmexec.LooksEmpty(out) {
-				var aerr error
-				out, aerr = annotateAbsence(cmd.Context(), ctx, proj, out)
-				if aerr != nil {
-					return aerr
-				}
-			}
-			return ctx.outFresh(cmd, proj, cbmexec.Truncate(out, ctx.budget("")), map[string]any{
-				"symbol": sym, "project": proj, "direction": direction, "depth": depth,
+			return ctx.cbmRead(cmd, cbmReadArgs{
+				proj:    proj,
+				tool:    "trace_path",
+				payload: tracePayload(proj, sym, direction, depth),
+				gate:    true,
+				fields:  map[string]any{"symbol": sym, "direction": direction, "depth": depth},
 			})
 		},
 	}
@@ -333,18 +432,12 @@ func cmdGrep(g *Globals) *cobra.Command {
 			if _, _, err := ctx.needCBM(cmd.Context()); err != nil {
 				return err
 			}
-			out, err := ctx.cbmCallJSON(cmd.Context(), "search_code", map[string]any{"pattern": pat, "project": proj, "file_pattern": files, "limit": limit, "regex": isRegex})
-			if err != nil {
-				return fail("%v", err)
-			}
-			if cbmexec.LooksEmpty(out) {
-				var aerr error
-				out, aerr = annotateAbsence(cmd.Context(), ctx, proj, out)
-				if aerr != nil {
-					return aerr
-				}
-			}
-			return ctx.outFresh(cmd, proj, cbmexec.Truncate(out, ctx.budget("")), map[string]any{"project": proj})
+			return ctx.cbmRead(cmd, cbmReadArgs{
+				proj:    proj,
+				tool:    "search_code",
+				payload: map[string]any{"pattern": pat, "project": proj, "file_pattern": files, "limit": limit, "regex": isRegex},
+				gate:    true,
+			})
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
@@ -385,11 +478,10 @@ func cmdOutline(g *Globals) *cobra.Command {
 			if labels != "" {
 				payload["labels"] = strings.Split(labels, ",")
 			}
-			out, err := ctx.cbmCallJSON(cmd.Context(), "get_file_outline", payload)
-			if err != nil {
-				return fail("%v", err)
-			}
-			return ctx.outFresh(cmd, proj, cbmexec.Truncate(out, ctx.budget("")), map[string]any{"project": proj, "file": rf})
+			return ctx.cbmRead(cmd, cbmReadArgs{
+				proj: proj, tool: "get_file_outline", payload: payload,
+				fields: map[string]any{"file": rf},
+			})
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
@@ -446,13 +538,10 @@ func cmdImpact(g *Globals) *cobra.Command {
 			if _, _, err := ctx.needCBM(cmd.Context()); err != nil {
 				return err
 			}
-			out, err := ctx.cbmCallJSON(cmd.Context(), "detect_changes", map[string]any{
-				"project": proj, "direction": direction, "depth": depth, "limit": limit,
+			return ctx.cbmRead(cmd, cbmReadArgs{
+				proj: proj, tool: "detect_changes",
+				payload: map[string]any{"project": proj, "direction": direction, "depth": depth, "limit": limit},
 			})
-			if err != nil {
-				return fail("%v", err)
-			}
-			return ctx.outFresh(cmd, proj, cbmexec.Truncate(out, ctx.budget("")), map[string]any{"project": proj})
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
@@ -483,11 +572,10 @@ func cmdArch(g *Globals) *cobra.Command {
 			if _, _, err := ctx.needCBM(cmd.Context()); err != nil {
 				return err
 			}
-			out, err := ctx.cbmCallJSON(cmd.Context(), "get_architecture", map[string]any{"project": proj})
-			if err != nil {
-				return fail("%v", err)
-			}
-			return ctx.outFresh(cmd, proj, cbmexec.Truncate(out, ctx.budget("arch")), map[string]any{"project": proj})
+			return ctx.cbmRead(cmd, cbmReadArgs{
+				proj: proj, tool: "get_architecture",
+				payload: map[string]any{"project": proj}, kind: "arch",
+			})
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
@@ -517,11 +605,10 @@ func cmdQuery(g *Globals) *cobra.Command {
 			if _, _, err := ctx.needCBM(cmd.Context()); err != nil {
 				return err
 			}
-			out, err := ctx.cbmCallJSON(cmd.Context(), "query_graph", map[string]any{"query": cypher, "project": proj, "max_rows": limit})
-			if err != nil {
-				return fail("%v", err)
-			}
-			return ctx.outFresh(cmd, proj, cbmexec.Truncate(out, ctx.budget("")), map[string]any{"project": proj})
+			return ctx.cbmRead(cmd, cbmReadArgs{
+				proj: proj, tool: "query_graph",
+				payload: map[string]any{"query": cypher, "project": proj, "max_rows": limit},
+			})
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")

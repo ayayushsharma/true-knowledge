@@ -34,8 +34,13 @@ type Event struct {
 	Op      string `json:"op"`      // cbm tool name, or "index"|"search"
 	Ms      int64  `json:"ms"`
 	OK      bool   `json:"ok"`
-	Detail  string `json:"detail,omitempty"` // "matches=3", "updated=true"
-	Error   string `json:"error,omitempty"`
+	// Structured records whether the engine honoured format:"json", i.e.
+	// whether the call got structuredContent rather than a rendered tree.
+	// One call answering false is a capability answer, not a failure: it is
+	// how an operator sees that the installed CBM predates the flag.
+	Structured bool   `json:"structured,omitempty"`
+	Detail     string `json:"detail,omitempty"` // "matches=3", "updated=true"
+	Error      string `json:"error,omitempty"`
 }
 
 // redactRes holds high-precision secret patterns ONLY. Generic

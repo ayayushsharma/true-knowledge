@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ayayushsharma/true-knowledge/internal/cbmexec"
 	"github.com/ayayushsharma/true-knowledge/internal/memory"
 	"github.com/ayayushsharma/true-knowledge/internal/zoekttext"
 )
@@ -80,10 +81,20 @@ func TestToolsListCount(t *testing.T) {
 // fakeRunner satisfies the cbmexec.Runner surface for MCP tests.
 type fakeRunner struct {
 	bin string
+	// data is the structuredContent the fake claims to have. Empty means
+	// "this engine predates format:json", which is the fallback path.
+	data string
 }
 
 func (r *fakeRunner) RunJSON(ctx context.Context, tool string, payload map[string]any) (string, error) {
 	return "mock-out", nil
+}
+
+func (r *fakeRunner) RunStructured(ctx context.Context, tool string, payload map[string]any) (cbmexec.Result, error) {
+	if r.data == "" {
+		return cbmexec.Result{Text: "mock-out"}, nil
+	}
+	return cbmexec.Result{Text: "mock-out", Data: json.RawMessage(r.data)}, nil
 }
 
 func TestValidateToolInAnalysisOnly(t *testing.T) {
@@ -174,6 +185,15 @@ func (r *spyRunner) RunJSON(ctx context.Context, tool string, payload map[string
 	r.tool = tool
 	r.payload = payload
 	return "mock-out", nil
+}
+
+// RunStructured records the call the same way, and reports no payload: the
+// spy stands in for an engine that predates format:"json", so the tests that
+// assert on the text block keep exercising the fallback.
+func (r *spyRunner) RunStructured(ctx context.Context, tool string, payload map[string]any) (cbmexec.Result, error) {
+	r.tool = tool
+	r.payload = payload
+	return cbmexec.Result{Text: "mock-out"}, nil
 }
 
 // TestCoverageScopesDefault verifies check_index_coverage without explicit
@@ -507,6 +527,13 @@ func (r *seqRunner) RunJSON(_ context.Context, tool string, _ map[string]any) (s
 	return r.outs[tool], nil
 }
 
+// RunStructured replays the same sequence and reports no payload, so these
+// tests keep covering the text path on an engine without format support.
+func (r *seqRunner) RunStructured(ctx context.Context, tool string, payload map[string]any) (cbmexec.Result, error) {
+	out, err := r.RunJSON(ctx, tool, payload)
+	return cbmexec.Result{Text: out}, err
+}
+
 const cleanCoverage = "generation_matches: true\nhash_records_complete: true\nrecording_status: complete\n"
 
 // TestEmptySearchAnnotatedClean: an empty search_graph result must trigger a
@@ -687,4 +714,194 @@ func TestEmptySearchNoProjectSkipsProbe(t *testing.T) {
 	if len(run.order) != 1 || run.order[0] != "search_graph" {
 		t.Fatalf("call order = %v, want [search_graph]", run.order)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Structured tool results
+// ---------------------------------------------------------------------------
+
+// oneSession drives a full handshake + one call through the real loop, so the
+// negotiated revision and the reply are produced by the same code path a
+// client sees rather than by a struct literal set up by the test.
+func oneSession(t *testing.T, s *Server, initVer, call string) map[string]any {
+	t.Helper()
+	var out bytes.Buffer
+	s.In = strings.NewReader(
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"` + initVer + `"}}` + "\n" +
+			call + "\n")
+	s.OutW = &out
+	if code := s.Serve(context.Background()); code != 0 {
+		t.Fatalf("serve exit = %d", code)
+	}
+	var lines []map[string]any
+	dec := json.NewDecoder(bytes.NewReader(out.Bytes()))
+	for dec.More() {
+		var m map[string]any
+		if err := dec.Decode(&m); err != nil {
+			t.Fatalf("bad stream %q: %v", out.String(), err)
+		}
+		lines = append(lines, m)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("want initialize + call, got %d replies: %s", len(lines), out.String())
+	}
+	return lines[1]
+}
+
+const hitSearchPayload = `{"cols":["name","label"],"groups":[{"qn_prefix":"demo","rows":[["Level2","Function"]]}],"total":1,"returned":1,"count":1,"has_more":false,"truncated":false}`
+
+// TestStructuredContentOnModernClient: a 2025-06-18 client gets the payload
+// as a field and the same bytes in the text block.
+func TestStructuredContentOnModernClient(t *testing.T) {
+	resp := oneSession(t, &Server{Profile: ProfileScout, Budget: 4096, Run: &fakeRunner{data: hitSearchPayload}},
+		"2025-06-18",
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_graph","arguments":{"name_pattern":"Level2","project":"p"}}}`)
+	result, ok := resp["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("no result: %v", resp)
+	}
+	sc, ok := result["structuredContent"].(map[string]any)
+	if !ok {
+		t.Fatalf("structuredContent missing on a 2025-06-18 session: %v", result)
+	}
+	if sc["total"] != float64(1) {
+		t.Errorf("structuredContent lost the payload: %v", sc)
+	}
+	text := responseText(t, resp)
+	if !strings.Contains(text, `"total":1`) {
+		t.Errorf("text block is not the same answer: %q", text)
+	}
+	if strings.Contains(text, "\n  ") {
+		t.Errorf("text block must be compacted for a client that only reads it: %q", text)
+	}
+}
+
+// TestNoStructuredContentOnOldClient: the field arrived in 2025-06-18, so a
+// 2024-11-05 client is served the same answer without it rather than with an
+// unknown member it would have to guess at.
+func TestNoStructuredContentOnOldClient(t *testing.T) {
+	resp := oneSession(t, &Server{Profile: ProfileScout, Budget: 4096, Run: &fakeRunner{data: hitSearchPayload}},
+		"2024-11-05",
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_graph","arguments":{"name_pattern":"Level2","project":"p"}}}`)
+	result := resp["result"].(map[string]any)
+	if _, present := result["structuredContent"]; present {
+		t.Errorf("structuredContent sent to a 2024-11-05 client: %v", result)
+	}
+	if !strings.Contains(responseText(t, resp), `"total":1`) {
+		t.Error("an old client must still get the payload, just not as a field")
+	}
+}
+
+// TestNoStructuredContentBeforeInitialize: a client that calls a tool without
+// a handshake is served the oldest dialect.
+func TestNoStructuredContentBeforeInitialize(t *testing.T) {
+	resp := serveOne(t, &Server{Profile: ProfileScout, Budget: 4096, Run: &fakeRunner{data: hitSearchPayload}},
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_graph","arguments":{"name_pattern":"Level2","project":"p"}}}`)
+	if _, present := resp["result"].(map[string]any)["structuredContent"]; present {
+		t.Error("structuredContent sent before a handshake negotiated it")
+	}
+}
+
+// TestNegotiateProtocol pins the handshake table.
+func TestNegotiateProtocol(t *testing.T) {
+	cases := map[string]string{
+		"2025-06-18":    "2025-06-18",
+		"2025-03-26":    "2025-03-26",
+		"2024-11-05":    "2024-11-05",
+		"1999-01-01":    "2025-06-18", // older than tk knows: answer with tk's newest
+		"2099-12-31":    "2025-06-18", // newer than tk knows: still a session
+		"":              "2025-06-18",
+		"not-a-version": "2025-06-18",
+	}
+	for req, want := range cases {
+		if got := negotiateProtocol(req); got != want {
+			t.Errorf("negotiateProtocol(%q) = %q, want %q", req, got, want)
+		}
+	}
+}
+
+// TestStructuredForVersion: the cut-off is the revision that introduced the
+// field, and it stays that way if a newer revision is ever added.
+func TestStructuredForVersion(t *testing.T) {
+	if !structuredFor("2025-06-18") {
+		t.Error("2025-06-18 reads structuredContent")
+	}
+	for _, v := range []string{"2025-03-26", "2024-11-05", "", "bogus"} {
+		if structuredFor(v) {
+			t.Errorf("%q must not read structuredContent", v)
+		}
+	}
+}
+
+// TestInitializeEchoesNegotiatedVersion: the client asked for a revision, so
+// the reply names it rather than a hardcoded one.
+func TestInitializeEchoesNegotiatedVersion(t *testing.T) {
+	for _, v := range []string{"2025-06-18", "2025-03-26", "2024-11-05"} {
+		resp := serveOne(t, &Server{Profile: ProfileScout, Run: &fakeRunner{}},
+			`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"`+v+`"}}`)
+		got := resp["result"].(map[string]any)["protocolVersion"]
+		if got != v {
+			t.Errorf("initialize(%s) answered %v", v, got)
+		}
+	}
+}
+
+// TestOutputSchemaNotDeclared: tk does not declare outputSchema, because the
+// payload is the engine's schema and CBM owns it. A declared schema tk does
+// not enforce would be a promise it cannot keep.
+func TestOutputSchemaNotDeclared(t *testing.T) {
+	resp := serveOne(t, &Server{Profile: ProfileAnalysis, Run: &fakeRunner{}},
+		`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	for _, raw := range resp["result"].(map[string]any)["tools"].([]any) {
+		tool := raw.(map[string]any)
+		if _, present := tool["outputSchema"]; present {
+			t.Errorf("%v declares an outputSchema", tool["name"])
+		}
+	}
+}
+
+// TestStructuredAbsenceCarriesCoverage: an empty structured search is a claim
+// about absence, so it ships the coverage that backs it. The evidence is a
+// sibling of content, never a member of the engine's payload.
+func TestStructuredAbsenceCarriesCoverage(t *testing.T) {
+	resp := oneSession(t, &Server{Profile: ProfileScout, Budget: 4096, Run: &fakeRunner{data: `{"cols":["name"],"groups":[],"total":0,"returned":0,"count":0,"has_more":false,"truncated":false}`}},
+		"2025-06-18",
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"search_graph","arguments":{"name_pattern":"Nope","project":"p"}}}`)
+	result := resp["result"].(map[string]any)
+	if _, present := result["coverage"]; !present {
+		t.Errorf("an empty structured search was reported without coverage evidence: %v", result)
+	}
+	sc := result["structuredContent"].(map[string]any)
+	if _, polluted := sc["coverage"]; polluted {
+		t.Errorf("the engine payload must be passed through untouched: %v", sc)
+	}
+}
+
+// TestManageADRModesMatchEngine: the schema must not offer a mode the engine
+// rejects. `list` and `delete` were advertised and are not modes.
+func TestManageADRModesMatchEngine(t *testing.T) {
+	resp := serveOne(t, &Server{Profile: ProfileAnalysis, Run: &fakeRunner{}},
+		`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	for _, raw := range resp["result"].(map[string]any)["tools"].([]any) {
+		tool := raw.(map[string]any)
+		if tool["name"] != "manage_adr" {
+			continue
+		}
+		props := tool["inputSchema"].(map[string]any)["properties"].(map[string]any)
+		var got []string
+		for _, v := range props["mode"].(map[string]any)["enum"].([]any) {
+			got = append(got, v.(string))
+		}
+		want := []string{"outline", "get", "sections", "set_sections", "update"}
+		if len(got) != len(want) {
+			t.Fatalf("manage_adr modes = %q, want %q", got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("manage_adr modes = %q, want %q", got, want)
+			}
+		}
+		return
+	}
+	t.Fatal("manage_adr not in the analysis profile")
 }

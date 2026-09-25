@@ -2,7 +2,7 @@
 title: Agent profiles — 27B default
 status: authoritative
 date: 2026-09-26
-supersedes: [compatible-implementation-spec.md §15, docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (tk-side profile filter + validate), docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (memory profile), docs/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md (profile via env), docs/DECISIONS/2026-09-24-zoekt-staleness.md (source_search freshness contract), docs/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md (hidden-tool gate enforces the profile), docs/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md (trace_path joins the absence-annotated tools; tool counts unchanged)]
+supersedes: [compatible-implementation-spec.md §15, docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (tk-side profile filter + validate), docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (memory profile), docs/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md (profile via env), docs/DECISIONS/2026-09-24-zoekt-staleness.md (source_search freshness contract), docs/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md (hidden-tool gate enforces the profile), docs/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md (trace_path joins the absence-annotated tools; tool counts unchanged), docs/DECISIONS/2026-09-26-structured-cbm-payloads.md (structured CBM passthrough; two read paths over one spawn); MCP result shape + engine paging fields ]
 superseded-by: null
 ---
 
@@ -16,12 +16,37 @@ Target: 27B-class agent (32k-128k context, real tool-calling). Sub-8B models are
 
 | Profile | Tools (tk mcp) | Budgets | Use |
 |---|---|---|---|
-| `scout` (default for 27B) | `list_projects, check_index_coverage, index_status, search_graph, trace_path, search_code, source_search, get_file_outline, detect_changes, get_architecture, get_code_snippet` (11) | `default 6000 chars, arch 2200, toc 700`; whole-record truncate + `...truncated` + `cursor/has_more` | autonomous dev |
+| `scout` (default for 27B) | `list_projects, check_index_coverage, index_status, search_graph, trace_path, search_code, source_search, get_file_outline, detect_changes, get_architecture, get_code_snippet` (11) | `default 6000 chars, arch 2200, toc 700`; text face: whole-record truncate + `...truncated`; payload face: `budget_truncated` + `rows_dropped`. `has_more`/`next_offset` are the **engine's** own paging fields, passed through — tk issues no cursors (see REMAINING-WORK §5) | autonomous dev |
 | `analysis` | scout + `query_graph` (Cypher) + `manage_adr` passthrough + `validate` | same budgets | deep/debug, explicit opt-in |
 | `minimal` | `check_index_coverage, search_graph, get_code_snippet` (3) | `default 2000` | <8B filters, IDE inline |
 | `memory` | scout (11) + `mem_save, mem_recall, mem_review, note_save, note_search, note_toc, note_reindex, note_review, ledger_update` (20) | same budgets + `notes_toc 700`, `ledger 1500` | agents that persist knowledge; runs without CBM |
 
 `index_repository` (writes) is gated behind explicit user approval in all profiles per CBM SKILL.md.
+
+## Result shape (MCP)
+
+Read tools answer with the engine's payload twice, and a client should pick one:
+
+```json
+{"result": {"content": [{"type": "text", "text": "{…compact JSON…}"}],
+            "structuredContent": {…}}}
+```
+
+`structuredContent` is emitted **only** to a client that negotiated protocol
+`2025-06-18` or newer; `initialize` echoes a revision tk knows and offers
+`2025-06-18` otherwise. Clients that predate it — and any client before
+`initialize` — get the text block alone, which carries the same bytes
+compactly. `manage_adr`, `source_search` and the 9 memory tools stay
+content-only: a write is reported in prose, and the other two have no engine
+payload to structure. No `outputSchema` is declared, deliberately
+(structured-payloads ADR).
+
+Prefer `structuredContent`: it is the payload; the text block is a string
+encoding of it, and a client that parses the text is doing work tk already
+did. An empty result is `empty: true` only when an engine counter says zero,
+and a gated read that found nothing carries the `check_index_coverage`
+verdict beside it — `validate` and coverage-before-absence both depend on
+that.
 
 ## Profile selection — a runtime knob, not an install decision
 

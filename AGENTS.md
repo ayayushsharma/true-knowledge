@@ -59,7 +59,7 @@ jq -r 'select(.mcp.tool=="source_search") | .output.text' tk.log
 ## Key references
 
 * CBM: `README.md #session-coordination-daemon #cli-mode #auto-index`, `docs/CONFIGURATION.md §2/§4`, `docs/INDEX_RESOURCE_LIMITS.md`, `docs/cbmignore.md`, `server.json`.
-* This repo: `compatible-implementation-spec.md` (v1 frozen), `docs/00-AUTHORITY.md`, `docs/INDEXING.md`, `docs/CBM-BOUNDARY.md`, `docs/PATHS-CONFIG.md`, `docs/AGENT-PROFILES.md`, `docs/ROADMAP.md`, `docs/DECISIONS/2026-09-23-mvp3-memory-layer.md` (memory layer: SQLite + endpoint embeddings + memory profile), `docs/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md` (profile via `TK_MCP_PROFILE`).
+* This repo: `compatible-implementation-spec.md` (v1 frozen), `docs/00-AUTHORITY.md` (incl. **pre-release law: `--json`/MCP machine shapes carry no compatibility guarantee — pin a commit**), `docs/INDEXING.md`, `docs/CBM-BOUNDARY.md`, `docs/PATHS-CONFIG.md`, `docs/AGENT-PROFILES.md`, `docs/ROADMAP.md`, `docs/DECISIONS/2026-09-23-mvp3-memory-layer.md` (memory layer: SQLite + endpoint embeddings + memory profile), `docs/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md` (profile via `TK_MCP_PROFILE`), `docs/DECISIONS/2026-09-26-structured-cbm-payloads.md` (CBM payloads pass through verbatim: humans get the tree, `--json` gets `data`, MCP gets `structuredContent`).
 
 ## PR checklist
 

@@ -1,8 +1,8 @@
 ---
 title: Remaining work — the deferred/parked backlog (survives code compaction)
 status: authoritative
-date: 2026-09-25
-supersedes: []
+date: 2026-09-26
+supersedes: [docs/DECISIONS/2026-09-26-structured-cbm-payloads.md (structured CBM passthrough; §5 stale-cursor narrowed)]
 superseded-by: null
 ---
 
@@ -145,9 +145,19 @@ truncates or rewrites stored entries, so anchors can never be dropped.
 ## 5. Stale-cursor protocol (P3, blocked)
 
 No tk tool returns continuations; all are one-shot bounded by `limit`
-(INDEXING.md:61, ROADMAP:33 — "no tk-issued cursors exist yet"). Protocol
-(resume token + index-moved → STALE → re-query mandate) has no consumer until
-pagination is built. Lowest priority.
+(INDEXING.md:61). Protocol (resume token + index-moved → STALE → re-query
+mandate) has no consumer until pagination is built. Lowest priority.
+
+> **Refinement (structured-payloads ADR, 2026-09-26).** This item is narrower
+> than it looked. CBM *already* paged — its payloads carry `has_more`,
+> `next_offset` and `truncation_reason` — and tk now passes those through
+> verbatim on the payload face, so a client can walk results with an **engine**
+> offset today. What tk does not do is issue a cursor of its own, and that is
+> the only part still blocked: a tk-issued token has to survive an index
+> generation change, which means deciding what a stale tk token means when the
+> engine's own offset has silently become invalid. Until that decision exists,
+> treat the engine's `has_more` as the whole pagination story and do not
+> synthesise a tk cursor on top of it.
 
 ```
 one-shot (now):                  with cursors (future):

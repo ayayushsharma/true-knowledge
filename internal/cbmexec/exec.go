@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -92,7 +94,10 @@ func (r *Runner) Run(ctx context.Context, tool string, payload map[string]any) (
 		if msg == "" {
 			msg = err.Error()
 		}
-		return "", fmt.Errorf("cbm %s failed: %s", tool, firstLine(msg))
+		// A failed tool call is the engine's own diagnosis, usually a small
+		// JSON object with `error` + `hint` on stderr. Render the hint
+		// instead of dumping the raw payload at the caller.
+		return "", fmt.Errorf("cbm %s failed: %s", tool, firstLine(diagnosis(msg)))
 	}
 	return out.String(), nil
 }
@@ -156,6 +161,16 @@ func (r *Runner) RunJSON(ctx context.Context, tool string, payload map[string]an
 // envelope. Returns isErr=true with the server message when the envelope
 // carries an error. Returns text="" when out is plain tree text from an
 // older binary (caller keeps raw output).
+//
+// Two on-the-wire shapes are accepted. The JSON-RPC form
+// (`{"result":{"content":[...]}}`) is what the MCP spec mandates; CBM
+// 0.11.0's `cli --json` actually emits the bare result object
+// (`{"content":[...],"isError":false}`) with no `result` wrapper, so that
+// shape is unwrapped too — otherwise every read silently falls through to
+// the legacy re-spawn and reports nothing. A tool that fails sets
+// `isError:true` with the diagnosis in its content, which is surfaced as
+// an error (with the engine's own `hint` when it supplies one) instead of
+// being passed off as a result.
 func UnwrapEnvelope(out string) (text string, isErr bool, msg string) {
 	trimmed := strings.TrimSpace(out)
 	if !strings.HasPrefix(trimmed, "{") {
@@ -175,28 +190,60 @@ func UnwrapEnvelope(out string) (text string, isErr bool, msg string) {
 		}
 		return "", true, "unknown CBM error"
 	}
-	rraw, ok := raw["result"]
-	if !ok {
-		return "", false, ""
+	res, wrapped := raw["result"]
+	if !wrapped {
+		// Bare MCP result object (CBM 0.11.0 `cli --json`): no wrapper.
+		res = json.RawMessage(trimmed)
 	}
-	var res struct {
+	var obj struct {
+		IsError bool `json:"isError"`
 		Content []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
 	}
-	if json.Unmarshal(rraw, &res) == nil {
-		for _, c := range res.Content {
+	if json.Unmarshal(res, &obj) == nil {
+		for _, c := range obj.Content {
 			if c.Text != "" {
+				if obj.IsError {
+					return "", true, firstLine(diagnosis(c.Text))
+				}
 				return c.Text, false, ""
 			}
 		}
 	}
 	var s string
-	if json.Unmarshal(rraw, &s) == nil && s != "" {
+	if json.Unmarshal(res, &s) == nil && s != "" {
 		return s, false, ""
 	}
 	return "", false, ""
+}
+
+// diagnosis renders a tool-error payload for humans. CBM puts the
+// diagnosis in the content text, usually as a small JSON object carrying
+// `error` and often a `hint` (e.g. an unresolvable function_name tells you
+// to resolve it with search_graph first). The hint is the remediation, so
+// it must survive into tk's error instead of a raw JSON blob.
+func diagnosis(text string) string {
+	var p struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+		Hint    string `json:"hint"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(text)), &p); err != nil {
+		return text
+	}
+	msg := p.Error
+	if msg == "" {
+		msg = p.Message
+	}
+	if msg == "" {
+		return text
+	}
+	if p.Hint != "" {
+		return msg + " (hint: " + p.Hint + ")"
+	}
+	return msg
 }
 
 // env builds the spawn environment (shared by all Run variants).
@@ -304,7 +351,54 @@ func LooksEmpty(out string) bool {
 			return true
 		}
 	}
-	return false
+	return zeroEvidence(t)
+}
+
+// countField matches the evidence counters the engine prints for every
+// query — the total/count/results/returned family. Pagination cursors
+// (result_offset), timings (elapsed_ms), flags (has_more, truncated) and
+// relation labels (callers_total_relation) are deliberately excluded: they
+// are metadata, never a statement about how much was found.
+var countField = regexp.MustCompile(`(?i)^(?:.*_)?(?:total|counts?|matches|results|returned|found|rows|nodes|edges|entries|items)$`)
+
+// countLine splits a `key: 0  (cols: …)` engine line into key and number.
+var countLine = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*):\s*(-?\d+)\b`)
+
+// zeroEvidence reports whether every evidence counter the engine printed is
+// zero — i.e. it stated, in its own counters, that it found nothing.
+//
+// This is load-bearing, not belt-and-braces: CBM 0.11.0 renders an empty
+// result as counters, never as prose. A real zero-caller trace is
+//
+//	callers_total: 0
+//	callers_total_relation: eq
+//	callers: 0  (cols: qn hop)
+//
+// and a real search miss is `results: 0 / total: 0 / returned: 0`, neither
+// of which contains any prose marker. Detecting only the markers would let
+// every genuine absence claim through unproven.
+//
+// Two guards keep this conservative: at least one counter must be present
+// (unstructured text is never guessed at), and a single non-zero counter
+// disqualifies emptiness — `direction=both` on a function with 2 callers
+// and 0 callees is a hit, not an absence.
+func zeroEvidence(t string) bool {
+	seen := false
+	for _, ln := range strings.Split(t, "\n") {
+		m := countLine.FindStringSubmatch(strings.TrimSpace(ln))
+		if m == nil || !countField.MatchString(m[1]) {
+			continue
+		}
+		n, err := strconv.Atoi(m[2])
+		if err != nil {
+			continue
+		}
+		seen = true
+		if n != 0 {
+			return false
+		}
+	}
+	return seen
 }
 
 // NearMissTokens splits a symbol into search tokens for candidate lookup.

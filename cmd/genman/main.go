@@ -18,7 +18,7 @@ import (
 
 // genDate is pinned so regenerating the committed pages yields identical bytes
 // regardless of when generation runs. Bump it when you regenerate on purpose.
-var genDate = time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)
+var genDate = time.Date(2026, 9, 26, 0, 0, 0, 0, time.UTC)
 
 func run(out string) error {
 	root := cli.NewRoot(&cli.Globals{})

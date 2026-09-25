@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -190,7 +191,7 @@ func cmdExplain(g *Globals) *cobra.Command {
 			if err != nil {
 				return fail("%v", err)
 			}
-			trace, err := ctx.cbmCallJSON(cmd.Context(), "trace_path", map[string]any{"function_name": sym, "project": proj, "direction": "both", "depth": 1})
+			trace, err := tracePath(cmd.Context(), ctx, proj, sym, "both", 1)
 			if err != nil {
 				trace = "(trace unavailable: " + err.Error() + ")"
 			}
@@ -200,6 +201,106 @@ func cmdExplain(g *Globals) *cobra.Command {
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
 	c.Flags().StringVar(&sym, "symbol", "", "qualified symbol name")
+	selectFlag(c, &sel)
+	_ = c.MarkFlagRequired("symbol")
+	_ = c.RegisterFlagCompletionFunc("project", projectFlagCompletion(g))
+	return c
+}
+
+// tracePath is the single trace_path spawn shared by `trace` and `explain`
+// (and nothing else calls trace_path), so the two surfaces can never drift
+// in payload shape. direction is inbound|outbound|both; depth is 1-5.
+func tracePath(ctx context.Context, c *Ctx, proj, sym, direction string, depth int) (string, error) {
+	return c.cbmCallJSON(ctx, "trace_path", map[string]any{
+		"project": proj, "function_name": sym, "direction": direction, "depth": depth,
+	})
+}
+
+// traceDirections and the traceDepth bounds mirror the engine's own
+// vocabulary, so the flag help, the validators, and the MCP schema text
+// cannot disagree.
+var traceDirections = []string{"inbound", "outbound", "both"}
+
+const (
+	traceDepthMin = 1
+	traceDepthMax = 5
+)
+
+// traceDirection validates --direction locally, before the CBM gate: a bad
+// value is a hard error, never a silently empty traversal.
+func traceDirection(direction string) error {
+	for _, d := range traceDirections {
+		if d == direction {
+			return nil
+		}
+	}
+	return fail("invalid --direction %q (want inbound|outbound|both)", direction)
+}
+
+// traceDepth validates --depth against the engine's 1-5 range for the same
+// reason: an out-of-range depth must fail loudly, not traverse nothing.
+func traceDepth(depth int) error {
+	if depth < traceDepthMin || depth > traceDepthMax {
+		return fail("invalid --depth %d (want %d-%d)", depth, traceDepthMin, traceDepthMax)
+	}
+	return nil
+}
+
+func cmdTrace(g *Globals) *cobra.Command {
+	var project, sym, direction string
+	var depth int
+	var sel bool
+	c := &cobra.Command{
+		Use:     "trace --symbol <symbol> [--project <name>]",
+		Short:   "BFS callers/callees of one symbol (who calls it / what it calls)",
+		Aliases: []string{"kg_trace"},
+		Example: `  tk trace --symbol ProcessOrder --project demo
+  tk trace --symbol ProcessOrder --direction outbound --depth 3 --project demo`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, err := load(*g)
+			if err != nil {
+				return err
+			}
+			proj, err := requireProject(ctx, project, sel)
+			if err != nil {
+				return err
+			}
+			// Flag validation precedes the CBM gate: an out-of-range traversal
+			// is a usage error even when the backend is missing.
+			if err := traceDirection(direction); err != nil {
+				return err
+			}
+			if err := traceDepth(depth); err != nil {
+				return err
+			}
+			if _, _, err := ctx.needCBM(cmd.Context()); err != nil {
+				return err
+			}
+			out, err := tracePath(cmd.Context(), ctx, proj, sym, direction, depth)
+			if err != nil {
+				return fail("%v", err)
+			}
+			// Zero callers/callees is a negative claim ("nothing calls X"), and
+			// the engine's usual cause is a name-resolution miss — so an empty
+			// traversal must prove itself against whole-project coverage before
+			// it is reported. Same rule the search tools follow on both surfaces.
+			if cbmexec.LooksEmpty(out) {
+				var aerr error
+				out, aerr = annotateAbsence(cmd.Context(), ctx, proj, out)
+				if aerr != nil {
+					return aerr
+				}
+			}
+			return ctx.outFresh(cmd, proj, cbmexec.Truncate(out, ctx.budget("")), map[string]any{
+				"symbol": sym, "project": proj, "direction": direction, "depth": depth,
+			})
+		},
+	}
+	c.Flags().StringVar(&project, "project", "", "project name")
+	c.Flags().StringVar(&sym, "symbol", "", "symbol to trace (callers by default)")
+	c.Flags().StringVar(&direction, "direction", "inbound", "inbound=callers, outbound=callees, both")
+	c.Flags().IntVar(&depth, "depth", traceDepthMin, "traversal depth 1-5")
 	selectFlag(c, &sel)
 	_ = c.MarkFlagRequired("symbol")
 	_ = c.RegisterFlagCompletionFunc("project", projectFlagCompletion(g))

@@ -1,8 +1,8 @@
 ---
 title: Agent profiles — 27B default
 status: authoritative
-date: 2026-09-24
-supersedes: [compatible-implementation-spec.md §15, docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (tk-side profile filter + validate), docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (memory profile), docs/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md (profile via env), docs/DECISIONS/2026-09-24-zoekt-staleness.md (source_search freshness contract), docs/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md (hidden-tool gate enforces the profile)]
+date: 2026-09-26
+supersedes: [compatible-implementation-spec.md §15, docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (tk-side profile filter + validate), docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (memory profile), docs/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md (profile via env), docs/DECISIONS/2026-09-24-zoekt-staleness.md (source_search freshness contract), docs/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md (hidden-tool gate enforces the profile), docs/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md (trace_path joins the absence-annotated tools; tool counts unchanged)]
 superseded-by: null
 ---
 
@@ -48,8 +48,9 @@ Memory-profile tools are tk-owned and in-process: they never require the graph b
 ## 27B rules
 
 * Compound `explain` (def + snippet + callers + callees) in one call — saves the `2.3 vs 4.8` tool-call gap from the CBM paper.
+* `tk trace` / `trace_path` when one of the two call-graph questions is all you need: `inbound` = "who calls X" (the default), `outbound --depth N` = "what breaks if X changes". `explain`'s built-in trace is fixed at `both`/depth 1 — reach for `trace` when the direction or depth matters. An empty result is *usually* a name-resolution miss, so resolve the exact name with `search_graph` before believing it.
 * `file_outline` over full `read` for orientation (`70-98%` token win).
-* `check_index_coverage` before absence claims ("doesn't exist", "no callers", "dead code"). `tk validate` (existence + near-miss, coverage-annotated) otherwise — don't hard-fail every cite.
+* `check_index_coverage` before absence claims ("doesn't exist", "no callers", "dead code"). `tk validate` (existence + near-miss, coverage-annotated) otherwise — don't hard-fail every cite. `search_graph`, `search_code`, and `trace_path` already do this for you: an empty result from them carries a coverage verdict, so read it before claiming absence.
 * Fail-open: CBM down → `tk install` hint, agent continues. Loopback-only transport.
 * Memory-profile hygiene: keep facts topical (`mem_recall` is exact-topic), keep ledgers lean (they're budget-truncated, never a scratch pad), and only `note_save` durable truths — capture is cheap, approval is the gate, and secrets are masked either way.
 * No `query_graph` by default — Cypher is where 27B wastes calls; promote to `analysis` only.

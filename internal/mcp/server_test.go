@@ -599,6 +599,71 @@ func TestSearchCodeEmptyAnnotated(t *testing.T) {
 	}
 }
 
+// TestEmptyTraceAnnotatedClean: an empty trace_path is the negative claim
+// "nothing calls this" (usually a name-resolution miss), so it earns the
+// same coverage proof as the search tools.
+func TestEmptyTraceAnnotatedClean(t *testing.T) {
+	run := &seqRunner{outs: map[string]string{
+		"trace_path":           "",
+		"check_index_coverage": cleanCoverage,
+	}}
+	resp := serveOne(t, &Server{Profile: ProfileScout, Budget: 1024, Run: run},
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"trace_path","arguments":{"function_name":"Nope","project":"p"}}}`)
+	if resp["error"] != nil {
+		t.Fatalf("trace failed: %v", resp)
+	}
+	if len(run.order) != 2 || run.order[1] != "check_index_coverage" {
+		t.Fatalf("call order = %v, want [trace_path check_index_coverage]", run.order)
+	}
+	if text := responseText(t, resp); !strings.Contains(text, "(coverage: clean") {
+		t.Fatalf("verdict missing, got %q", text)
+	}
+}
+
+// TestEmptyTraceAnnotatedGap + probe failure: the traversal path keeps the
+// same gap wording and hard-error rule as the search tools.
+func TestEmptyTraceAnnotatedGap(t *testing.T) {
+	run := &seqRunner{outs: map[string]string{
+		"trace_path":           "",
+		"check_index_coverage": "generation_matches: false\n",
+	}}
+	resp := serveOne(t, &Server{Profile: ProfileScout, Budget: 1024, Run: run},
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"trace_path","arguments":{"function_name":"Nope","project":"p"}}}`)
+	if resp["error"] != nil {
+		t.Fatalf("trace failed: %v", resp)
+	}
+	if text := responseText(t, resp); !strings.Contains(text, "; absence unverified)") {
+		t.Fatalf("gap suffix missing, got %q", text)
+	}
+}
+
+func TestEmptyTraceCoverageFailureHardError(t *testing.T) {
+	run := &seqRunner{outs: map[string]string{"trace_path": ""},
+		errs: map[string]error{"check_index_coverage": errors.New("cbm down")}}
+	resp := serveOne(t, &Server{Profile: ProfileScout, Budget: 1024, Run: run},
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"trace_path","arguments":{"function_name":"Nope","project":"p"}}}`)
+	errObj, ok := resp["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected hard error, got %v", resp)
+	}
+	if errObj["code"].(float64) != -32000 || !strings.Contains(errObj["message"].(string), "absence unverified") {
+		t.Fatalf("error = %v", errObj)
+	}
+}
+
+// TestNonEmptyTraceSkipsProbe: a real traversal needs no probe and stays bare.
+func TestNonEmptyTraceSkipsProbe(t *testing.T) {
+	run := &seqRunner{outs: map[string]string{"trace_path": "mock-trace"}}
+	resp := serveOne(t, &Server{Profile: ProfileScout, Budget: 1024, Run: run},
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"trace_path","arguments":{"function_name":"Demo","project":"p"}}}`)
+	if len(run.order) != 1 || run.order[0] != "trace_path" {
+		t.Fatalf("call order = %v, want [trace_path]", run.order)
+	}
+	if text := responseText(t, resp); text != "mock-trace" {
+		t.Fatalf("text = %q, want unannotated mock-trace", text)
+	}
+}
+
 // TestInventoryEmptyNotAnnotated: list_projects is not an absence-capable
 // search tool — empty means no probe.
 func TestInventoryEmptyNotAnnotated(t *testing.T) {

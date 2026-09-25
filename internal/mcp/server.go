@@ -431,10 +431,12 @@ func (s *Server) toolNames() []string {
 }
 
 // isAbsenceTool reports whether a CBM tool triggers coverage-before-absence
-// annotation on empty results (the search tools — never check_index_coverage
-// itself, list_projects, or the other inventory tools).
+// annotation on empty results: the search tools plus the call-graph traversal
+// (an empty trace is the negative claim "nothing calls this", and the engine's
+// usual cause is a name-resolution miss) — never check_index_coverage itself,
+// list_projects, or the other inventory tools.
 func isAbsenceTool(cbmTool string) bool {
-	return cbmTool == "search_graph" || cbmTool == "search_code"
+	return cbmTool == "search_graph" || cbmTool == "search_code" || cbmTool == "trace_path"
 }
 
 // coverageVerdict probes whole-project coverage (scopes=.) via CBM.

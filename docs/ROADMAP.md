@@ -1,8 +1,9 @@
 ---
 title: Roadmap — MVP1 through MVP4
 status: authoritative
-date: 2026-09-25
+date: 2026-09-26
 supersedes: [compatible-implementation-spec.md §20, docs/DECISIONS/2026-09-22-thin-tk-over-cbm.md (scope), docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (mvp2 non-fleet scope), docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (mvp3 scope), docs/DECISIONS/2026-09-24-evals-harness.md (mvp4 evals design), docs/DECISIONS/2026-09-24-reindex-embed-cache.md (mvp3 reindex embed mechanics), docs/DECISIONS/2026-09-24-zoekt-staleness.md (zoekt-side freshness shipped), docs/DECISIONS/2026-09-24-mvp4-human-ux-picker-manpages.md (mvp4 human UX scope), docs/DECISIONS/2026-09-25-ledger-append-only-history-prune.md (ledger v2 scope), docs/DECISIONS/2026-09-25-cross-repo-contract-verified.md (cross-repo contract), docs/DECISIONS/2026-09-25-fleet-parked-indefinitely.md (fleet parked), docs/DECISIONS/2026-09-25-delivery-parked-download-scripts.md (delivery parked), docs/DECISIONS/2026-09-25-scout-coverage-before-absence.md (scout coverage-before-absence shipped), docs/DECISIONS/2026-09-25-rrf-tuning-parked-indefinitely.md (rrf tuning parked), docs/DECISIONS/2026-09-25-trajectory-parked-indefinitely.md (trajectory parked), docs/DECISIONS/2026-09-25-fleet-cohort-queries-parked-indefinitely.md (fleet-cohort queries parked), docs/DECISIONS/2026-09-25-resource-limit-surfacing-parked-indefinitely.md (resource-limit surfacing parked), docs/DECISIONS/2026-09-25-ledger-enabled-gate-parity.md (ledger.enabled gate on MCP writes)]docs/DECISIONS/2026-09-26-select-flag-forces-project-picker.md (per-command --select forces the project picker open), 
+docs/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md (tk trace verb + kg_trace alias; trace_path absence annotation), 
 superseded-by: null
 ---
 
@@ -14,7 +15,7 @@ Locked decisions: Go-only thin `tk` over CBM, Linux-style `true-knowledge/` dirs
 
 ## MVP1 — thin proxy + self-installing backends (code complete, real-binary verified)
 
-* `setup/init/register/index/sync/status/find/explain/grep/source-search/outline/impact/arch/query/cbm/daemon/mcp/config/migrate/install/mcp-install/completion`. `daemon` is CLI-only (never MCP).
+* `setup/init/register/index/sync/status/find/explain/trace/grep/source-search/outline/impact/arch/query/cbm/daemon/mcp/config/migrate/install/mcp-install/completion`. `daemon` is CLI-only (never MCP).
 * One spawn wrapper `internal/cbmexec`: `codebase-memory-mcp cli <tool> --args-file <json>` (raw-JSON argv is deprecated upstream) + env (`CBM_CACHE_DIR`, `CBM_RUNTIME_DIR`, `CBM_ALLOWED_ROOT`) + budget truncation + fail-open. Project is required — tk never sends `""`.
 * `tk` installs ALL its external dependencies itself: `internal/backends` registry (CBM today) + `internal/installer` (pinned download, SHA-256 manifest verify, atomic `<cache>/bin` install, no system package managers). Zoekt is NOT a backend — it links in as a Go library (`go.mod` pin; same-language links, cross-language spawns). `tk setup` = init + install + opt-in register/client. Resolver: `TK_CBM_BIN` > sibling > cache > PATH > download.
 * MCP 11-tool proxy: scout profile + snippet + `source_search` (zoekt library; a missing index hints `tk index`, never silent fallback).
@@ -26,11 +27,11 @@ Locked decisions: Go-only thin `tk` over CBM, Linux-style `true-knowledge/` dirs
 ## MVP2 — code-intel depth (cross-repo fleet parked indefinitely)
 
 *Why first:* flagged focus + unblocks 27B autonomy. Still delegated to CBM, no new stores.
-* `kg_*` facade: `kg_find` (regex→grep / ident→graph / NL→semantic router), `kg_explain` (def+snippet+callers+callees, one call), `kg_grep`; legacy `search/trace/arch/query` compat. Shipped as Cobra aliases over `find/explain/grep`, zero behavior change (see envelope ADR).
+* `kg_*` facade: `kg_find` (regex→grep / ident→graph / NL→semantic router), `kg_explain` (def+snippet+callers+callees, one call), `kg_grep`, `kg_trace`; legacy `search/trace/arch/query` compat. Shipped as Cobra aliases over `find/explain/grep/trace`, zero behavior change (see envelope ADR). `search` is the only spec verb in that set with no facade to alias and stays unshipped; `arch`/`query` ship as first-class verbs, so `kg_arch`/`kg_query` remain legacy RPC names only (trace ADR).
 * `analysis` profile: `query_graph` (read-only, `LIMIT` + timeout guardrails), `validate` (existence + near-miss). Shipped in MVP1: `get_file_outline` (`tk outline`), `detect_changes → impact` (`tk impact`). `tk mcp --tool-profile scout(11)|analysis(14)|minimal(3)` filters tk-side; `manage_adr` passes through in `analysis`.
 * Wrapper: `cbmexec.RunJSON` (`cli --json` envelope unwrapped, legacy fallback) on all read paths; writes stay on legacy `Run`.
 * Cross-repo: PARKED INDEFINITELY per `docs/DECISIONS/2026-09-25-fleet-parked-indefinitely.md` (fleet orchestration for `CROSS_*` edges — `--cross/--targets`, N-source link pass, generation record — waits on a listed trigger: upstream generic cross-repo edge classes #56/#398, concrete fleet-wide protocol-edge demand, or a cost collapse; un-parking needs a new ADR. Generic cross-repo call graphs stay out of tk scope permanently). Contract verified upstream (cross-repo-contract ADR): `cross-repo-intelligence` is a per-**source-project** `index_repository` mode — `target_projects=["*"]` expands targets only, an N-repo clique needs **N runs (each member as source)** after fresh bases, scope = `CROSS_*` protocol edges; `get_architecture` reports `cross_repo_links` free.
-* Freshness: `head/current/fresh` envelopes shipped in MVP1. Zoekt-side staleness eliminated (auto-refresh + live worktree bytes + delta indexing — zoekt-staleness ADR); **coverage-before-absence enforced in every profile** (scout-tools now annotate empty results like the CLI — scout-coverage ADR); left open: stale-cursor protocol (no tk-issued cursors exist yet).
+* Freshness: `head/current/fresh` envelopes shipped in MVP1. Zoekt-side staleness eliminated (auto-refresh + live worktree bytes + delta indexing — zoekt-staleness ADR); **coverage-before-absence enforced in every profile** (scout-tools annotate empty results like the CLI — scout-coverage ADR; extended to `trace_path`, and the evidence test corrected to read the engine's zero counters, so real `search_*` misses are proven too — trace ADR); left open: stale-cursor protocol (no tk-issued cursors exist yet).
 * Done when: 27B answers `who calls X / what breaks if Y changes / outline Z` in ≤3 calls (single-repo; fleet-wide `CROSS_*` and multi-repo call graphs are parked — see fleet-parked ADR).
 
 ## MVP3 — memory layer (tk-owned; CBM has no equivalent)

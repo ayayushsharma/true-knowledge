@@ -65,6 +65,48 @@ func TestRequireProjectSelect(t *testing.T) {
 	}
 }
 
+// A bad --direction/--depth is a hard error, never a silently empty
+// traversal: `trace` validates both before the CBM gate so the failure
+// never depends on a spawn (or on a backend being installed at all).
+func TestTraceArgValidation(t *testing.T) {
+	for _, d := range []string{"inbound", "outbound", "both"} {
+		if err := traceDirection(d); err != nil {
+			t.Errorf("traceDirection(%q) = %v, want nil", d, err)
+		}
+	}
+	for _, d := range []string{"", "in", "inbound ", "INBOUND", "sideways"} {
+		err := traceDirection(d)
+		if err == nil {
+			t.Errorf("traceDirection(%q) = nil, want error", d)
+			continue
+		}
+		if !strings.Contains(err.Error(), "inbound|outbound|both") {
+			t.Errorf("traceDirection(%q) error must name the allowlist, got %v", d, err)
+		}
+	}
+
+	for _, n := range []int{1, 2, 3, 4, 5} {
+		if err := traceDepth(n); err != nil {
+			t.Errorf("traceDepth(%d) = %v, want nil", n, err)
+		}
+	}
+	for _, n := range []int{0, -1, 6, 100} {
+		err := traceDepth(n)
+		if err == nil {
+			t.Errorf("traceDepth(%d) = nil, want error", n)
+			continue
+		}
+		if !strings.Contains(err.Error(), "1-5") {
+			t.Errorf("traceDepth(%d) error must name the range, got %v", n, err)
+		}
+	}
+	// The engine's own vocabulary is the single source: flag help, the
+	// validator allowlist, and the MCP schema enum must not drift apart.
+	if len(traceDirections) != 3 || traceDepthMin != 1 || traceDepthMax != 5 {
+		t.Fatalf("trace bounds drifted: %v depth %d-%d", traceDirections, traceDepthMin, traceDepthMax)
+	}
+}
+
 func TestKeywords(t *testing.T) {
 	got := keywords(`  process an order, retry!  `)
 	want := []string{"process", "an", "order", "retry"}

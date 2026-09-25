@@ -3,7 +3,7 @@ title: Per-command `--select` forces the project picker open (extends flag-only 
 status: authoritative
 date: 2026-09-26
 supersedes: [docs/DECISIONS/2026-09-25-flag-only-query-forms.md (project-resolution helper signatures and the "explicit `--project` wins → picker" precedence only — the strict flag-only grammar, `cobra.NoArgs` + required payload flags, and no positional sniffing all stand unchanged)]
-superseded-by: null
+superseded-by: docs/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md (the "nine project-resolving commands" enumeration — `trace` is the tenth; the per-command flag, `--project` precedence, and TTY gating stand unchanged)
 ---
 
 # ADR — `--select` forces the project picker open

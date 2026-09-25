@@ -3,7 +3,7 @@ title: Scout coverage-before-absence shipped — no silent absence in any profil
 status: authoritative
 date: 2026-09-25
 supersedes: [docs/ROADMAP.md:33 ("left open: coverage-before-absence enforcement in scout"), docs/REMAINING-WORK.md §3]
-superseded-by: null
+superseded-by: docs/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md (the two-tool absence enumeration — `trace_path` joins `isAbsenceTool`; and the "carries no evidence" test, which matched only prose markers and so never fired against CBM's counter output — enforcement point, byte format, and hard-error-on-probe-failure stand unchanged)
 ---
 
 > Authority: this file overrides older docs on conflict. See docs/00-AUTHORITY.md.

@@ -23,13 +23,18 @@ else
 #!/bin/sh
 # args: cli <tool> --args-file <path>  (or raw passthrough)
 tool="$2"
+# The fake mirrors CBM 0.11.0's real output shape: an empty result is a set
+# of zero counters, not prose. Marker-only emptiness matching would let
+# every real absence through unproven, so the fake must not invent phrases.
 case "$tool" in
   index_repository) echo '{"status":"indexed"}';;
   search_graph|search_code)
-    if grep -q 'Demo' "$4" 2>/dev/null; then echo '{"ok":true,"results":[{"name":"Demo","path":"main.go"}]}'
-    else echo 'no results (fake miss)'; fi;;
+    if grep -q 'Demo' "$4" 2>/dev/null; then printf 'results: 1  (cols: qn label file lines in out)\n  live.Demo Function main.go 3-4 1 1\ntotal: 1\nreturned: 1\nhas_more: false\ntruncated: false\n'
+    else printf 'results: 0  (cols: qn label file lines in out)\ntotal: 0\nreturned: 0\nhas_more: false\ntruncated: false\n'; fi;;
   get_code_snippet) echo 'func Demo() {} // fake';;
-  trace_path) echo '{"callers":[],"callees":[]}';;
+  trace_path)
+    if grep -q 'TotalMiss' "$4" 2>/dev/null; then printf 'function: TotalMiss\ndirection: inbound\ncallers_total: 0\ncallers_total_relation: eq\ncallers: 0  (cols: qn hop)\n'
+    else printf 'function: Demo\ndirection: inbound\ncallers_total: 1\ncallers_total_relation: eq\ncallers: 1  (cols: qn hop)\n  live.main 1\n'; fi;;
   get_architecture|query_graph|list_projects|index_status|get_file_outline|detect_changes) echo '{"ok":true,"coverage":"clean"}';;
   check_index_coverage) echo 'generation_matches: true
 hash_records_complete: true
@@ -68,6 +73,37 @@ check status-json 0 $TK_BIN status --json
 check find 0 $TK_BIN find --query Demo --project demo
 check find-label 0 $TK_BIN find --query Demo --project demo --label Function
 check explain 0 $TK_BIN explain --symbol Demo --project demo
+check trace 0 $TK_BIN trace --symbol Demo --project demo
+check trace-outbound 0 $TK_BIN trace --symbol Demo --project demo --direction outbound --depth 3
+# flag validation is local and precedes the spawn: bad traversal knobs are
+# usage errors, never a silently empty result
+check trace-bad-direction 1 $TK_BIN trace --symbol Demo --project demo --direction sideways
+check trace-bad-depth 1 $TK_BIN trace --symbol Demo --project demo --depth 9
+# strict flag-only grammar: a stray positional never becomes a symbol/project
+check trace-positional-rejected 1 $TK_BIN trace Demo --project demo
+# an empty trace is the negative claim "nothing calls X" -> must carry a
+# coverage verdict (coverage-before-absence, same as the search tools)
+check trace-miss 0 $TK_BIN trace --symbol TotalMiss --project demo
+if $TK_BIN trace --symbol TotalMiss --project demo 2>&1 | grep -q '(coverage: clean'; then
+  pass=$((pass+1)); printf 'ok   trace-miss-absence-annotated\n';
+else fail=$((fail+1)); printf 'FAIL trace-miss-absence-annotated (no coverage verdict)\n'; fi
+# a hit carries a non-zero counter and must stay unannotated
+if $TK_BIN trace --symbol Demo --project demo 2>&1 | grep -q 'coverage: clean'; then
+  fail=$((fail+1)); printf 'FAIL trace-hit-not-annotated\n'
+else
+  pass=$((pass+1)); printf 'ok   trace-hit-not-annotated\n'
+fi
+# same rule for the search verbs: a counter-shaped zero result is absence
+# and must be proven, not silent
+if $TK_BIN find --query TotalMiss --project demo 2>&1 | grep -q '(coverage: clean'; then
+  pass=$((pass+1)); printf 'ok   find-miss-absence-annotated\n';
+else fail=$((fail+1)); printf 'FAIL find-miss-absence-annotated (no coverage verdict)\n'; fi
+if $TK_BIN grep --pattern TotalMiss --project demo 2>&1 | grep -q '(coverage: clean'; then
+  pass=$((pass+1)); printf 'ok   grep-miss-absence-annotated\n';
+else fail=$((fail+1)); printf 'FAIL grep-miss-absence-annotated (no coverage verdict)\n'; fi
+if $TK_BIN trace --symbol Demo --project demo --direction outbound --depth 3 --json | grep -q '"direction": "outbound"'; then
+  pass=$((pass+1)); printf 'ok   trace-json-envelope\n';
+else fail=$((fail+1)); printf 'FAIL trace-json-envelope\n'; fi
 check grep 0 $TK_BIN grep --pattern Demo --project demo
 check grep-badregex 1 $TK_BIN grep --pattern "(unclosed" --regex
 check arch 0 $TK_BIN arch --project demo
@@ -91,6 +127,7 @@ check validate-miss 0 $TK_BIN validate --symbol DoesNotExist --project demo
 check kg-find-alias 0 $TK_BIN kg_find --query Demo --project demo
 check kg-explain-alias 0 $TK_BIN kg_explain --symbol Demo --project demo
 check kg-grep-alias 0 $TK_BIN kg_grep --pattern Demo --project demo
+check kg-trace-alias 0 $TK_BIN kg_trace --symbol Demo --project demo
 
 # --- --select forces the picker (e2e is non-TTY, so it must hard-fail) ---
 # --select is a request to interact: never auto-default to the single project,
@@ -100,6 +137,11 @@ if $TK_BIN find --query Demo --select 2>&1 | grep -q 'pass --project'; then
   pass=$((pass+1)); printf 'ok   select-no-tty-hint\n';
 else fail=$((fail+1)); printf 'FAIL select-no-tty-hint (no --project routing hint)\n'; fi
 check select-project-only-no-tty 1 $TK_BIN arch --select
+# --select on trace: same forced-picker contract as every project-resolving verb
+check select-trace-no-tty 1 $TK_BIN trace --symbol Demo --select
+if $TK_BIN trace --symbol Demo --select 2>&1 | grep -q 'pass --project'; then
+  pass=$((pass+1)); printf 'ok   select-trace-hint\n';
+else fail=$((fail+1)); printf 'FAIL select-trace-hint (no --project routing hint)\n'; fi
 # --project always wins: --select is ignored, so this succeeds off-TTY.
 check select-ignored-with-project 0 $TK_BIN find --query Demo --project demo --select
 check select-ignored-with-project-arch 0 $TK_BIN arch --project demo --select
@@ -472,6 +514,7 @@ for r in recs:
         assert k in r, f"missing {k} in {r}"
     assert "argv" in r or "mcp" in r, f"missing input in {r}"
 assert any(r.get("events") for r in recs), "no backend events logged"
+assert any(e.get("op") == "trace_path" for r in recs for e in r.get("events", [])), "no trace_path backend event logged"
 assert any(r.get("exit") != 0 for r in recs), "no failure records (grep-badregex should log exit=1)"
 print(f"trace-log ok ({len(recs)} records)")
 EOF

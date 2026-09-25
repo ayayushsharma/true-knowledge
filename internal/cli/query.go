@@ -11,9 +11,15 @@ import (
 
 var metaChars = regexp.MustCompile(`[.*()\[\]{}+?^$|\\]`)
 
-func resolveProject(c *Ctx, flag string) string {
+// resolveProject returns the effective project: an explicit --project always
+// wins (--select is ignored alongside it); else a single registered project
+// auto-defaults, except under --select which forces the picker; else "".
+func resolveProject(c *Ctx, flag string, sel bool) string {
 	if flag != "" {
 		return flag
+	}
+	if sel {
+		return "" // --select forces the picker; it never auto-defaults
 	}
 	if len(c.Reg) == 1 {
 		return c.Reg.Names()[0]
@@ -25,9 +31,25 @@ func resolveProject(c *Ctx, flag string) string {
 // CBM requires project on nearly every tool; tk never sends "".
 // On interactive TTY (+ !--json + ui.picker) the failure becomes a project
 // picker first — agents/scripts never see it (picker is gated off).
-func requireProject(c *Ctx, flag string) (string, error) {
-	if p := resolveProject(c, flag); p != "" {
+// --select forces that picker open even when a single project is registered;
+// it is gated identically, so off a TTY / under --json / with ui.picker off it
+// hard-fails with the routing hint instead of silently defaulting. --project
+// takes precedence over --select when both are passed.
+func requireProject(c *Ctx, flag string, sel bool) (string, error) {
+	if p := resolveProject(c, flag, sel); p != "" {
 		return p, nil
+	}
+	if sel {
+		if len(c.Reg) == 0 {
+			return "", fail("--select needs at least one registered project — run `tk register <path>`")
+		}
+		if !pickerEnabled(c) {
+			return "", fail("--select needs an interactive TTY (+ !--json + ui.picker); pass --project (registered: %s); see `tk status`", listNames(c))
+		}
+		if p, err := pickProject(c); err == nil && p != "" {
+			return p, nil
+		}
+		return "", fail("picker aborted; pass --project (registered: %s); see `tk status`", listNames(c))
 	}
 	if pickerEnabled(c) {
 		if p, err := pickProject(c); err == nil && p != "" {
@@ -35,6 +57,15 @@ func requireProject(c *Ctx, flag string) (string, error) {
 		}
 	}
 	return "", fail("pass --project (registered: %s); see `tk status`", listNames(c))
+}
+
+// selectFlag registers -s/--select on a project-resolving command: force the
+// interactive picker open even when a single project is registered. It is
+// per-command rather than a root persistent flag so the flag only shows up
+// (in --help, completions, and man pages) on the commands that honor it.
+// Precedence: an explicit --project wins, --select is then ignored.
+func selectFlag(c *cobra.Command, sel *bool) {
+	c.Flags().BoolVarP(sel, "select", "s", false, "force the interactive project picker open (ignored when --project is set)")
 }
 
 func listNames(c *Ctx) string {
@@ -73,6 +104,7 @@ func keywords(q string) []string {
 func cmdFind(g *Globals) *cobra.Command {
 	var project, query, label string
 	var limit int
+	var sel bool
 	c := &cobra.Command{
 		Use:     "find --query <query> [--project <name>]",
 		Short:   "Deterministic router: regex→grep, NL→semantic, ident→graph",
@@ -87,7 +119,7 @@ func cmdFind(g *Globals) *cobra.Command {
 				return err
 			}
 			q := query
-			proj, err := requireProject(ctx, project)
+			proj, err := requireProject(ctx, project, sel)
 			if err != nil {
 				return err
 			}
@@ -128,6 +160,7 @@ func cmdFind(g *Globals) *cobra.Command {
 	c.Flags().StringVar(&query, "query", "", "identifier, natural-language phrase, or text pattern")
 	c.Flags().StringVar(&label, "label", "", "node-label filter (graph routes only)")
 	c.Flags().IntVar(&limit, "limit", 20, "max results")
+	selectFlag(c, &sel)
 	_ = c.MarkFlagRequired("query")
 	_ = c.RegisterFlagCompletionFunc("project", projectFlagCompletion(g))
 	return c
@@ -135,6 +168,7 @@ func cmdFind(g *Globals) *cobra.Command {
 
 func cmdExplain(g *Globals) *cobra.Command {
 	var project, sym string
+	var sel bool
 	c := &cobra.Command{
 		Use:     "explain --symbol <symbol> [--project <name>]",
 		Short:   "Definition + snippet + callers/callees (one bounded call set)",
@@ -145,7 +179,7 @@ func cmdExplain(g *Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			proj, err := requireProject(ctx, project)
+			proj, err := requireProject(ctx, project, sel)
 			if err != nil {
 				return err
 			}
@@ -166,6 +200,7 @@ func cmdExplain(g *Globals) *cobra.Command {
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
 	c.Flags().StringVar(&sym, "symbol", "", "qualified symbol name")
+	selectFlag(c, &sel)
 	_ = c.MarkFlagRequired("symbol")
 	_ = c.RegisterFlagCompletionFunc("project", projectFlagCompletion(g))
 	return c
@@ -174,7 +209,7 @@ func cmdExplain(g *Globals) *cobra.Command {
 func cmdGrep(g *Globals) *cobra.Command {
 	var project, files, pat string
 	var limit int
-	var isRegex bool
+	var isRegex, sel bool
 	c := &cobra.Command{
 		Use:     "grep --pattern <pattern> [--project <name>]",
 		Short:   "Project-scoped source-text search",
@@ -190,7 +225,7 @@ func cmdGrep(g *Globals) *cobra.Command {
 					return fail("invalid regex %q: %v (not empty results)", pat, err)
 				}
 			}
-			proj, err := requireProject(ctx, project)
+			proj, err := requireProject(ctx, project, sel)
 			if err != nil {
 				return err
 			}
@@ -216,6 +251,7 @@ func cmdGrep(g *Globals) *cobra.Command {
 	c.Flags().StringVar(&files, "files", "", "file glob filter")
 	c.Flags().IntVar(&limit, "limit", 20, "max results")
 	c.Flags().BoolVar(&isRegex, "regex", false, "treat pattern as regex (validation error on bad regex)")
+	selectFlag(c, &sel)
 	_ = c.MarkFlagRequired("pattern")
 	_ = c.RegisterFlagCompletionFunc("project", projectFlagCompletion(g))
 	return c
@@ -224,6 +260,7 @@ func cmdGrep(g *Globals) *cobra.Command {
 func cmdOutline(g *Globals) *cobra.Command {
 	var project, labels, file string
 	var limit int
+	var sel bool
 	c := &cobra.Command{
 		Use:   "outline --file <file> [--project <name>]",
 		Short: "Declarations in one file, in source order (cheap read alternative)",
@@ -235,7 +272,7 @@ func cmdOutline(g *Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			proj, err := requireProject(ctx, project)
+			proj, err := requireProject(ctx, project, sel)
 			if err != nil {
 				return err
 			}
@@ -258,6 +295,7 @@ func cmdOutline(g *Globals) *cobra.Command {
 	c.Flags().StringVar(&file, "file", "", "repo-relative or absolute file path")
 	c.Flags().StringVar(&labels, "label", "", "comma-separated node-label filter")
 	c.Flags().IntVar(&limit, "limit", 100, "max declarations")
+	selectFlag(c, &sel)
 	_ = c.MarkFlagRequired("file")
 	_ = c.RegisterFlagCompletionFunc("project", projectFlagCompletion(g))
 	_ = c.RegisterFlagCompletionFunc("file", func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
@@ -283,6 +321,7 @@ func repoRelative(ctx *Ctx, proj, file string) string {
 func cmdImpact(g *Globals) *cobra.Command {
 	var project, direction string
 	var depth, limit int
+	var sel bool
 	c := &cobra.Command{
 		Use:   "impact [--project <name>]",
 		Short: "Map working-tree diff to affected symbols + blast radius",
@@ -294,7 +333,7 @@ func cmdImpact(g *Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			proj, err := requireProject(ctx, project)
+			proj, err := requireProject(ctx, project, sel)
 			if err != nil {
 				return err
 			}
@@ -319,12 +358,14 @@ func cmdImpact(g *Globals) *cobra.Command {
 	c.Flags().StringVar(&direction, "direction", "inbound", "inbound|outbound|both")
 	c.Flags().IntVar(&depth, "depth", 2, "traversal depth")
 	c.Flags().IntVar(&limit, "limit", 50, "max rows")
+	selectFlag(c, &sel)
 	_ = c.RegisterFlagCompletionFunc("project", projectFlagCompletion(g))
 	return c
 }
 
 func cmdArch(g *Globals) *cobra.Command {
 	var project string
+	var sel bool
 	c := &cobra.Command{
 		Use:   "arch [--project <name>]",
 		Short: "Architecture brief (languages, packages, entry points, hotspots)",
@@ -334,7 +375,7 @@ func cmdArch(g *Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			proj, err := requireProject(ctx, project)
+			proj, err := requireProject(ctx, project, sel)
 			if err != nil {
 				return err
 			}
@@ -349,6 +390,7 @@ func cmdArch(g *Globals) *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
+	selectFlag(c, &sel)
 	_ = c.RegisterFlagCompletionFunc("project", projectFlagCompletion(g))
 	return c
 }
@@ -356,6 +398,7 @@ func cmdArch(g *Globals) *cobra.Command {
 func cmdQuery(g *Globals) *cobra.Command {
 	var project, cypher string
 	var limit int
+	var sel bool
 	c := &cobra.Command{
 		Use:     "query --cypher <cypher> [--project <name>]",
 		Short:   "Raw read-only graph query (analysis profile)",
@@ -366,7 +409,7 @@ func cmdQuery(g *Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			proj, err := requireProject(ctx, project)
+			proj, err := requireProject(ctx, project, sel)
 			if err != nil {
 				return err
 			}
@@ -383,6 +426,7 @@ func cmdQuery(g *Globals) *cobra.Command {
 	c.Flags().StringVar(&project, "project", "", "project name")
 	c.Flags().StringVar(&cypher, "cypher", "", "read-only Cypher graph query")
 	c.Flags().IntVar(&limit, "limit", 20, "row limit guardrail")
+	selectFlag(c, &sel)
 	_ = c.MarkFlagRequired("cypher")
 	_ = c.RegisterFlagCompletionFunc("project", projectFlagCompletion(g))
 	return c

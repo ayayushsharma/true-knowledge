@@ -92,6 +92,20 @@ check kg-find-alias 0 $TK_BIN kg_find --query Demo --project demo
 check kg-explain-alias 0 $TK_BIN kg_explain --symbol Demo --project demo
 check kg-grep-alias 0 $TK_BIN kg_grep --pattern Demo --project demo
 
+# --- --select forces the picker (e2e is non-TTY, so it must hard-fail) ---
+# --select is a request to interact: never auto-default to the single project,
+# never silently reach CBM with an empty project, and always point at --project.
+check select-no-tty 1 $TK_BIN find --query Demo --select
+if $TK_BIN find --query Demo --select 2>&1 | grep -q 'pass --project'; then
+  pass=$((pass+1)); printf 'ok   select-no-tty-hint\n';
+else fail=$((fail+1)); printf 'FAIL select-no-tty-hint (no --project routing hint)\n'; fi
+check select-project-only-no-tty 1 $TK_BIN arch --select
+# --project always wins: --select is ignored, so this succeeds off-TTY.
+check select-ignored-with-project 0 $TK_BIN find --query Demo --project demo --select
+check select-ignored-with-project-arch 0 $TK_BIN arch --project demo --select
+# --select never lands on non-project commands.
+check select-not-on-index 1 $TK_BIN index demo --select
+
 # --- memory layer (tk-owned, no CBM needed: same checks in both modes) ---
 MEM="$TK_HOME/data/mem"
 check mem-save 0 $TK_BIN mem save db postgres --project demo --provenance setup

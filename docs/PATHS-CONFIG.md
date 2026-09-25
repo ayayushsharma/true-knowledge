@@ -1,8 +1,8 @@
 ---
 title: Paths and config — Linux-style everywhere
 status: authoritative
-date: 2026-09-25
-supersedes: [compatible-implementation-spec.md §6, docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (memory paths), docs/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md (MCP profile env), docs/DECISIONS/2026-09-24-mvp4-human-ux-picker-manpages.md (ui.picker config key), docs/DECISIONS/2026-09-25-ledger-append-only-history-prune.md (ledger storage + ledger_chars semantics), docs/DECISIONS/2026-09-25-comments-pass-fixes.md (nested mcp{} config shape, <config>/ignore file)]
+date: 2026-09-26
+supersedes: [compatible-implementation-spec.md §6, docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (memory paths), docs/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md (MCP profile env), docs/DECISIONS/2026-09-24-mvp4-human-ux-picker-manpages.md (ui.picker config key), docs/DECISIONS/2026-09-25-ledger-append-only-history-prune.md (ledger storage + ledger_chars semantics), docs/DECISIONS/2026-09-25-comments-pass-fixes.md (nested mcp{} config shape, <config>/ignore file)]docs/DECISIONS/2026-09-26-select-flag-forces-project-picker.md (per-command --select forces the project picker open), 
 superseded-by: null
 ---
 
@@ -10,7 +10,7 @@ superseded-by: null
 
 ## Config keys (dotted, `tk config set/list`)
 
-`index_mode`, `auto_index`, `auto_watch`, `watcher_enabled`, `allowed_root`, `cbm_binary`, `cbm_version_pin`, `budgets.default_chars|architecture_chars|notes_toc_chars|ledger_chars` (`ledger_chars` = retrieval-only cap on `ledger get`, never applied on write), `embedding.enabled|endpoint|model|timeout_ms`, `ledger.enabled`, `mcp.profile`, `ui.picker` (fuzzy project picker on multi-project + TTY, default true; see human-UX ADR). `mcp.profile` is stored under a nested JSON `mcp` object (like `budgets`/`embedding`/`ledger`/`ui`); the legacy flat `mcp_profile` key still loads and migrates to nested on the next `Save`. Unknown keys error; `set` validates at write time (enabling embeddings requires an endpoint + model; `mcp.profile` must be one of `scout|analysis|minimal|memory` or empty).
+`index_mode`, `auto_index`, `auto_watch`, `watcher_enabled`, `allowed_root`, `cbm_binary`, `cbm_version_pin`, `budgets.default_chars|architecture_chars|notes_toc_chars|ledger_chars` (`ledger_chars` = retrieval-only cap on `ledger get`, never applied on write), `embedding.enabled|endpoint|model|timeout_ms`, `ledger.enabled`, `mcp.profile`, `ui.picker` (fuzzy project picker on multi-project + TTY, default true; see human-UX ADR; also gates the per-command `--select`, which forces the picker open even with one registered project — see the `--select` ADR). `mcp.profile` is stored under a nested JSON `mcp` object (like `budgets`/`embedding`/`ledger`/`ui`); the legacy flat `mcp_profile` key still loads and migrates to nested on the next `Save`. Unknown keys error; `set` validates at write time (enabling embeddings requires an endpoint + model; `mcp.profile` must be one of `scout|analysis|minimal|memory` or empty).
 
 ## Runtime env vars
 

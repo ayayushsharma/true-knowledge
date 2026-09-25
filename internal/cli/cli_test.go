@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ayayushsharma/true-knowledge/internal/gitx"
@@ -22,15 +23,45 @@ func TestRequireProject(t *testing.T) {
 		"other": {Path: "/b"},
 	}
 	c := testCtx(reg)
-	if _, err := requireProject(c, ""); err == nil {
+	if _, err := requireProject(c, "", false); err == nil {
 		t.Fatal("expected ambiguity error with 2 registered and no --project")
 	}
-	if p, err := requireProject(c, "demo"); err != nil || p != "demo" {
+	if p, err := requireProject(c, "demo", false); err != nil || p != "demo" {
 		t.Fatalf("flag = %q %v", p, err)
 	}
 	single := testCtx(store.Registry{"solo": {Path: "/s"}})
-	if p, err := requireProject(single, ""); err != nil || p != "solo" {
+	if p, err := requireProject(single, "", false); err != nil || p != "solo" {
 		t.Fatalf("single = %q %v", p, err)
+	}
+}
+
+// --select forces the picker open instead of auto-defaulting. A zero-value
+// Ctx has ui.picker off and no TTY, so the forced picker is unreachable in
+// tests: --select must hard-fail rather than silently resolve to the single
+// registered project, and must never yield "" to CBM. --project wins outright.
+func TestRequireProjectSelect(t *testing.T) {
+	single := testCtx(store.Registry{"solo": {Path: "/s"}})
+	// --select does not auto-default even with exactly one project.
+	if p := resolveProject(single, "", true); p != "" {
+		t.Fatalf("--select must not auto-default, got %q", p)
+	}
+	if p, err := requireProject(single, "", true); err == nil {
+		t.Fatalf("--select with an unreachable picker must fail, got %q", p)
+	} else if p != "" {
+		t.Fatalf("--select must never resolve a project off-TTY, got %q", p)
+	} else if !strings.Contains(err.Error(), "pass --project") {
+		t.Fatalf("want routing hint in error, got %v", err)
+	}
+	// --project takes precedence: --select is ignored, no error.
+	if p, err := requireProject(single, "solo", true); err != nil || p != "solo" {
+		t.Fatalf("--project must win over --select, got %q %v", p, err)
+	}
+	// Nothing registered: a distinct error pointing at register.
+	empty := testCtx(store.Registry{})
+	if _, err := requireProject(empty, "", true); err == nil {
+		t.Fatal("--select with an empty registry must fail")
+	} else if !strings.Contains(err.Error(), "tk register") {
+		t.Fatalf("want register hint for empty registry, got %v", err)
 	}
 }
 

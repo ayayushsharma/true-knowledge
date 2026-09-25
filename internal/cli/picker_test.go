@@ -64,9 +64,16 @@ func TestRequireProjectPickerDisabled(t *testing.T) {
 	if c.Cfg.UI.Picker {
 		t.Fatal("zero-value Ctx must default ui.picker off for hermetic tests")
 	}
-	if p, err := requireProject(c, ""); err == nil || p != "" {
+	if p, err := requireProject(c, "", false); err == nil || p != "" {
 		t.Fatalf("want routing error for ambiguous multi-project, got %q %v", p, err)
 	} else if !strings.Contains(err.Error(), "pass --project") {
 		t.Fatalf("want routing hint in error, got %v", err)
+	}
+	// --select cannot reach a disabled picker either: it hard-fails with the
+	// same routing hint rather than opening a menu or falling back.
+	if p, err := requireProject(c, "", true); err == nil || p != "" {
+		t.Fatalf("want hard error for --select with the picker disabled, got %q %v", p, err)
+	} else if !strings.Contains(err.Error(), "pass --project") {
+		t.Fatalf("want routing hint in --select error, got %v", err)
 	}
 }

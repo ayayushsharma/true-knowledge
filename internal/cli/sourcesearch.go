@@ -125,6 +125,7 @@ func zoektStaleNote(p store.Project) (note string, modified, untracked int) {
 func cmdSourceSearch(g *Globals) *cobra.Command {
 	var project, files, pat string
 	var limit int
+	var sel bool
 	c := &cobra.Command{
 		Use:   "source-search --pattern <pattern> [--project <name>]",
 		Short: "Trigram text search via zoekt (explicit, in-process, auto-refresh)",
@@ -136,7 +137,7 @@ func cmdSourceSearch(g *Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			proj, err := requireProject(ctx, project)
+			proj, err := requireProject(ctx, project, sel)
 			if err != nil {
 				return err
 			}
@@ -177,6 +178,7 @@ func cmdSourceSearch(g *Globals) *cobra.Command {
 	c.Flags().StringVar(&pat, "pattern", "", "search pattern")
 	c.Flags().StringVar(&files, "files", "", "file glob filter (zoekt file:)")
 	c.Flags().IntVar(&limit, "limit", 20, "max matches")
+	selectFlag(c, &sel)
 	_ = c.MarkFlagRequired("pattern")
 	_ = c.RegisterFlagCompletionFunc("project", projectFlagCompletion(g))
 	return c

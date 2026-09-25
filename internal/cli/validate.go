@@ -37,6 +37,7 @@ func annotateAbsence(ctx context.Context, c *Ctx, proj, out string) (string, err
 func cmdValidate(g *Globals) *cobra.Command {
 	var project, sym string
 	var limit int
+	var sel bool
 	c := &cobra.Command{
 		Use:     "validate --symbol <symbol> [--project <name>]",
 		Short:   "Symbol existence + near-miss candidates, coverage-annotated (analysis profile)",
@@ -47,7 +48,7 @@ func cmdValidate(g *Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			proj, err := requireProject(ctx, project)
+			proj, err := requireProject(ctx, project, sel)
 			if err != nil {
 				return err
 			}
@@ -84,6 +85,7 @@ func cmdValidate(g *Globals) *cobra.Command {
 	c.Flags().StringVar(&project, "project", "", "project name")
 	c.Flags().StringVar(&sym, "symbol", "", "symbol to validate")
 	c.Flags().IntVar(&limit, "limit", 5, "max rows per lookup")
+	selectFlag(c, &sel)
 	_ = c.MarkFlagRequired("symbol")
 	_ = c.RegisterFlagCompletionFunc("project", projectFlagCompletion(g))
 	return c

@@ -6,7 +6,7 @@ tk-source-search - Trigram text search via zoekt (explicit, in-process, auto-ref
 
 
 .SH SYNOPSIS
-\fBtk source-search  [project] [flags]\fP
+\fBtk source-search --pattern  [--project ] [flags]\fP
 
 
 .SH DESCRIPTION
@@ -24,6 +24,10 @@ Trigram text search via zoekt (explicit, in-process, auto-refresh)
 .PP
 \fB--limit\fP=20
 	max matches
+
+.PP
+\fB--pattern\fP=""
+	search pattern
 
 .PP
 \fB--project\fP=""
@@ -45,8 +49,8 @@ Trigram text search via zoekt (explicit, in-process, auto-refresh)
 
 .SH EXAMPLE
 .EX
-  tk source-search ProcessOrder demo
-  tk source-search "ok:" demo --files '*.go' --limit 20
+  tk source-search --pattern ProcessOrder --project demo
+  tk source-search --pattern "ok:" --project demo --files '*.go' --limit 20
 .EE
 
 

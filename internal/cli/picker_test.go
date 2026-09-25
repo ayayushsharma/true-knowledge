@@ -64,7 +64,7 @@ func TestRequireProjectPickerDisabled(t *testing.T) {
 	if c.Cfg.UI.Picker {
 		t.Fatal("zero-value Ctx must default ui.picker off for hermetic tests")
 	}
-	if p, err := requireProject(c, "", []string{"query words here"}); err == nil || p != "" {
+	if p, err := requireProject(c, ""); err == nil || p != "" {
 		t.Fatalf("want routing error for ambiguous multi-project, got %q %v", p, err)
 	} else if !strings.Contains(err.Error(), "pass --project") {
 		t.Fatalf("want routing hint in error, got %v", err)

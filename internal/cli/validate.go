@@ -35,26 +35,19 @@ func annotateAbsence(ctx context.Context, c *Ctx, proj, out string) (string, err
 }
 
 func cmdValidate(g *Globals) *cobra.Command {
-	var project string
+	var project, sym string
 	var limit int
 	c := &cobra.Command{
-		Use:     "validate <symbol> [project]",
+		Use:     "validate --symbol <symbol> [--project <name>]",
 		Short:   "Symbol existence + near-miss candidates, coverage-annotated (analysis profile)",
-		Example: `  tk validate ProcessOrder demo`,
-		Args:    cobra.MinimumNArgs(1),
-		ValidArgsFunction: func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
-			if ctx, err := load(*g); err == nil {
-				return ctx.projectNames(), cobra.ShellCompDirectiveNoFileComp
-			}
-			return nil, cobra.ShellCompDirectiveNoFileComp
-		},
+		Example: `  tk validate --symbol ProcessOrder --project demo`,
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, err := load(*g)
 			if err != nil {
 				return err
 			}
-			sym := args[0]
-			proj, err := requireProject(ctx, project, args)
+			proj, err := requireProject(ctx, project)
 			if err != nil {
 				return err
 			}
@@ -89,6 +82,9 @@ func cmdValidate(g *Globals) *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
+	c.Flags().StringVar(&sym, "symbol", "", "symbol to validate")
 	c.Flags().IntVar(&limit, "limit", 5, "max rows per lookup")
+	_ = c.MarkFlagRequired("symbol")
+	_ = c.RegisterFlagCompletionFunc("project", projectFlagCompletion(g))
 	return c
 }

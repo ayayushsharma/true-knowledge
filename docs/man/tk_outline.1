@@ -6,7 +6,7 @@ tk-outline - Declarations in one file, in source order (cheap read alternative)
 
 
 .SH SYNOPSIS
-\fBtk outline  [project] [flags]\fP
+\fBtk outline --file  [--project ] [flags]\fP
 
 
 .SH DESCRIPTION
@@ -14,6 +14,10 @@ Declarations in one file, in source order (cheap read alternative)
 
 
 .SH OPTIONS
+\fB--file\fP=""
+	repo-relative or absolute file path
+
+.PP
 \fB-h\fP, \fB--help\fP[=false]
 	help for outline
 
@@ -45,8 +49,8 @@ Declarations in one file, in source order (cheap read alternative)
 
 .SH EXAMPLE
 .EX
-  tk outline orders.go demo
-  tk outline src/main.go --label Function
+  tk outline --file orders.go --project demo
+  tk outline --file src/main.go --label Function --project demo
 .EE
 
 

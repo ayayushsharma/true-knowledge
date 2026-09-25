@@ -6,7 +6,7 @@ tk-impact - Map working-tree diff to affected symbols + blast radius
 
 
 .SH SYNOPSIS
-\fBtk impact [project] [flags]\fP
+\fBtk impact [--project ] [flags]\fP
 
 
 .SH DESCRIPTION
@@ -49,8 +49,8 @@ Map working-tree diff to affected symbols + blast radius
 
 .SH EXAMPLE
 .EX
-  tk impact demo
-  tk impact --direction outbound --depth 3
+  tk impact --project demo
+  tk impact --direction outbound --depth 3 --project demo
 .EE
 
 

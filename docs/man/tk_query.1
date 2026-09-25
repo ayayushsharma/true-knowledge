@@ -6,7 +6,7 @@ tk-query - Raw read-only graph query (analysis profile)
 
 
 .SH SYNOPSIS
-\fBtk query  [project] [flags]\fP
+\fBtk query --cypher  [--project ] [flags]\fP
 
 
 .SH DESCRIPTION
@@ -14,6 +14,10 @@ Raw read-only graph query (analysis profile)
 
 
 .SH OPTIONS
+\fB--cypher\fP=""
+	read-only Cypher graph query
+
+.PP
 \fB-h\fP, \fB--help\fP[=false]
 	help for query
 
@@ -41,7 +45,7 @@ Raw read-only graph query (analysis profile)
 
 .SH EXAMPLE
 .EX
-  tk query "MATCH (f:Function) RETURN f.name LIMIT 5" demo
+  tk query --cypher "MATCH (f:Function) RETURN f.name LIMIT 5" --project demo
 .EE
 
 

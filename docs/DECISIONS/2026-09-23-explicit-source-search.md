@@ -3,7 +3,7 @@ title: Explicit source-search over magic routing
 status: authoritative
 date: 2026-09-23
 supersedes: []
-superseded-by: [docs/DECISIONS/2026-09-23-zoekt-library-not-backend.md (backend mechanics + distribution sections only), docs/DECISIONS/2026-09-24-zoekt-staleness.md (serving model only: static shards → auto-refresh + live worktree bytes)]
+superseded-by: [docs/DECISIONS/2026-09-23-zoekt-library-not-backend.md (backend mechanics + distribution sections only), docs/DECISIONS/2026-09-24-zoekt-staleness.md (serving model only: static shards → auto-refresh + live worktree bytes), docs/DECISIONS/2026-09-25-flag-only-query-forms.md (CLI invocation form only: `tk source-search <pattern> [project]` → `--pattern`/`--project` flags — decision content stands unchanged)]
 ---
 
 # ADR — explicit `source-search`, no magic backend routing

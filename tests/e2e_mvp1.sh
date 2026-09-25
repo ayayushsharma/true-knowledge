@@ -65,16 +65,16 @@ check index 0 $TK_BIN index demo
 check sync 0 $TK_BIN sync demo
 check status 0 $TK_BIN status
 check status-json 0 $TK_BIN status --json
-check find 0 $TK_BIN find Demo demo
-check find-label 0 $TK_BIN find Demo demo --label Function
-check explain 0 $TK_BIN explain Demo demo
-check grep 0 $TK_BIN grep Demo demo
-check grep-badregex 1 $TK_BIN grep "(unclosed" --regex
-check arch 0 $TK_BIN arch demo
-check query 0 $TK_BIN query "MATCH (f:Function) RETURN f.name LIMIT 5" demo
-check outline 0 $TK_BIN outline main.go demo
-check impact 0 $TK_BIN impact demo
-check source-search 0 $TK_BIN source-search Demo demo
+check find 0 $TK_BIN find --query Demo --project demo
+check find-label 0 $TK_BIN find --query Demo --project demo --label Function
+check explain 0 $TK_BIN explain --symbol Demo --project demo
+check grep 0 $TK_BIN grep --pattern Demo --project demo
+check grep-badregex 1 $TK_BIN grep --pattern "(unclosed" --regex
+check arch 0 $TK_BIN arch --project demo
+check query 0 $TK_BIN query --cypher "MATCH (f:Function) RETURN f.name LIMIT 5" --project demo
+check outline 0 $TK_BIN outline --file main.go --project demo
+check impact 0 $TK_BIN impact --project demo
+check source-search 0 $TK_BIN source-search --pattern Demo --project demo
 check config-get 0 $TK_BIN config get index_mode
 check config-validate 0 $TK_BIN config validate
 check config-picker-get 0 $TK_BIN config get ui.picker
@@ -86,11 +86,11 @@ check config-picker-back 0 $TK_BIN config set ui.picker true
 check daemon-status 0 $TK_BIN daemon status
 check completion 0 $TK_BIN completion bash
 check complete-projects 0 $TK_BIN __complete index ""
-check validate-hit 0 $TK_BIN validate Demo demo
-check validate-miss 0 $TK_BIN validate DoesNotExist demo
-check kg-find-alias 0 $TK_BIN kg_find Demo demo
-check kg-explain-alias 0 $TK_BIN kg_explain Demo demo
-check kg-grep-alias 0 $TK_BIN kg_grep Demo demo
+check validate-hit 0 $TK_BIN validate --symbol Demo --project demo
+check validate-miss 0 $TK_BIN validate --symbol DoesNotExist --project demo
+check kg-find-alias 0 $TK_BIN kg_find --query Demo --project demo
+check kg-explain-alias 0 $TK_BIN kg_explain --symbol Demo --project demo
+check kg-grep-alias 0 $TK_BIN kg_grep --pattern Demo --project demo
 
 # --- memory layer (tk-owned, no CBM needed: same checks in both modes) ---
 MEM="$TK_HOME/data/mem"

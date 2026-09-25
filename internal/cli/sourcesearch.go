@@ -123,26 +123,20 @@ func zoektStaleNote(p store.Project) (note string, modified, untracked int) {
 }
 
 func cmdSourceSearch(g *Globals) *cobra.Command {
-	var project, files string
+	var project, files, pat string
 	var limit int
 	c := &cobra.Command{
-		Use:   "source-search <pattern> [project]",
+		Use:   "source-search --pattern <pattern> [--project <name>]",
 		Short: "Trigram text search via zoekt (explicit, in-process, auto-refresh)",
-		Example: `  tk source-search ProcessOrder demo
-  tk source-search "ok:" demo --files '*.go' --limit 20`,
-		Args: cobra.MinimumNArgs(1),
-		ValidArgsFunction: func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
-			if ctx, err := load(*g); err == nil {
-				return ctx.projectNames(), cobra.ShellCompDirectiveNoFileComp
-			}
-			return nil, cobra.ShellCompDirectiveNoFileComp
-		},
+		Example: `  tk source-search --pattern ProcessOrder --project demo
+  tk source-search --pattern "ok:" --project demo --files '*.go' --limit 20`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, err := load(*g)
 			if err != nil {
 				return err
 			}
-			proj, err := requireProject(ctx, project, args)
+			proj, err := requireProject(ctx, project)
 			if err != nil {
 				return err
 			}
@@ -160,7 +154,7 @@ func cmdSourceSearch(g *Globals) *cobra.Command {
 			p = ctx.Reg[proj]
 			note, modCount, untrackedCount := zoektStaleNote(p)
 			t0 := time.Now()
-			text, err := mcp.QueryZoektLive(cmd.Context(), ctx.Paths.ZoektShards(proj), p.Path, args[0], files, limit)
+			text, err := mcp.QueryZoektLive(cmd.Context(), ctx.Paths.ZoektShards(proj), p.Path, pat, files, limit)
 			ev := trace.Event{Backend: "zoekt", Op: "search", Ms: time.Since(t0).Milliseconds(), OK: err == nil}
 			if err != nil {
 				ev.Error = firstLine(err.Error())
@@ -180,7 +174,10 @@ func cmdSourceSearch(g *Globals) *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
+	c.Flags().StringVar(&pat, "pattern", "", "search pattern")
 	c.Flags().StringVar(&files, "files", "", "file glob filter (zoekt file:)")
 	c.Flags().IntVar(&limit, "limit", 20, "max matches")
+	_ = c.MarkFlagRequired("pattern")
+	_ = c.RegisterFlagCompletionFunc("project", projectFlagCompletion(g))
 	return c
 }

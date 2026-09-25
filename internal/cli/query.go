@@ -11,17 +11,12 @@ import (
 
 var metaChars = regexp.MustCompile(`[.*()\[\]{}+?^$|\\]`)
 
-func resolveProject(c *Ctx, flag string, args []string) string {
+func resolveProject(c *Ctx, flag string) string {
 	if flag != "" {
 		return flag
 	}
 	if len(c.Reg) == 1 {
 		return c.Reg.Names()[0]
-	}
-	if len(args) > 0 {
-		if _, ok := c.Reg[args[len(args)-1]]; ok {
-			return args[len(args)-1]
-		}
 	}
 	return ""
 }
@@ -30,8 +25,8 @@ func resolveProject(c *Ctx, flag string, args []string) string {
 // CBM requires project on nearly every tool; tk never sends "".
 // On interactive TTY (+ !--json + ui.picker) the failure becomes a project
 // picker first — agents/scripts never see it (picker is gated off).
-func requireProject(c *Ctx, flag string, args []string) (string, error) {
-	if p := resolveProject(c, flag, args); p != "" {
+func requireProject(c *Ctx, flag string) (string, error) {
+	if p := resolveProject(c, flag); p != "" {
 		return p, nil
 	}
 	if pickerEnabled(c) {
@@ -50,6 +45,17 @@ func listNames(c *Ctx) string {
 	return strings.Join(names, ", ")
 }
 
+// projectFlagCompletion completes --project from the registry (dynamic +
+// instant; registry is the source, no live merge).
+func projectFlagCompletion(g *Globals) func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+	return func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
+		if ctx, err := load(*g); err == nil {
+			return ctx.projectNames(), cobra.ShellCompDirectiveNoFileComp
+		}
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+}
+
 // keywords splits a natural-language phrase into CBM semantic keywords.
 // semantic_query must be an array of keyword strings, not one string.
 func keywords(q string) []string {
@@ -65,29 +71,23 @@ func keywords(q string) []string {
 }
 
 func cmdFind(g *Globals) *cobra.Command {
-	var project, label string
+	var project, query, label string
 	var limit int
 	c := &cobra.Command{
-		Use:     "find <query> [project]",
+		Use:     "find --query <query> [--project <name>]",
 		Short:   "Deterministic router: regex→grep, NL→semantic, ident→graph",
 		Aliases: []string{"kg_find"},
-		Example: `  tk find ProcessOrder demo
-  tk find "retry.*backoff" demo --limit 20
-  tk find Handler demo --label Function`,
-		Args: cobra.MinimumNArgs(1),
-		ValidArgsFunction: func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
-			if ctx, err := load(*g); err == nil {
-				return ctx.projectNames(), cobra.ShellCompDirectiveNoFileComp
-			}
-			return nil, cobra.ShellCompDirectiveNoFileComp
-		},
+		Example: `  tk find --query ProcessOrder --project demo
+  tk find --query "retry.*backoff" --project demo --limit 20
+  tk find --query Handler --project demo --label Function`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, err := load(*g)
 			if err != nil {
 				return err
 			}
-			q := args[0]
-			proj, err := requireProject(ctx, project, args)
+			q := query
+			proj, err := requireProject(ctx, project)
 			if err != nil {
 				return err
 			}
@@ -125,25 +125,27 @@ func cmdFind(g *Globals) *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
+	c.Flags().StringVar(&query, "query", "", "identifier, natural-language phrase, or text pattern")
 	c.Flags().StringVar(&label, "label", "", "node-label filter (graph routes only)")
 	c.Flags().IntVar(&limit, "limit", 20, "max results")
+	_ = c.MarkFlagRequired("query")
+	_ = c.RegisterFlagCompletionFunc("project", projectFlagCompletion(g))
 	return c
 }
 
 func cmdExplain(g *Globals) *cobra.Command {
-	var project string
+	var project, sym string
 	c := &cobra.Command{
-		Use:     "explain <symbol> [project]",
+		Use:     "explain --symbol <symbol> [--project <name>]",
 		Short:   "Definition + snippet + callers/callees (one bounded call set)",
 		Aliases: []string{"kg_explain"},
-		Args:    cobra.MinimumNArgs(1),
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, err := load(*g)
 			if err != nil {
 				return err
 			}
-			sym := args[0]
-			proj, err := requireProject(ctx, project, args)
+			proj, err := requireProject(ctx, project)
 			if err != nil {
 				return err
 			}
@@ -163,30 +165,32 @@ func cmdExplain(g *Globals) *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
+	c.Flags().StringVar(&sym, "symbol", "", "qualified symbol name")
+	_ = c.MarkFlagRequired("symbol")
+	_ = c.RegisterFlagCompletionFunc("project", projectFlagCompletion(g))
 	return c
 }
 
 func cmdGrep(g *Globals) *cobra.Command {
-	var project, files string
+	var project, files, pat string
 	var limit int
 	var isRegex bool
 	c := &cobra.Command{
-		Use:     "grep <pattern> [project]",
+		Use:     "grep --pattern <pattern> [--project <name>]",
 		Short:   "Project-scoped source-text search",
 		Aliases: []string{"kg_grep"},
-		Args:    cobra.MinimumNArgs(1),
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, err := load(*g)
 			if err != nil {
 				return err
 			}
-			pat := args[0]
 			if isRegex {
 				if _, err := regexp.Compile(pat); err != nil {
 					return fail("invalid regex %q: %v (not empty results)", pat, err)
 				}
 			}
-			proj, err := requireProject(ctx, project, args)
+			proj, err := requireProject(ctx, project)
 			if err != nil {
 				return err
 			}
@@ -208,44 +212,38 @@ func cmdGrep(g *Globals) *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
+	c.Flags().StringVar(&pat, "pattern", "", "search pattern (plain text, or --regex)")
 	c.Flags().StringVar(&files, "files", "", "file glob filter")
 	c.Flags().IntVar(&limit, "limit", 20, "max results")
 	c.Flags().BoolVar(&isRegex, "regex", false, "treat pattern as regex (validation error on bad regex)")
+	_ = c.MarkFlagRequired("pattern")
+	_ = c.RegisterFlagCompletionFunc("project", projectFlagCompletion(g))
 	return c
 }
 
 func cmdOutline(g *Globals) *cobra.Command {
-	var project, labels string
+	var project, labels, file string
 	var limit int
 	c := &cobra.Command{
-		Use:   "outline <file> [project]",
+		Use:   "outline --file <file> [--project <name>]",
 		Short: "Declarations in one file, in source order (cheap read alternative)",
-		Example: `  tk outline orders.go demo
-  tk outline src/main.go --label Function`,
-		Args: cobra.MinimumNArgs(1),
-		ValidArgsFunction: func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
-			if len(args) == 0 {
-				return nil, cobra.ShellCompDirectiveFilterFileExt
-			}
-			if ctx, err := load(*g); err == nil {
-				return ctx.projectNames(), cobra.ShellCompDirectiveNoFileComp
-			}
-			return nil, cobra.ShellCompDirectiveNoFileComp
-		},
+		Example: `  tk outline --file orders.go --project demo
+  tk outline --file src/main.go --label Function --project demo`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, err := load(*g)
 			if err != nil {
 				return err
 			}
-			proj, err := requireProject(ctx, project, args)
+			proj, err := requireProject(ctx, project)
 			if err != nil {
 				return err
 			}
-			file := repoRelative(ctx, proj, args[0])
+			rf := repoRelative(ctx, proj, file)
 			if _, _, err := ctx.needCBM(cmd.Context()); err != nil {
 				return err
 			}
-			payload := map[string]any{"project": proj, "file_path": file, "limit": limit}
+			payload := map[string]any{"project": proj, "file_path": rf, "limit": limit}
 			if labels != "" {
 				payload["labels"] = strings.Split(labels, ",")
 			}
@@ -253,12 +251,18 @@ func cmdOutline(g *Globals) *cobra.Command {
 			if err != nil {
 				return fail("%v", err)
 			}
-			return ctx.outFresh(cmd, proj, cbmexec.Truncate(out, ctx.budget("")), map[string]any{"project": proj, "file": file})
+			return ctx.outFresh(cmd, proj, cbmexec.Truncate(out, ctx.budget("")), map[string]any{"project": proj, "file": rf})
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
+	c.Flags().StringVar(&file, "file", "", "repo-relative or absolute file path")
 	c.Flags().StringVar(&labels, "label", "", "comma-separated node-label filter")
 	c.Flags().IntVar(&limit, "limit", 100, "max declarations")
+	_ = c.MarkFlagRequired("file")
+	_ = c.RegisterFlagCompletionFunc("project", projectFlagCompletion(g))
+	_ = c.RegisterFlagCompletionFunc("file", func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
+		return nil, cobra.ShellCompDirectiveFilterFileExt
+	})
 	return c
 }
 
@@ -280,24 +284,17 @@ func cmdImpact(g *Globals) *cobra.Command {
 	var project, direction string
 	var depth, limit int
 	c := &cobra.Command{
-		Use:   "impact [project]",
+		Use:   "impact [--project <name>]",
 		Short: "Map working-tree diff to affected symbols + blast radius",
-		Example: `  tk impact demo
-  tk impact --direction outbound --depth 3`,
-		ValidArgsFunction: func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
-			if len(args) == 0 {
-				if ctx, err := load(*g); err == nil {
-					return ctx.projectNames(), cobra.ShellCompDirectiveNoFileComp
-				}
-			}
-			return nil, cobra.ShellCompDirectiveNoFileComp
-		},
+		Example: `  tk impact --project demo
+  tk impact --direction outbound --depth 3 --project demo`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, err := load(*g)
 			if err != nil {
 				return err
 			}
-			proj, err := requireProject(ctx, project, args)
+			proj, err := requireProject(ctx, project)
 			if err != nil {
 				return err
 			}
@@ -322,20 +319,22 @@ func cmdImpact(g *Globals) *cobra.Command {
 	c.Flags().StringVar(&direction, "direction", "inbound", "inbound|outbound|both")
 	c.Flags().IntVar(&depth, "depth", 2, "traversal depth")
 	c.Flags().IntVar(&limit, "limit", 50, "max rows")
+	_ = c.RegisterFlagCompletionFunc("project", projectFlagCompletion(g))
 	return c
 }
 
 func cmdArch(g *Globals) *cobra.Command {
 	var project string
 	c := &cobra.Command{
-		Use:   "arch [project]",
+		Use:   "arch [--project <name>]",
 		Short: "Architecture brief (languages, packages, entry points, hotspots)",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, err := load(*g)
 			if err != nil {
 				return err
 			}
-			proj, err := requireProject(ctx, project, args)
+			proj, err := requireProject(ctx, project)
 			if err != nil {
 				return err
 			}
@@ -350,30 +349,31 @@ func cmdArch(g *Globals) *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
+	_ = c.RegisterFlagCompletionFunc("project", projectFlagCompletion(g))
 	return c
 }
 
 func cmdQuery(g *Globals) *cobra.Command {
-	var project string
+	var project, cypher string
 	var limit int
 	c := &cobra.Command{
-		Use:     "query <cypher> [project]",
+		Use:     "query --cypher <cypher> [--project <name>]",
 		Short:   "Raw read-only graph query (analysis profile)",
-		Example: `  tk query "MATCH (f:Function) RETURN f.name LIMIT 5" demo`,
-		Args:    cobra.MinimumNArgs(1),
+		Example: `  tk query --cypher "MATCH (f:Function) RETURN f.name LIMIT 5" --project demo`,
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, err := load(*g)
 			if err != nil {
 				return err
 			}
-			proj, err := requireProject(ctx, project, args)
+			proj, err := requireProject(ctx, project)
 			if err != nil {
 				return err
 			}
 			if _, _, err := ctx.needCBM(cmd.Context()); err != nil {
 				return err
 			}
-			out, err := ctx.cbmCallJSON(cmd.Context(), "query_graph", map[string]any{"query": args[0], "project": proj, "max_rows": limit})
+			out, err := ctx.cbmCallJSON(cmd.Context(), "query_graph", map[string]any{"query": cypher, "project": proj, "max_rows": limit})
 			if err != nil {
 				return fail("%v", err)
 			}
@@ -381,7 +381,10 @@ func cmdQuery(g *Globals) *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&project, "project", "", "project name")
+	c.Flags().StringVar(&cypher, "cypher", "", "read-only Cypher graph query")
 	c.Flags().IntVar(&limit, "limit", 20, "row limit guardrail")
+	_ = c.MarkFlagRequired("cypher")
+	_ = c.RegisterFlagCompletionFunc("project", projectFlagCompletion(g))
 	return c
 }
 

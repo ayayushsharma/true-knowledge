@@ -6,7 +6,7 @@ tk-grep - Project-scoped source-text search
 
 
 .SH SYNOPSIS
-\fBtk grep  [project] [flags]\fP
+\fBtk grep --pattern  [--project ] [flags]\fP
 
 
 .SH DESCRIPTION
@@ -24,6 +24,10 @@ Project-scoped source-text search
 .PP
 \fB--limit\fP=20
 	max results
+
+.PP
+\fB--pattern\fP=""
+	search pattern (plain text, or --regex)
 
 .PP
 \fB--project\fP=""

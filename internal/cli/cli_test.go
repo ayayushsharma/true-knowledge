@@ -22,17 +22,14 @@ func TestRequireProject(t *testing.T) {
 		"other": {Path: "/b"},
 	}
 	c := testCtx(reg)
-	if p, err := requireProject(c, "", []string{"other"}); err != nil || p != "other" {
-		t.Fatalf("positional = %q %v", p, err)
+	if _, err := requireProject(c, ""); err == nil {
+		t.Fatal("expected ambiguity error with 2 registered and no --project")
 	}
-	if p, err := requireProject(c, "demo", []string{"other"}); err != nil || p != "demo" {
+	if p, err := requireProject(c, "demo"); err != nil || p != "demo" {
 		t.Fatalf("flag = %q %v", p, err)
 	}
-	if _, err := requireProject(c, "", []string{"query words here"}); err == nil {
-		t.Fatal("expected ambiguity error with 2 projects and no match")
-	}
 	single := testCtx(store.Registry{"solo": {Path: "/s"}})
-	if p, err := requireProject(single, "", []string{"anything"}); err != nil || p != "solo" {
+	if p, err := requireProject(single, ""); err != nil || p != "solo" {
 		t.Fatalf("single = %q %v", p, err)
 	}
 }

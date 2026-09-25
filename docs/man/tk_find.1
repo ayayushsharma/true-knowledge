@@ -6,7 +6,7 @@ tk-find - Deterministic router: regex→grep, NL→semantic, ident→graph
 
 
 .SH SYNOPSIS
-\fBtk find  [project] [flags]\fP
+\fBtk find --query  [--project ] [flags]\fP
 
 
 .SH DESCRIPTION
@@ -29,6 +29,10 @@ Deterministic router: regex→grep, NL→semantic, ident→graph
 \fB--project\fP=""
 	project name
 
+.PP
+\fB--query\fP=""
+	identifier, natural-language phrase, or text pattern
+
 
 .SH OPTIONS INHERITED FROM PARENT COMMANDS
 \fB--budget\fP=0
@@ -45,9 +49,9 @@ Deterministic router: regex→grep, NL→semantic, ident→graph
 
 .SH EXAMPLE
 .EX
-  tk find ProcessOrder demo
-  tk find "retry.*backoff" demo --limit 20
-  tk find Handler demo --label Function
+  tk find --query ProcessOrder --project demo
+  tk find --query "retry.*backoff" --project demo --limit 20
+  tk find --query Handler --project demo --label Function
 .EE
 
 

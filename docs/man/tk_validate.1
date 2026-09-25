@@ -6,7 +6,7 @@ tk-validate - Symbol existence + near-miss candidates, coverage-annotated (analy
 
 
 .SH SYNOPSIS
-\fBtk validate  [project] [flags]\fP
+\fBtk validate --symbol  [--project ] [flags]\fP
 
 
 .SH DESCRIPTION
@@ -25,6 +25,10 @@ Symbol existence + near-miss candidates, coverage-annotated (analysis profile)
 \fB--project\fP=""
 	project name
 
+.PP
+\fB--symbol\fP=""
+	symbol to validate
+
 
 .SH OPTIONS INHERITED FROM PARENT COMMANDS
 \fB--budget\fP=0
@@ -41,7 +45,7 @@ Symbol existence + near-miss candidates, coverage-annotated (analysis profile)
 
 .SH EXAMPLE
 .EX
-  tk validate ProcessOrder demo
+  tk validate --symbol ProcessOrder --project demo
 .EE
 
 

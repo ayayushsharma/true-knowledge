@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/ayayushsharma/true-knowledge/internal/backends"
@@ -15,10 +13,6 @@ import (
 	"github.com/ayayushsharma/true-knowledge/internal/installer"
 	"github.com/spf13/cobra"
 )
-
-var backendVersionRe = regexp.MustCompile(`^(\d+\.\d+\.\d+|[0-9a-f]{7,40})$`)
-
-func backendVersionOK(v string) bool { return backendVersionRe.MatchString(v) }
 
 func cmdConfig(g *Globals) *cobra.Command {
 	c := &cobra.Command{Use: "config", Short: "Inspect/change tk config (tk owns, CBM follows via env)"}
@@ -47,7 +41,7 @@ func cmdConfig(g *Globals) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				v, err := getKey(ctx.Cfg, args[0])
+				v, err := config.GetKey(ctx.Cfg, args[0])
 				if err != nil {
 					return fail("%v", err)
 				}
@@ -71,7 +65,7 @@ func cmdConfig(g *Globals) *cobra.Command {
 				return err
 			}
 			cfg := ctx.Cfg
-			if err := setKey(&cfg, args[0], args[1]); err != nil {
+			if err := config.SetKey(&cfg, args[0], args[1]); err != nil {
 				return fail("%v", err)
 			}
 			if err := config.Save(ctx.Paths.ConfigFile(), cfg); err != nil {
@@ -94,12 +88,12 @@ func cmdConfig(g *Globals) *cobra.Command {
 				return err
 			}
 			def := config.Defaults()
-			dv, err := getKey(def, args[0])
+			dv, err := config.GetKey(def, args[0])
 			if err != nil {
 				return fail("%v", err)
 			}
 			cfg := ctx.Cfg
-			if err := setKey(&cfg, args[0], dv); err != nil {
+			if err := config.SetKey(&cfg, args[0], dv); err != nil {
 				return fail("%v", err)
 			}
 			if err := config.Save(ctx.Paths.ConfigFile(), cfg); err != nil {
@@ -124,137 +118,6 @@ func cmdConfig(g *Globals) *cobra.Command {
 	}
 	c.AddCommand(setCmd, resetCmd, validateCmd)
 	return c
-}
-
-func getKey(c config.Config, key string) (string, error) {
-	switch key {
-	case "index_mode":
-		return c.IndexMode, nil
-	case "auto_index":
-		return strconv.FormatBool(c.AutoIndex), nil
-	case "auto_watch":
-		return strconv.FormatBool(c.AutoWatch), nil
-	case "watcher_enabled":
-		return strconv.FormatBool(c.WatcherEnabled), nil
-	case "allowed_root":
-		return c.AllowedRoot, nil
-	case "cbm_binary":
-		return c.CBMBinary, nil
-	case "cbm_version_pin":
-		if c.CBMVersionPin == "" {
-			return config.DefaultCBMPin, nil
-		}
-		return c.CBMVersionPin, nil
-	case "budgets.default_chars":
-		return strconv.Itoa(c.Budgets.DefaultChars), nil
-	case "budgets.architecture_chars":
-		return strconv.Itoa(c.Budgets.ArchitectureChars), nil
-	case "budgets.notes_toc_chars":
-		return strconv.Itoa(c.Budgets.NotesTocChars), nil
-	case "budgets.ledger_chars":
-		return strconv.Itoa(c.Budgets.LedgerChars), nil
-	case "embedding.enabled":
-		return strconv.FormatBool(c.Embedding.Enabled), nil
-	case "embedding.endpoint":
-		return c.Embedding.Endpoint, nil
-	case "embedding.model":
-		return c.Embedding.Model, nil
-	case "embedding.timeout_ms":
-		return strconv.Itoa(c.Embedding.TimeoutMS), nil
-	case "ledger.enabled":
-		return strconv.FormatBool(c.Ledger.Enabled), nil
-	case "mcp.profile":
-		if c.MCP.Profile == "" {
-			return "scout (unset)", nil
-		}
-		return c.MCP.Profile, nil
-	case "ui.picker":
-		return strconv.FormatBool(c.UI.Picker), nil
-	}
-	return "", fmt.Errorf("unknown key %q (see `tk config list` / known keys)", key)
-}
-
-func setKey(c *config.Config, key, val string) error {
-	switch key {
-	case "index_mode":
-		if val != "fast" && val != "moderate" && val != "full" {
-			return fmt.Errorf("invalid index_mode %q", val)
-		}
-		c.IndexMode = val
-	case "auto_index", "auto_watch", "watcher_enabled":
-		b, err := strconv.ParseBool(val)
-		if err != nil {
-			return fmt.Errorf("want true|false: %w", err)
-		}
-		switch key {
-		case "auto_index":
-			c.AutoIndex = b
-		case "auto_watch":
-			c.AutoWatch = b
-		case "watcher_enabled":
-			c.WatcherEnabled = b
-		}
-	case "allowed_root":
-		c.AllowedRoot = val
-	case "cbm_binary":
-		c.CBMBinary = val
-	case "cbm_version_pin":
-		if !backendVersionOK(val) {
-			return fmt.Errorf("want X.Y.Z version, got %q", val)
-		}
-		c.CBMVersionPin = val
-	case "budgets.default_chars", "budgets.architecture_chars", "budgets.notes_toc_chars", "budgets.ledger_chars":
-		n, err := strconv.Atoi(val)
-		if err != nil || n <= 0 {
-			return fmt.Errorf("budget must be positive int")
-		}
-		switch key {
-		case "budgets.default_chars":
-			c.Budgets.DefaultChars = n
-		case "budgets.architecture_chars":
-			c.Budgets.ArchitectureChars = n
-		case "budgets.notes_toc_chars":
-			c.Budgets.NotesTocChars = n
-		case "budgets.ledger_chars":
-			c.Budgets.LedgerChars = n
-		}
-	case "embedding.enabled":
-		b, err := strconv.ParseBool(val)
-		if err != nil {
-			return fmt.Errorf("want true|false: %w", err)
-		}
-		c.Embedding.Enabled = b
-	case "embedding.endpoint":
-		c.Embedding.Endpoint = strings.TrimSpace(val)
-	case "embedding.model":
-		c.Embedding.Model = strings.TrimSpace(val)
-	case "embedding.timeout_ms":
-		n, err := strconv.Atoi(val)
-		if err != nil || n <= 0 {
-			return fmt.Errorf("timeout_ms must be positive int")
-		}
-		c.Embedding.TimeoutMS = n
-	case "ledger.enabled":
-		b, err := strconv.ParseBool(val)
-		if err != nil {
-			return fmt.Errorf("want true|false: %w", err)
-		}
-		c.Ledger.Enabled = b
-	case "mcp.profile":
-		if val != "" && !slices.Contains(config.ValidProfiles(), val) {
-			return fmt.Errorf("want %s or empty to unset, got %q", strings.Join(config.ValidProfiles(), "|"), val)
-		}
-		c.MCP.Profile = val
-	case "ui.picker":
-		b, err := strconv.ParseBool(val)
-		if err != nil {
-			return fmt.Errorf("want true|false: %w", err)
-		}
-		c.UI.Picker = b
-	default:
-		return fmt.Errorf("unknown key %q", key)
-	}
-	return c.Validate()
 }
 
 func cmdMigrate(g *Globals) *cobra.Command {

@@ -102,29 +102,85 @@ func ValidModes() []string { return []string{"fast", "moderate", "full"} }
 // ValidProfiles for the MCP tool surface (also used by completion).
 func ValidProfiles() []string { return []string{"scout", "analysis", "minimal", "memory"} }
 
-// configDoc decodes the on-disk shape. The legacy flat "mcp_profile" scalar
-// (pre-comments-pass) is folded into the nested "mcp" object so existing
-// configs keep loading; Save rewrites the canonical nested shape.
+// configDoc decodes the on-disk shape. Every field is a pointer so an *absent*
+// key is distinguishable from a present-but-zero one: absent keys inherit
+// Defaults(), present keys win. That distinction matters for booleans whose
+// default is true (ledger.enabled, ui.picker) — a plain bool field cannot tell
+// "absent" from "false", so a partial config.json would silently switch
+// defaults off. The legacy flat "mcp_profile" scalar (pre-comments-pass) is
+// folded into the nested "mcp" object so existing configs keep loading; Save
+// rewrites the canonical nested shape.
 type configDoc struct {
-	Version        int       `json:"version"`
-	CBMBinary      string    `json:"cbm_binary,omitempty"`
-	CBMVersionPin  string    `json:"cbm_version_pin,omitempty"`
-	IndexMode      string    `json:"index_mode"`
-	AutoIndex      bool      `json:"auto_index"`
-	AutoWatch      bool      `json:"auto_watch"`
-	WatcherEnabled bool      `json:"watcher_enabled"`
-	AllowedRoot    string    `json:"allowed_root,omitempty"`
-	Budgets        Budgets   `json:"budgets"`
-	Embedding      Embedding `json:"embedding"`
-	Ledger         Ledger    `json:"ledger"`
-	UI             UI        `json:"ui"`
-	MCP            MCP       `json:"mcp"`
-	LegacyProfile  string    `json:"mcp_profile,omitempty"`
+	Version        *int       `json:"version"`
+	CBMBinary      *string    `json:"cbm_binary,omitempty"`
+	CBMVersionPin  *string    `json:"cbm_version_pin,omitempty"`
+	IndexMode      *string    `json:"index_mode"`
+	AutoIndex      *bool      `json:"auto_index"`
+	AutoWatch      *bool      `json:"auto_watch"`
+	WatcherEnabled *bool      `json:"watcher_enabled"`
+	AllowedRoot    *string    `json:"allowed_root,omitempty"`
+	Budgets        *Budgets   `json:"budgets"`
+	Embedding      *Embedding `json:"embedding"`
+	Ledger         *Ledger    `json:"ledger"`
+	UI             *UI        `json:"ui"`
+	MCP            *MCP       `json:"mcp"`
+	LegacyProfile  *string    `json:"mcp_profile,omitempty"`
 }
 
-// UnmarshalJSON accepts both the nested "mcp" object and the legacy flat
-// "mcp_profile" scalar, folding the latter into MCP.Profile (a present legacy
-// field wins only when the nested form is empty). Unknown fields still error.
+// apply overlays the present keys of doc onto c, which must already hold
+// Defaults(). A present group object replaces its whole group wholesale, so a
+// hand-written partial "budgets" fails Validate loudly (zeros are rejected)
+// rather than silently mixing defaults into a group the user meant to replace.
+func (doc configDoc) apply(c *Config) {
+	if doc.Version != nil {
+		c.Version = *doc.Version
+	}
+	if doc.CBMBinary != nil {
+		c.CBMBinary = strings.TrimSpace(*doc.CBMBinary)
+	}
+	if doc.CBMVersionPin != nil {
+		c.CBMVersionPin = strings.TrimSpace(*doc.CBMVersionPin)
+	}
+	if doc.IndexMode != nil {
+		c.IndexMode = *doc.IndexMode
+	}
+	if doc.AutoIndex != nil {
+		c.AutoIndex = *doc.AutoIndex
+	}
+	if doc.AutoWatch != nil {
+		c.AutoWatch = *doc.AutoWatch
+	}
+	if doc.WatcherEnabled != nil {
+		c.WatcherEnabled = *doc.WatcherEnabled
+	}
+	if doc.AllowedRoot != nil {
+		c.AllowedRoot = strings.TrimSpace(*doc.AllowedRoot)
+	}
+	if doc.Budgets != nil {
+		c.Budgets = *doc.Budgets
+	}
+	if doc.Embedding != nil {
+		c.Embedding = *doc.Embedding
+	}
+	if doc.Ledger != nil {
+		c.Ledger = *doc.Ledger
+	}
+	if doc.UI != nil {
+		c.UI = *doc.UI
+	}
+	if doc.MCP != nil {
+		c.MCP = *doc.MCP
+	}
+	// A present legacy scalar fills an empty nested profile; the nested form wins.
+	if c.MCP.Profile == "" && doc.LegacyProfile != nil {
+		c.MCP.Profile = strings.TrimSpace(*doc.LegacyProfile)
+	}
+}
+
+// UnmarshalJSON seeds Defaults() and overlays only the keys present on disk,
+// so a partial/older/hand-edited config inherits defaults instead of decoding
+// to zero values. Unknown fields still error. The legacy flat "mcp_profile"
+// scalar is accepted alongside the nested "mcp" object.
 func (c *Config) UnmarshalJSON(raw []byte) error {
 	var doc configDoc
 	dec := json.NewDecoder(strings.NewReader(string(raw)))
@@ -132,40 +188,22 @@ func (c *Config) UnmarshalJSON(raw []byte) error {
 	if err := dec.Decode(&doc); err != nil {
 		return err
 	}
-	*c = Config{
-		Version:        doc.Version,
-		CBMBinary:      doc.CBMBinary,
-		CBMVersionPin:  doc.CBMVersionPin,
-		IndexMode:      doc.IndexMode,
-		AutoIndex:      doc.AutoIndex,
-		AutoWatch:      doc.AutoWatch,
-		WatcherEnabled: doc.WatcherEnabled,
-		AllowedRoot:    doc.AllowedRoot,
-		Budgets:        doc.Budgets,
-		Embedding:      doc.Embedding,
-		Ledger:         doc.Ledger,
-		UI:             doc.UI,
-		MCP:            doc.MCP,
-	}
-	if c.MCP.Profile == "" && doc.LegacyProfile != "" {
-		c.MCP.Profile = doc.LegacyProfile
-	}
+	*c = Defaults()
+	doc.apply(c)
 	return c.Validate()
 }
 
 // Load reads path or returns Defaults when missing.
 func Load(path string) (Config, error) {
-	cfg := Defaults()
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return cfg, nil
+			return Defaults(), nil
 		}
-		return cfg, err
+		return Defaults(), err
 	}
-	dec := json.NewDecoder(strings.NewReader(string(raw)))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&cfg); err != nil {
+	var cfg Config
+	if err := cfg.UnmarshalJSON(raw); err != nil {
 		return Defaults(), fmt.Errorf("invalid config %s: %w", path, err)
 	}
 	if err := cfg.Validate(); err != nil {
@@ -227,7 +265,10 @@ func Save(path string, cfg Config) error {
 	return os.Rename(tmp, path)
 }
 
-// KnownKeys for completion and `config set` validation.
+// KnownKeys for completion and `config set` validation. It is the single
+// registry: GetKey and SetKey must handle every entry, and
+// TestKnownKeysRoundTrip enforces that so a key can never be advertised for
+// completion while rejected by `config set`.
 func KnownKeys() []string {
 	return []string{
 		"index_mode", "auto_index", "auto_watch", "watcher_enabled",
@@ -240,12 +281,76 @@ func KnownKeys() []string {
 	}
 }
 
+// ProfileScout is the profile used when neither the --tool-profile flag nor
+// TK_MCP_PROFILE nor config mcp.profile selects one. Lives here because the
+// profile list is a config value (ValidProfiles); internal/mcp aliases it.
+const ProfileScout = "scout"
+
+// GetKey reads a dotted config key as the human `config get` face prints it,
+// returning the *effective* value (never a display-only string) so the output
+// round-trips back through SetKey. Unset enum keys report their default.
+func GetKey(c Config, key string) (string, error) {
+	switch key {
+	case "index_mode":
+		return c.IndexMode, nil
+	case "auto_index":
+		return strconv.FormatBool(c.AutoIndex), nil
+	case "auto_watch":
+		return strconv.FormatBool(c.AutoWatch), nil
+	case "watcher_enabled":
+		return strconv.FormatBool(c.WatcherEnabled), nil
+	case "allowed_root":
+		return c.AllowedRoot, nil
+	case "cbm_binary":
+		return c.CBMBinary, nil
+	case "cbm_version_pin":
+		if c.CBMVersionPin == "" {
+			return DefaultCBMPin, nil
+		}
+		return c.CBMVersionPin, nil
+	case "budgets.default_chars":
+		return strconv.Itoa(c.Budgets.DefaultChars), nil
+	case "budgets.architecture_chars":
+		return strconv.Itoa(c.Budgets.ArchitectureChars), nil
+	case "budgets.notes_toc_chars":
+		return strconv.Itoa(c.Budgets.NotesTocChars), nil
+	case "budgets.ledger_chars":
+		return strconv.Itoa(c.Budgets.LedgerChars), nil
+	case "embedding.enabled":
+		return strconv.FormatBool(c.Embedding.Enabled), nil
+	case "embedding.endpoint":
+		return c.Embedding.Endpoint, nil
+	case "embedding.model":
+		return c.Embedding.Model, nil
+	case "embedding.timeout_ms":
+		return strconv.Itoa(c.Embedding.TimeoutMS), nil
+	case "ledger.enabled":
+		return strconv.FormatBool(c.Ledger.Enabled), nil
+	case "mcp.profile":
+		if c.MCP.Profile == "" {
+			return ProfileScout, nil
+		}
+		return c.MCP.Profile, nil
+	case "ui.picker":
+		return strconv.FormatBool(c.UI.Picker), nil
+	}
+	return "", fmt.Errorf("unknown key %q (see `tk config list` / known keys)", key)
+}
+
 // SetKey applies a dotted config key from `config set`. Only known keys are
-// accepted; unknown keys error so typo'd settings never silently land.
+// accepted, so a typo'd setting never silently lands. Every case validates its
+// own value, then the whole config is re-validated for cross-field rules
+// (e.g. embedding.enabled requires an endpoint and model). The returned error
+// leaves cfg unchanged for that key, but the caller writes nothing unless
+// SetKey succeeded.
 func SetKey(cfg *Config, key, value string) error {
 	switch key {
 	case "index_mode":
-		cfg.IndexMode = value
+		m := strings.TrimSpace(value)
+		if !slices.Contains(ValidModes(), m) {
+			return fmt.Errorf("invalid index_mode %q (want %s)", m, strings.Join(ValidModes(), "|"))
+		}
+		cfg.IndexMode = m
 	case "auto_index":
 		return setBool(&cfg.AutoIndex, value)
 	case "auto_watch":
@@ -256,6 +361,12 @@ func SetKey(cfg *Config, key, value string) error {
 		cfg.AllowedRoot = strings.TrimSpace(value)
 	case "cbm_binary":
 		cfg.CBMBinary = strings.TrimSpace(value)
+	case "cbm_version_pin":
+		v := strings.TrimSpace(value)
+		if !versionRe.MatchString(v) {
+			return fmt.Errorf("invalid cbm_version_pin %q (want X.Y.Z)", v)
+		}
+		cfg.CBMVersionPin = v
 	case "budgets.default_chars":
 		return setBudget(&cfg.Budgets.DefaultChars, "budgets.default_chars", value)
 	case "budgets.architecture_chars":
@@ -277,15 +388,15 @@ func SetKey(cfg *Config, key, value string) error {
 	case "mcp.profile":
 		p := strings.TrimSpace(value)
 		if p != "" && !slices.Contains(ValidProfiles(), p) {
-			return fmt.Errorf("invalid mcp.profile %q (want %s)", p, strings.Join(ValidProfiles(), "|"))
+			return fmt.Errorf("invalid mcp.profile %q (want %s or empty to unset)", p, strings.Join(ValidProfiles(), "|"))
 		}
 		cfg.MCP.Profile = p
 	case "ui.picker":
 		return setBool(&cfg.UI.Picker, value)
 	default:
-		return fmt.Errorf("unknown config key %q", key)
+		return fmt.Errorf("unknown key %q (see `tk config list` / known keys)", key)
 	}
-	return nil
+	return cfg.Validate()
 }
 
 func setBool(dst *bool, v string) error {

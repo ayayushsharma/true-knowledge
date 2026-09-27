@@ -3,7 +3,7 @@ id: 06-paths-config
 title: Paths and config — XDG everywhere, one key registry
 status: authoritative
 date: 2026-09-27
-supersedes: [compatible-implementation-spec.md §6, AGENT_DOCS/history/PATHS-CONFIG.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp3-memory-layer.md, AGENT_DOCS/history/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md, AGENT_DOCS/history/DECISIONS/2026-09-24-mvp4-human-ux-picker-manpages.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
+supersedes: [AGENT_DOCS/history/compatible-implementation-spec.md §6, AGENT_DOCS/history/PATHS-CONFIG.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp3-memory-layer.md, AGENT_DOCS/history/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md, AGENT_DOCS/history/DECISIONS/2026-09-24-mvp4-human-ux-picker-manpages.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
 superseded-by: null
 ---
 

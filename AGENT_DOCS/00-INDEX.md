@@ -26,13 +26,18 @@ is answered. `manifest.json` is the machine-readable form of this table.
 | `07-MEMORY.md` | facts, notes, ledger, embeddings, secret gate |
 | `08-BACKLOG.md` | milestones, remaining work, parked and rejected items |
 | `09-CHECKLIST.md` | operating rules and PR gate for agents (plain English, safety) |
-| `history/DECISIONS/*.md` | 31 dated ADRs, verbatim, immutable |
-| `history/*.md` | 7 pre-consolidation docs, verbatim, immutable |
+| `history/DECISIONS/*.md` | 32 dated ADRs, verbatim, immutable |
+| `history/*.md` | 7 pre-consolidation docs, plus the frozen v1 spec, verbatim |
 | `manifest.json` | machine index: ids, titles, status, edges |
 
-`docs/man/tk*.1` stays where it is: generated man pages, rebuilt with
-`mise run docs-man`. `compatible-implementation-spec.md` stays at the repo root:
-v1, frozen, powerless on conflict.
+`docs/man/tk*.1` is the only thing outside this directory: generated man pages,
+rebuilt with `mise run docs-man`. Everything else that reads as documentation
+lives here.
+
+The frozen v1 spec is `history/compatible-implementation-spec.md`. Its own
+STATUS line, written 2026-09-22, still names the pre-consolidation paths, because
+that file is immutable; this table is the live map from those names to their
+current homes.
 
 ## Precedence
 
@@ -43,7 +48,7 @@ Highest first:
 3. Newest `AGENT_DOCS/history/DECISIONS/YYYY-MM-DD-<slug>.md` — an ADR dated
    after a file's `date:` header still wins over that file
 4. `AGENT_DOCS/history/*.md` and the ADRs below the top-level files
-5. `compatible-implementation-spec.md` — frozen history, powerless on conflict
+5. `AGENT_DOCS/history/compatible-implementation-spec.md` — frozen history, powerless on conflict
 
 ## tk is pre-release. Nothing machine-readable is a compatibility promise.
 
@@ -98,6 +103,7 @@ one. Stated once here so no individual ADR has to repeat it:
 `NN-*.md`; `id` equals the filename stem; ids unique; every `supersedes` and
 `superseded-by` path resolves; no forbidden pre-consolidation path anywhere in
 the repo outside `history/`; `history/` blobs byte-identical to `git HEAD`;
-`manifest.json` lists exactly the files on disk; no file over 200 lines.
+`manifest.json` lists exactly the files on disk; the frozen v1 spec is in
+`history/` and not at the repo root; no file over 200 lines.
 
 Full gate: `gofmt -l . && go vet ./... && go test ./...`

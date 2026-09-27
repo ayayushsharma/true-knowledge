@@ -3,7 +3,7 @@ id: 08-backlog
 title: Backlog — milestones, remaining work, parked and rejected
 status: authoritative
 date: 2026-09-27
-supersedes: [compatible-implementation-spec.md §20, AGENT_DOCS/history/ROADMAP.md, AGENT_DOCS/history/REMAINING-WORK.md, AGENT_DOCS/history/DECISIONS/2026-09-25-fleet-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-fleet-cohort-queries-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-rrf-tuning-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-resource-limit-surfacing-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-trajectory-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-delivery-parked-download-scripts.md, AGENT_DOCS/history/DECISIONS/2026-09-24-evals-harness.md]
+supersedes: [AGENT_DOCS/history/compatible-implementation-spec.md §20, AGENT_DOCS/history/ROADMAP.md, AGENT_DOCS/history/REMAINING-WORK.md, AGENT_DOCS/history/DECISIONS/2026-09-25-fleet-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-fleet-cohort-queries-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-rrf-tuning-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-resource-limit-surfacing-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-trajectory-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-delivery-parked-download-scripts.md, AGENT_DOCS/history/DECISIONS/2026-09-24-evals-harness.md]
 superseded-by: null
 ---
 

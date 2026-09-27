@@ -3,7 +3,7 @@ id: 04-mcp
 title: MCP — profiles, tool surface, result shape, absence rules
 status: authoritative
 date: 2026-09-27
-supersedes: [compatible-implementation-spec.md §15, AGENT_DOCS/history/AGENT-PROFILES.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp3-memory-layer.md, AGENT_DOCS/history/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md, AGENT_DOCS/history/DECISIONS/2026-09-24-mcp-inputschema-spec.md, AGENT_DOCS/history/DECISIONS/2026-09-25-ledger-append-only-history-prune.md, AGENT_DOCS/history/DECISIONS/2026-09-25-scout-coverage-before-absence.md, AGENT_DOCS/history/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md, AGENT_DOCS/history/DECISIONS/2026-09-26-structured-cbm-payloads.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
+supersedes: [AGENT_DOCS/history/compatible-implementation-spec.md §15, AGENT_DOCS/history/AGENT-PROFILES.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp3-memory-layer.md, AGENT_DOCS/history/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md, AGENT_DOCS/history/DECISIONS/2026-09-24-mcp-inputschema-spec.md, AGENT_DOCS/history/DECISIONS/2026-09-25-ledger-append-only-history-prune.md, AGENT_DOCS/history/DECISIONS/2026-09-25-scout-coverage-before-absence.md, AGENT_DOCS/history/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md, AGENT_DOCS/history/DECISIONS/2026-09-26-structured-cbm-payloads.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
 superseded-by: null
 ---
 

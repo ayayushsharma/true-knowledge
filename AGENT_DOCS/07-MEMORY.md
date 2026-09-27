@@ -3,7 +3,7 @@ id: 07-memory
 title: Memory layer — facts, notes, ledger, embeddings, secret gate
 status: authoritative
 date: 2026-09-27
-supersedes: [compatible-implementation-spec.md §7, compatible-implementation-spec.md §8, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp3-memory-layer.md, AGENT_DOCS/history/DECISIONS/2026-09-24-reindex-embed-cache.md, AGENT_DOCS/history/DECISIONS/2026-09-25-ledger-append-only-history-prune.md, AGENT_DOCS/history/DECISIONS/2026-09-25-ledger-enabled-gate-parity.md, AGENT_DOCS/history/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md]
+supersedes: [AGENT_DOCS/history/compatible-implementation-spec.md §7, AGENT_DOCS/history/compatible-implementation-spec.md §8, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp3-memory-layer.md, AGENT_DOCS/history/DECISIONS/2026-09-24-reindex-embed-cache.md, AGENT_DOCS/history/DECISIONS/2026-09-25-ledger-append-only-history-prune.md, AGENT_DOCS/history/DECISIONS/2026-09-25-ledger-enabled-gate-parity.md, AGENT_DOCS/history/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md]
 superseded-by: null
 ---
 

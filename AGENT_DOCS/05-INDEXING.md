@@ -3,7 +3,7 @@ id: 05-indexing
 title: Indexing — modes, discovery, watcher, Zoekt text index, freshness
 status: authoritative
 date: 2026-09-27
-supersedes: [compatible-implementation-spec.md §7, AGENT_DOCS/history/INDEXING.md, AGENT_DOCS/history/DECISIONS/2026-09-23-explicit-source-search.md, AGENT_DOCS/history/DECISIONS/2026-09-23-zoekt-library-not-backend.md, AGENT_DOCS/history/DECISIONS/2026-09-24-zoekt-staleness.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-25-cross-repo-contract-verified.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
+supersedes: [AGENT_DOCS/history/compatible-implementation-spec.md §7, AGENT_DOCS/history/INDEXING.md, AGENT_DOCS/history/DECISIONS/2026-09-23-explicit-source-search.md, AGENT_DOCS/history/DECISIONS/2026-09-23-zoekt-library-not-backend.md, AGENT_DOCS/history/DECISIONS/2026-09-24-zoekt-staleness.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-25-cross-repo-contract-verified.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
 superseded-by: null
 ---
 

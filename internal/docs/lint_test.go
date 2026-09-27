@@ -62,10 +62,10 @@ func TestSplitRefs(t *testing.T) {
 
 func TestCleanRef(t *testing.T) {
 	cases := map[string]string{
-		"AGENT_DOCS/history/ROADMAP.md §MVP1":    "AGENT_DOCS/history/ROADMAP.md",
-		"compatible-implementation-spec.md §5.2": "compatible-implementation-spec.md",
-		"compatible-implementation-spec.md":      "compatible-implementation-spec.md",
-		"internal/config/config.go":              "internal/config/config.go",
+		"AGENT_DOCS/history/ROADMAP.md §MVP1": "AGENT_DOCS/history/ROADMAP.md",
+		SpecRel + " §5.2":                     SpecRel,
+		SpecRel:                               SpecRel,
+		"internal/config/config.go":           "internal/config/config.go",
 	}
 	for in, want := range cases {
 		if got := cleanRef(in); got != want {
@@ -149,6 +149,44 @@ func TestAuthoredFilesStayUnderBudget(t *testing.T) {
 		}
 		if !strings.HasSuffix(strings.ToLower(filepath.Base(p)), ".md") {
 			t.Errorf("%s: authored docs are markdown", filepath.Base(p))
+		}
+	}
+}
+
+// TestSpecPlacementFailsAtRoot proves the frozen spec cannot drift back to the
+// repo root, where a reader would take a document that contradicts
+// 02-BOUNDARY for current truth.
+func TestSpecPlacementFailsAtRoot(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	hist := filepath.Join(root, HistoryDir)
+	if err := os.MkdirAll(hist, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	adr := filepath.Join(hist, "00-INDEX.md")
+	spec := filepath.Join(root, filepath.FromSlash(SpecRel))
+	for _, p := range []string{adr, spec} {
+		if err := os.WriteFile(p, []byte("---\nid: x\n---\n"), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	if problems := checkSpecPlacement(root); len(problems) != 0 {
+		t.Fatalf("spec in history reported %v", problems)
+	}
+	if err := os.Rename(spec, filepath.Join(root, SpecOldPath)); err != nil {
+		t.Fatalf("move spec to root: %v", err)
+	}
+	problems := checkSpecPlacement(root)
+	if len(problems) != 2 {
+		t.Fatalf("spec at the repo root: got %d problems, want 2: %v", len(problems), problems)
+	}
+	// Both halves are reported: the file is missing from history and present at
+	// the root, and naming only one of them leaves the reader guessing.
+	for _, p := range problems {
+		if !strings.Contains(p, SpecRel) {
+			t.Errorf("problem does not name the correct home: %q", p)
 		}
 	}
 }

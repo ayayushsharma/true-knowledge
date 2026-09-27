@@ -51,8 +51,31 @@ func Check(root string) []string {
 	var problems []string
 	problems = append(problems, checkAuthored(root)...)
 	problems = append(problems, checkRefs(root)...)
+	problems = append(problems, checkSpecPlacement(root)...)
 	problems = append(problems, checkManifest(root)...)
 	problems = append(problems, checkHistoryImmutable(root)...)
+	return problems
+}
+
+// SpecRel is the frozen v1 spec's only legal home. It was a repo-root file
+// until 2026-09-27, and root placement gave the one document that contradicts
+// 02-BOUNDARY the most visible address in the repository.
+const SpecRel = DocsDir + "/history/compatible-implementation-spec.md"
+
+// SpecOldPath is where the spec lived before it joined history.
+const SpecOldPath = "compatible-implementation-spec.md"
+
+// checkSpecPlacement asserts both halves of that move. It is deliberately not
+// part of the forbidden-path scan: the old name is a suffix of the new path, so
+// a substring rule would reject the correct citation along with the wrong one.
+func checkSpecPlacement(root string) []string {
+	var problems []string
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(SpecRel))); err != nil {
+		problems = append(problems, fmt.Sprintf("%s: frozen v1 spec is missing; it belongs in history, not at the repo root", SpecRel))
+	}
+	if _, err := os.Stat(filepath.Join(root, SpecOldPath)); err == nil {
+		problems = append(problems, fmt.Sprintf("%s: frozen v1 spec is back at the repo root; it belongs at %s", SpecOldPath, SpecRel))
+	}
 	return problems
 }
 
@@ -114,10 +137,10 @@ func checkAuthored(root string) []string {
 }
 
 // ExemptFromRefCheck names the files allowed to mention a pre-consolidation
-// path: the frozen v1 spec, the linter's own source, and the machine index that
-// declares the rule.
+// path: the linter's own source and the machine index that declares the rule.
+// The frozen v1 spec no longer needs an exemption — it lives under HistoryDir,
+// which the walk skips — so a bare spec filename elsewhere is a real finding.
 var ExemptFromRefCheck = []string{
-	"compatible-implementation-spec.md",
 	filepath.Join("internal", "docs", "lint.go"),
 	filepath.Join("internal", "docs", "lint_test.go"),
 	DocsDir + "/manifest.json",

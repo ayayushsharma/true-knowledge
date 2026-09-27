@@ -215,7 +215,7 @@ func cmdInstall(g *Globals) *cobra.Command {
 		Short: "Install/update managed indexing backends (default: all)",
 		Long: `Installs missing backends and updates stale ones to their pins.
 Backends live in <cache>/bin (== CBM_CACHE_DIR/bin); checksums verified before any write.
-Adding a backend is one entry in internal/backends — see docs/DECISIONS.`,
+Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DECISIONS.`,
 		Example: `  tk install                  # install all missing backends
   tk install cbm --update     # (re)install cbm at its pin
   tk install --check          # report only, no network

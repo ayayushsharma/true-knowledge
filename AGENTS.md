@@ -1,43 +1,75 @@
 # AGENTS.md — true-knowledge / tk
 
-> Thin Go shipper over `codebase-memory-mcp` (CBM). Linux-first, Windows-compatible.
-> `tk` owns paths + config + spawn + render. CBM owns graph, store, daemon, watcher.
-> Docs authority: `docs/00-AUTHORITY.md` > newest `docs/DECISIONS/*` > `docs/*.md` > `spec-v1` (frozen history).
+> Truth lives in `AGENT_DOCS/`, read in numeric order. This file is the
+> auto-loaded entry point: a pointer plus the rules that must never be missed.
+> Precedence law, doc-style contract, and the doc-change procedure:
+> `AGENT_DOCS/00-INDEX.md`.
 
-## What this repo is
+`tk` is a thin Go shipper over `codebase-memory-mcp` (CBM). Linux-first,
+Windows-compatible. tk owns paths, config, one spawn, and render; CBM owns the
+graph, the store, the daemon, and the watcher. `tk` installs every external
+dependency itself — no apt, brew, npm, or toolchain at runtime. There is no `tk`
+supervisor daemon; the CBM coordination daemon is shared per account.
 
-* Single static Go binary `tk`: `setup/init/register/index/sync/status/find/explain/trace/grep/source-search/outline/impact/arch/query/validate/cbm/daemon/mcp/config/migrate/install/mcp-install/completion` + tk-owned memory `mem/note/ledger` (offline, no CBM). `kg_find/kg_explain/kg_grep/kg_trace` are aliases of `find/explain/grep/trace`. `daemon` is CLI-only (never MCP). MCP profiles: `scout(11)|analysis(14)|minimal(3)|memory(22)` — selected at runtime by `--tool-profile` > `TK_MCP_PROFILE` env > config `mcp.profile` > `scout` (invalid = hard error; clients set env per model/project).
-* No own indexer/parser/SQLite touch — except the memory layer, which is deliberately tk-owned: `mem/facts.db` + `notes/index.db` via pinned CGo-free `modernc.org/sqlite` (FTS5, standalone tables only — external-content tables corrupt on insert), durable note sources as markdown, append-only ledger JSONL (five-key last-write-wins get fold, retrieval-only budget, human-only prune). Graph work = `codebase-memory-mcp cli <tool> --args-file` (raw-JSON argv is deprecated upstream) via one wrapper (`internal/cbmexec`); text work = explicit `source-search` via Zoekt linked as a Go library (`internal/zoekttext`, no magic routing, no subprocess).
-* tk installs ALL its external dependencies itself (`internal/backends` registry + `internal/installer`: pinned, checksum-verified, `<cache>/bin`; CBM today). Zoekt is a `go.mod` pin, not a backend — same-language links, cross-language spawns. No apt/brew/npm/toolchain at runtime. `tk setup` = init + install + opt-in register/client.
-* No `tk` supervisor daemon. CBM coordination daemon is shared per-account (first-starts/last-stops). `cli` mode is daemon-free one-shot.
+## Read this first
 
-## Paths (Linux-style everywhere, incl. macOS)
+| Question | File |
+|---|---|
+| What is tk, and what does it own | `AGENT_DOCS/01-ARCHITECTURE.md` |
+| What tk must never do | `AGENT_DOCS/02-BOUNDARY.md` |
+| Exact command and flag surface | `AGENT_DOCS/03-COMMANDS.md` |
+| MCP profiles, tools, result shape | `AGENT_DOCS/04-MCP.md` |
+| Index modes, discovery, freshness | `AGENT_DOCS/05-INDEXING.md` |
+| Paths, config keys, env vars | `AGENT_DOCS/06-PATHS-CONFIG.md` |
+| Facts, notes, ledger, secrets | `AGENT_DOCS/07-MEMORY.md` |
+| What is not built, and why | `AGENT_DOCS/08-BACKLOG.md` |
+| Operating rules and the PR gate | `AGENT_DOCS/09-CHECKLIST.md` |
+| Why a decision was made | `AGENT_DOCS/history/DECISIONS/` |
 
-```text
-~/.config/true-knowledge/       config.json (tk source of truth)
-~/.local/share/true-knowledge/  tk.json (name→path, heads, fingerprints)
-~/.cache/true-knowledge/        == CBM_CACHE_DIR (_config.db, indexes) + zoekt/ shards
-~/.local/state/true-knowledge/  logs/tk.log (unified JSONL trace), rendezvous/ (CBM_RUNTIME_DIR)
-```
+## Rules that must never be missed
 
-* Never write `~/.tk`, `~/Library/*`, `%AppData%`. Always `true-knowledge/` subfolder.
-* Overrides for tests: `TK_CONFIG_HOME/TK_DATA_HOME/TK_CACHE_HOME/TK_STATE_HOME`, or single `TK_HOME=/tmp/x → {config,data,cache,state}`. Every test uses isolated home.
-* Propagate on every spawn: `CBM_CACHE_DIR`, `CBM_RUNTIME_DIR=<state>/rendezvous`, `CBM_ALLOWED_ROOT` (from tk config).
+1. **Delegate, never reimplement.** If you touch a `*.db` directly or hand-write
+   a client `mcp.json`, it is a bug — call `cbm cli`, or `cbm install --dry-run`.
+2. **One spawn wrapper.** Everything that runs CBM goes through
+   `internal/cbmexec` with the environment map set. Raw-JSON argv is deprecated
+   upstream; use `--args-file`.
+3. **Isolated homes.** Every test uses `TK_HOME` or the `TK_*` overrides. Never
+   write `~/.tk`, `~/Library/*`, or `%AppData%` — always a `true-knowledge/`
+   subfolder.
+4. **Coverage before absence.** Run `check_index_coverage` before any negative
+   claim about a codebase. A failed probe is a hard error, never a silent
+   absence. `search_graph`, `search_code`, and `trace_path` already annotate
+   their empty results; read the verdict.
+5. **Fail open, respect budgets.** CBM down means a `tk install` hint, never a
+   blocked agent. Truncate by whole records and mark it. Never character-slice
+   JSON.
+6. **Completion is Cobra's.** Dynamic projects, config keys, `--client`,
+   `--tool-profile`. Test with `tk __complete`.
+7. **Close fast.** stdin EOF is an instant exit. No flush, no stop, no shutdown
+   deadline. Only `install --update` holds an admission barrier.
+8. **Docs change the way the index does.** New dated ADR in
+   `AGENT_DOCS/history/DECISIONS/`, then the rule in the affected `NN-*.md` with
+   a bumped header. History is immutable and `go test ./internal/docs` enforces
+   it. A file over 200 lines is a bug.
 
-## Commands (run from repo root)
+## Commands
 
 ```bash
-go build -o tk ./cmd/tk
+mise run build      # or: go build -o tk ./cmd/tk
+mise run docs-man   # regenerate docs/man/tk*.1
+gofmt -l . && go vet ./... && go test ./...
+```
+
+```bash
 TK_HOME=/tmp/tk-test ./tk init && TK_HOME=/tmp/tk-test ./tk register ./fixture --name demo
 TK_HOME=/tmp/tk-test ./tk index demo
 TK_HOME=/tmp/tk-test ./tk sync demo        # clean HEAD = no-op
 TK_HOME=/tmp/tk-test ./tk status --json
 echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | TK_HOME=/tmp/tk-test ./tk mcp
-./tk completion bash|zsh|fish|powershell
-gofmt -l . && go vet ./... && go test ./...
 ```
 
-## Trace log (`<state>/logs/tk.log`, JSONL — read with Unix tools, never a tk command)
+The trace log is `<state>/logs/tk.log`, JSONL. Read it with Unix tools; there is
+no `tk log` command.
 
 ```bash
 tail -n 50 tk.log | jq .                                  # recent calls
@@ -46,26 +78,24 @@ jq -r '[.ts, (.argv|join(" "))] | @tsv' tk.log            # argv history
 jq -r 'select(.mcp.tool=="source_search") | .output.text' tk.log
 ```
 
-## Conventions for agents (human or AI)
+## Pre-release law
 
-1. **Delegate, don't reimplement:** parsing, FTS, embeddings, watcher, `install` matrix (45 clients), UI `:9749`, `.zst` artifacts = CBM. If you touch `*.db` directly or write client `mcp.json` by hand, it's a bug — call `cbm cli` / `cbm install --dry-run`.
-2. **Indexing:** default `moderate`; `fast` for watcher/auto, `full` explicit only; `cross-repo-intelligence` only after fresh bases + `target_projects=["*"]`, per **source** project (N runs link an N-repo clique — `docs/DECISIONS/2026-09-25-cross-repo-contract-verified.md`; fleet orchestration for `CROSS_*` is **parked indefinitely** — `docs/DECISIONS/2026-09-25-fleet-parked-indefinitely.md`). Check `check_index_coverage` before negative claims. Respect `.cbmignore` order + `512MiB` cap + `index_max_*` (fail-whole-preserve-serving).
-3. **Freshness:** `tk sync` = `git HEAD` + coverage → no-op or let watcher do it. Never force full on save.
-4. **Fail-open + budgets:** CBM down → clear `tk install` hint, never block agent. Truncate by whole records + `...truncated`.
-5. **Completion:** Cobra only. Dynamic: projects (from `tk.json` + `list_projects`), config keys, `--client pi,opencode,claude,codex`, `--tool-profile scout,analysis,minimal,memory`. Test `tk __complete`.
-6. **Close fast:** no flush/stop on session end. stdin EOF = instant exit. Only `install --update` holds admission barrier to deadline.
-7. **Docs:** change = new `docs/DECISIONS/YYYY-MM-DD-<slug>.md` + bump affected `docs/*.md` header (`status/date/supersedes`). Never edit history except `superseded-by` stamp. `grep -r "status: authoritative" docs/` is truth.
+`tk` is unreleased. `--json` envelopes, MCP result shapes, flag names, and tool
+lists carry no compatibility guarantee: keys may change in any release,
+including a patch, and there is no schema version. A caller who needs a shape to
+hold still pins a commit. What *is* protected is the human CLI surface and the
+boundary rules. Full statement: `AGENT_DOCS/00-INDEX.md`.
 
-## Key references
+## Conventions for agents
 
-* CBM: `README.md #session-coordination-daemon #cli-mode #auto-index`, `docs/CONFIGURATION.md §2/§4`, `docs/INDEX_RESOURCE_LIMITS.md`, `docs/cbmignore.md`, `server.json`.
-* This repo: `compatible-implementation-spec.md` (v1 frozen), `docs/00-AUTHORITY.md` (incl. **pre-release law: `--json`/MCP machine shapes carry no compatibility guarantee — pin a commit**), `docs/INDEXING.md`, `docs/CBM-BOUNDARY.md`, `docs/PATHS-CONFIG.md`, `docs/AGENT-PROFILES.md`, `docs/ROADMAP.md`, `docs/DECISIONS/2026-09-23-mvp3-memory-layer.md` (memory layer: SQLite + endpoint embeddings + memory profile), `docs/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md` (profile via `TK_MCP_PROFILE`), `docs/DECISIONS/2026-09-26-structured-cbm-payloads.md` (CBM payloads pass through verbatim: humans get the tree, `--json` gets `data`, MCP gets `structuredContent`).
-
-## PR checklist
-
-* [ ] Isolated `TK_HOME`, no `~/.tk`/`Library` writes
-* [ ] Single spawn wrapper used, env map set
-* [ ] Coverage checked, budgets honored, fail-open
-* [ ] Completion + `--json` + `--help` updated
-* [ ] No secrets in `tk.log` (redaction patterns cover any new secret-shaped output)
-* [ ] Docs header + ADR added if behavior changed
+* **Indexing:** default `moderate`; `fast` for the watcher and auto paths;
+  `full` only when explicitly asked for; `cross-repo-intelligence` only after
+  fresh bases, `target_projects=["*"]`, and once per source project — N sources
+  link an N-repository clique.
+* **MCP profiles:** `scout` (11), `analysis` (14), `minimal` (3), `memory` (22),
+  chosen at runtime by `--tool-profile` > `TK_MCP_PROFILE` > config
+  `mcp.profile` > `scout`. `daemon` is CLI-only, never MCP.
+* **Memory:** `mem`/`note`/`ledger` are tk-owned and CBM-free. The ledger is
+  append-only with five keys and a human-only prune.
+* **Unix rule:** if `tail`, `grep`, or `jq` already does the job, tk does not
+  ship a command for it.

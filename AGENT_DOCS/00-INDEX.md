@@ -107,3 +107,9 @@ the repo outside `history/`; `history/` blobs byte-identical to `git HEAD`;
 `history/` and not at the repo root; no file over 200 lines.
 
 Full gate: `gofmt -l . && go vet ./... && go test ./...`
+
+Shape is not behavior. `tests/e2e_mvp1.sh` runs the whole CLI and MCP matrix
+against a fake engine, which proves the output shape and nothing about scale.
+`mise run e2e-real REPO=<path>` installs the pinned CBM, indexes a real
+repository, and asserts nine end-to-end properties; it is gated behind
+`TK_E2E_REAL=1` and the `e2ereal` build tag so it never runs by accident.

@@ -55,8 +55,10 @@ supervisor daemon; the CBM coordination daemon is shared per account.
 ## Commands
 
 ```bash
-mise run build      # or: go build -o tk ./cmd/tk
-mise run docs-man   # regenerate docs/man/tk*.1
+mise run build       # or: go build -o tk ./cmd/tk
+mise run docs-man    # regenerate docs/man/tk*.1
+mise run e2e         # fake-engine CLI + MCP matrix, isolated TK_HOME
+mise run e2e-real REPO=/path/to/repo   # real CBM, real repo, ~3 min
 gofmt -l . && go vet ./... && go test ./...
 ```
 

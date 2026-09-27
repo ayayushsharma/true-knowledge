@@ -12,7 +12,7 @@ superseded-by: null
 
 # 09-CHECKLIST — how to work in this repo
 
-## Seven rules
+## Eight rules
 
 1. **Delegate; never reimplement.** Parsing, full-text search, embeddings, the
    watcher, the install matrix across 45 client surfaces, the UI on port 9749,
@@ -42,6 +42,17 @@ superseded-by: null
    `install --update`, and it holds to a deadline.
 7. **Docs change the way the index does.** Write the ADR first, then the rule.
    See the change procedure in `00-INDEX.md`.
+8. **A fake engine is not evidence at scale.** The shell fake in
+   `tests/e2e_mvp1.sh` pins output shape and belongs in CI. It cannot see shard
+   boundaries, partial coverage, result caps, or a second language. When you
+   change how tk calls CBM, or when the CBM pin moves, run the real thing:
+
+   ```bash
+   mise run e2e-real REPO=/path/to/some/real/repository
+   ```
+
+   It installs the pinned CBM itself, indexes the repo, and checks nine
+   properties end to end.
 
 ## Before you commit
 
@@ -60,6 +71,8 @@ superseded-by: null
       bumped header and the new rule in its body.
 * [ ] `gofmt -l .`, `go vet ./...`, and `go test ./...` are clean. If a command
       or flag changed, `mise run docs-man` produced a diff you committed.
+* [ ] If this change touches how tk calls CBM, or the CBM pin moved,
+      `mise run e2e-real REPO=<a real repository>` passes.
 * [ ] `go test ./internal/docs` passes: no forbidden pre-consolidation path, no
       untouched history file, no file over 200 lines.
 

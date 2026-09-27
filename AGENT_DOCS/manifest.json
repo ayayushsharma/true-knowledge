@@ -28,7 +28,7 @@
   ],
   "history": {
     "spec": { "path": "AGENT_DOCS/history/compatible-implementation-spec.md", "version": "v1", "frozen": true, "note": "its own STATUS line still names pre-consolidation paths; the live map is AGENT_DOCS/00-INDEX.md" },
-    "decisions": { "path": "AGENT_DOCS/history/DECISIONS", "count": 32, "immutable": true, "newest": "2026-09-27-frozen-spec-into-history.md" },
+    "decisions": { "path": "AGENT_DOCS/history/DECISIONS", "count": 33, "immutable": true, "newest": "2026-09-27-real-repo-e2e-gate.md" },
     "superseded_docs": { "path": "AGENT_DOCS/history", "files": ["00-AUTHORITY.md", "AGENT-PROFILES.md", "CBM-BOUNDARY.md", "INDEXING.md", "PATHS-CONFIG.md", "REMAINING-WORK.md", "ROADMAP.md"], "immutable": true }
   },
   "enforcement": {

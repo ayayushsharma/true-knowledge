@@ -12,3 +12,11 @@ run = "rm -f ./dist/tk"
 [tasks.docs-man]
 description = "Regenerate committed man pages (docs/man/tk*.1)"
 run = "go run ./cmd/genman"
+
+[tasks.e2e-real]
+description = "End-to-end against a real codebase-memory-mcp and a real repo (opt-in, slow)"
+run = "TK_E2E_REAL=1 TK_E2E_REPO=\"${REPO:?set REPO=/path/to/repo}\" go test -tags e2ereal -count=1 -timeout 90m -v ./tests/e2ereal/"
+
+[tasks.e2e]
+description = "Fake-backend CLI + MCP suite, isolated TK_HOME, no network"
+run = "bash tests/e2e_mvp1.sh"

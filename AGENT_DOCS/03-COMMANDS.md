@@ -2,8 +2,8 @@
 id: 03-commands
 title: CLI surface — every verb, flag, alias
 status: authoritative
-date: 2026-09-27
-supersedes: [AGENT_DOCS/history/compatible-implementation-spec.md §8, AGENT_DOCS/history/compatible-implementation-spec.md §8.4, AGENT_DOCS/history/DECISIONS/2026-09-25-flag-only-query-forms.md, AGENT_DOCS/history/DECISIONS/2026-09-26-select-flag-forces-project-picker.md, AGENT_DOCS/history/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
+date: 2026-09-28
+supersedes: [AGENT_DOCS/history/compatible-implementation-spec.md §8, AGENT_DOCS/history/DECISIONS/2026-09-28-delegate-backend-install-to-vendor.md, AGENT_DOCS/history/compatible-implementation-spec.md §8.4, AGENT_DOCS/history/DECISIONS/2026-09-25-flag-only-query-forms.md, AGENT_DOCS/history/DECISIONS/2026-09-26-select-flag-forces-project-picker.md, AGENT_DOCS/history/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
 superseded-by: null
 ---
 
@@ -22,7 +22,7 @@ purpose.
 |---|---|---|
 | `tk init` | — | create the four `true-knowledge/` dirs plus default config; idempotent |
 | `tk setup` | `--register`, `--name`, `--client`, `--tool-profile`, `--dry-run` | init + install + opt-in register + opt-in client snippet |
-| `tk install [backend...]` | `--check`, `--dry-run`, `--update`, `--version` | backend = `cbm`; no argument means all missing |
+| `tk install [backend...]` | `--check`, `--dry-run`, `--update`, `--version` | backend = `cbm`; no argument means all missing. Runs the vendor installer script at the pin; an upgrade drains coordinated CBM sessions and may ask them to exit |
 | `tk register <path>` | `--name` | registers a path, never indexes it; name defaults to the directory base |
 | `tk migrate` | `--from`, `--dry-run` | moves `~/.tk`, `$TK_HOME`, or `~/Library/Application Support/true-knowledge`; writes a `MIGRATED` marker, refuses a re-run without `--force` |
 | `tk status` | — | projects, HEAD, freshness; `--json` adds `head`, `current`, `zoekt_head`, `zoekt_fresh` |

@@ -2,8 +2,8 @@
 id: 01-architecture
 title: Architecture — thin shipper over CBM, managed backends, trace log
 status: authoritative
-date: 2026-09-27
-supersedes: [AGENT_DOCS/history/DECISIONS/2026-09-22-thin-tk-over-cbm.md, AGENT_DOCS/history/DECISIONS/2026-09-23-tk-managed-backends.md, AGENT_DOCS/history/DECISIONS/2026-09-23-download-at-install-and-setup.md, AGENT_DOCS/history/DECISIONS/2026-09-23-zoekt-library-not-backend.md, AGENT_DOCS/history/DECISIONS/2026-09-23-explicit-source-search.md, AGENT_DOCS/history/ROADMAP.md §MVP1, AGENT_DOCS/history/DECISIONS/2026-09-27-consolidated-agent-docs.md]
+date: 2026-09-28
+supersedes: [AGENT_DOCS/history/DECISIONS/2026-09-28-delegate-backend-install-to-vendor.md, AGENT_DOCS/history/DECISIONS/2026-09-22-thin-tk-over-cbm.md, AGENT_DOCS/history/DECISIONS/2026-09-23-tk-managed-backends.md, AGENT_DOCS/history/DECISIONS/2026-09-23-download-at-install-and-setup.md, AGENT_DOCS/history/DECISIONS/2026-09-23-zoekt-library-not-backend.md, AGENT_DOCS/history/DECISIONS/2026-09-23-explicit-source-search.md, AGENT_DOCS/history/ROADMAP.md §MVP1, AGENT_DOCS/history/DECISIONS/2026-09-27-consolidated-agent-docs.md]
 superseded-by: null
 ---
 
@@ -46,20 +46,37 @@ context is done.
 `internal/backends` registry + `internal/installer`. tk installs everything it
 needs; no apt, brew, npm, or toolchain at runtime.
 
-* Pin truth = config key `cbm_version_pin` (`X.Y.Z`); installed versions tracked
-  in `<cache>/bin/.json`. Pin validation accepts `X.Y.Z` or 7–40 hex chars.
+* Pin truth = config key `cbm_version_pin` (`X.Y.Z`). Installed version is read
+  back from `<cache>/bin/<binary> --version`. Pin validation accepts `X.Y.Z` or
+  7–40 hex chars.
 * Resolver order: `TK_CBM_BIN` > config `cbm_binary` > sibling of the `tk`
   executable > `<cache>/bin` > `PATH`. The managed copy wins over `PATH` so
   `tk install` takes effect.
-* Install streams the archive to a temp file while hashing inline, guard
-  `maxArchiveBytes = 512 MiB`, verifies SHA-256 against the release manifest
-  **before any write**, then renames atomically. Checksum mismatch aborts with
-  zero partial state.
-* Mirrors: `TK_RELEASE_BASE_URL_CBM`, falling back to `TK_RELEASE_BASE_URL`.
+* Install delegates to the vendor's own installer script for the pinned tag
+  (`install.sh`, or `install.ps1` on Windows), fetched from
+  `raw.githubusercontent.com/<repo>/<tag>/`. tk passes `--dir=<cache>/bin` and
+  `--skip-config`, and sets `CBM_DOWNLOAD_URL` to the tag's release base so a
+  pin cannot drift to latest. tk never downloads, checksums, or extracts an
+  archive itself.
+* The vendor script verifies SHA-256 against the tag's release manifest before
+  any write, and hands the swap to the candidate binary's own `install`, which
+  drains the cohort, holds the admission barrier, and commits the new binary
+  transactionally with rollback. That barrier is why an upgrade is safe with a
+  daemon already running, and it is not something tk could replicate cheaply.
+* The install runs with `HOME` and `USERPROFILE` pointed at
+  `<state>/install-home`, plus `CBM_CACHE_DIR`, `CBM_RUNTIME_DIR`, and
+  `CBM_ALLOWED_ROOT` from tk. The vendor script appends its bin dir to the
+  user's shell rc; the sandbox absorbs that write. tk never edits a file it does
+  not own.
+* Script fetch guard `maxScriptBytes = 1 MiB`; a non-HTTPS script URL is
+  refused because the script is executed.
+* Mirrors: `TK_RELEASE_BASE_URL` (release assets), `TK_SCRIPT_BASE_URL`
+  (installer script).
 * Adding a backend is one registry entry (name, repo, binary, asset naming, tag
-  scheme). No per-backend code paths in installer, status, or `tk install`.
-* Bytes are never rebuilt or stripped by tk. Trust comes from manifest
-  verification at install time.
+  scheme, installer script). No per-backend code paths in installer, status, or
+  `tk install`.
+* Bytes are never rebuilt or stripped by tk. Trust comes from the vendor's
+  manifest verification at install time.
 * Never `go:embed` a multi-hundred-MB executable. Never compile anything on the
   user's machine.
 

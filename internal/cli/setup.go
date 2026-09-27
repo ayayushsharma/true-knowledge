@@ -100,7 +100,7 @@ Steps: init dirs/config → install all backends at pins → (opt-in) register c
 					sections = append(sections, fmt.Sprintf("install %s: up-to-date %s (%s)", b.Name, st.InstalledVersion, st.Path))
 					continue
 				}
-				plan, err := installer.Install(cmd.Context(), ctx.Paths.Cache, b, pin, backends.HostGOOS(), backends.HostGOARCH())
+				plan, err := installer.Install(cmd.Context(), ctx.Paths.Cache, b, pin, backends.HostGOOS(), backends.HostGOARCH(), installEnv(ctx))
 				if err != nil {
 					sections = append(sections, fmt.Sprintf("install %s: FAILED %v (agent continues fail-open)", b.Name, err))
 					continue

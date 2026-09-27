@@ -281,7 +281,7 @@ Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DE
 					rows = append(rows, row{name, "up-to-date", st.Path})
 					lines = append(lines, fmt.Sprintf("%-8s up-to-date %s (%s)", name, st.InstalledVersion, displayPath(st)))
 				default:
-					plan, err := installer.Install(cmd.Context(), ctx.Paths.Cache, b, pin, backends.HostGOOS(), backends.HostGOARCH())
+					plan, err := installer.Install(cmd.Context(), ctx.Paths.Cache, b, pin, backends.HostGOOS(), backends.HostGOARCH(), installEnv(ctx))
 					if err != nil {
 						rows = append(rows, row{name, "failed", err.Error()})
 						lines = append(lines, fmt.Sprintf("%-8s FAILED: %v", name, err))
@@ -313,6 +313,34 @@ Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DE
 	c.Flags().BoolVar(&dry, "dry-run", false, "print plan URLs without downloading")
 	c.Flags().StringVar(&version, "version", "", "override pin X.Y.Z for this run (persists to config)")
 	return c
+}
+
+// installEnv is the identity handed to a backend install: the backend writes
+// its store to tk's cache and drains tk's cohort, never the account-wide one a
+// consumer laptop may be running.
+//
+// HOME is redirected too. The backend's own installer appends its bin dir to
+// the user's shell rc, and tk never edits a file it does not own; the sandbox
+// absorbs that write. The bin dir itself is passed explicitly, so nothing the
+// user needs is lost.
+func installEnv(ctx *Ctx) []string {
+	env := []string{
+		"CBM_CACHE_DIR=" + ctx.Paths.CBMCacheDir(),
+		"CBM_RUNTIME_DIR=" + ctx.Paths.CBMRuntimeDir(),
+		"HOME=" + installHome(ctx),
+		"USERPROFILE=" + installHome(ctx),
+	}
+	if ctx.Cfg.AllowedRoot != "" {
+		env = append(env, "CBM_ALLOWED_ROOT="+ctx.Cfg.AllowedRoot)
+	}
+	return env
+}
+
+// installHome is the throwaway HOME a backend install runs under.
+func installHome(ctx *Ctx) string {
+	dir := filepath.Join(ctx.Paths.State, "install-home")
+	_ = os.MkdirAll(dir, 0o700)
+	return dir
 }
 
 func displayPath(st installer.Status) string {

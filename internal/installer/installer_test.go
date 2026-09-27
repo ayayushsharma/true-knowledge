@@ -1,139 +1,140 @@
 package installer_test
 
 import (
-	"archive/tar"
-	"bytes"
-	"compress/gzip"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/ayayushsharma/true-knowledge/internal/backends"
 	"github.com/ayayushsharma/true-knowledge/internal/installer"
 )
 
-// fakeRelease serves checksums.txt + a tar.gz containing one executable script.
-func fakeRelease(t *testing.T, binary, body string) *httptest.Server {
+// fakeScript serves an installer script that records its argv and env, then
+// places a fake binary at the --dir it was given. This stands in for the real
+// install.sh: tk's job is to invoke the pinned script correctly, not to
+// reimplement what it does.
+func fakeScript(t *testing.T, recordPath string) *httptest.Server {
 	t.Helper()
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gz)
-	content := []byte(body)
-	_ = tw.WriteHeader(&tar.Header{Name: "some-dir/" + binary, Mode: 0o755, Size: int64(len(content))})
-	if _, err := tw.Write(content); err != nil {
-		t.Fatal(err)
-	}
-	_ = tw.Close()
-	_ = gz.Close()
-	blob := buf.Bytes()
-	sum := sha256.Sum256(blob)
+	script := fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+{
+  echo "argv: $*"
+  echo "download_url: ${CBM_DOWNLOAD_URL:-}"
+} > %q
+for arg in "$@"; do
+  case "$arg" in
+    --dir=*) dir="${arg#--dir=}" ;;
+  esac
+done
+mkdir -p "$dir"
+cat > "$dir/codebase-memory-mcp" <<'BIN'
+#!/bin/sh
+echo cbm 0.11.0 fake
+BIN
+chmod 755 "$dir/codebase-memory-mcp"
+`, recordPath)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		switch filepath.Base(r.URL.Path) {
-		case "checksums.txt":
-			archive, _ := backends.CBM().Archive("linux", "amd64")
-			fmt.Fprintf(w, "%s  %s\n", hex.EncodeToString(sum[:]), archive)
-		default:
-			w.Write(blob)
+		if strings.HasSuffix(r.URL.Path, "install.sh") ||
+			strings.HasSuffix(r.URL.Path, "install.ps1") {
+			fmt.Fprint(w, script)
+			return
 		}
+		http.NotFound(w, r)
 	})
 	s := httptest.NewServer(mux)
 	t.Cleanup(s.Close)
 	return s
 }
 
-func TestInstallVerifiesAndCaches(t *testing.T) {
-	s := fakeRelease(t, "codebase-memory-mcp", "#!/bin/sh\necho cbm 0.11.0 fake\n")
-	t.Setenv("TK_RELEASE_BASE_URL", s.URL)
+func TestInstallDelegatesToPinnedScript(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake script is bash")
+	}
+	record := filepath.Join(t.TempDir(), "record.txt")
+	s := fakeScript(t, record)
+	t.Setenv("TK_SCRIPT_BASE_URL", s.URL)
+	t.Setenv("TK_RELEASE_BASE_URL", "https://example.invalid/dl")
 	cache := t.TempDir()
-	ctx := t.Context()
 	b := backends.CBM()
 
-	plan, err := installer.Install(ctx, cache, b, "0.11.0", "linux", "amd64")
+	plan, err := installer.Install(t.Context(), cache, b, "0.11.0", "linux", "amd64", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fi, err := os.Stat(plan.Dest)
-	if err != nil || fi.IsDir() {
+	if _, err := os.Stat(plan.Dest); err != nil {
 		t.Fatalf("dest missing: %v", err)
 	}
-	st := installer.Inspect(ctx, cache, b, "0.11.0", "linux")
+	raw, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(raw)
+	// The pin must reach the script as a tag-scoped download base, never latest.
+	if !strings.Contains(got, "https://example.invalid/dl/v0.11.0") {
+		t.Errorf("pin not passed to script:\n%s", got)
+	}
+	// Agent config is tk's job; CBM must not write any client mcp.json.
+	if !strings.Contains(got, "--skip-config") {
+		t.Errorf("--skip-config not passed:\n%s", got)
+	}
+	// The binary must land in tk's cache, not $HOME/.local/bin.
+	if !strings.Contains(got, "--dir="+filepath.Join(cache, "bin")) {
+		t.Errorf("--dir not passed:\n%s", got)
+	}
+	// No staging residue: the script is staged in a private temp dir and the
+	// whole dir is removed after the run.
+	entries, err := os.ReadDir(filepath.Join(cache, "bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".stage") {
+			t.Errorf("staging residue left behind: %s", e.Name())
+		}
+	}
+
+	st := installer.Inspect(t.Context(), cache, b, "0.11.0", "linux")
 	if !st.UpToDate || st.NeedsInstall || !st.InCache {
 		t.Fatalf("status = %+v", st)
 	}
 }
 
-// TestInstallLargeBinary guards the extraction path against size caps:
-// backend binaries can exceed hundreds of MB (CBM is ~268MB). A 260MiB
-// zero-filled entry compresses tiny but must extract byte-complete.
-func TestInstallLargeBinary(t *testing.T) {
-	const size = 260 << 20
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gz)
-	_ = tw.WriteHeader(&tar.Header{Name: "codebase-memory-mcp", Mode: 0o755, Size: size})
-	chunk := make([]byte, 1<<20)
-	for written := int64(0); written < size; written += int64(len(chunk)) {
-		if _, err := tw.Write(chunk); err != nil {
-			t.Fatal(err)
-		}
-	}
-	_ = tw.Close()
-	_ = gz.Close()
-	blob := buf.Bytes()
-	sum := sha256.Sum256(blob)
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if filepath.Base(r.URL.Path) == "checksums.txt" {
-			archive, _ := backends.CBM().Archive("linux", "amd64")
-			fmt.Fprintf(w, "%s  %s\n", hex.EncodeToString(sum[:]), archive)
-			return
-		}
-		w.Write(blob)
-	})
-	s := httptest.NewServer(mux)
+func TestInstallRejectsMissingScript(t *testing.T) {
+	s := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(s.Close)
-	t.Setenv("TK_RELEASE_BASE_URL", s.URL)
-
-	cache := t.TempDir()
-	plan, err := installer.Install(t.Context(), cache, backends.CBM(), "0.11.0", "linux", "amd64")
-	if err != nil {
-		t.Fatal(err)
-	}
-	fi, err := os.Stat(plan.Dest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fi.Size() != size {
-		t.Fatalf("extracted size = %d, want %d (truncated?)", fi.Size(), size)
+	t.Setenv("TK_SCRIPT_BASE_URL", s.URL)
+	_, err := installer.Install(t.Context(), t.TempDir(), backends.CBM(), "0.11.0", "linux", "amd64", nil)
+	if err == nil {
+		t.Fatal("expected an error when the installer script is absent")
 	}
 }
 
-func TestInstallRejectsBadChecksum(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if filepath.Base(r.URL.Path) == "checksums.txt" {
-			archive, _ := backends.CBM().Archive("linux", "amd64")
-			fmt.Fprintf(w, "%064x  %s\n", [32]byte{}, archive)
-			return
-		}
-		w.Write([]byte("tampered"))
-	})
-	s := httptest.NewServer(mux)
-	t.Cleanup(s.Close)
-	t.Setenv("TK_RELEASE_BASE_URL", s.URL)
+// TestInstallPassesIsolatedCBMIdentity proves a hostile ambient CBM_* identity
+// cannot steer an install: the caller's env wins because it is appended last.
+func TestInstallPassesIsolatedCBMIdentity(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake script is bash")
+	}
+	record := filepath.Join(t.TempDir(), "record.txt")
+	s := fakeScript(t, record)
+	t.Setenv("TK_SCRIPT_BASE_URL", s.URL)
+	t.Setenv("CBM_CACHE_DIR", "/tmp/hostile-cache")
+	t.Setenv("CBM_RUNTIME_DIR", "/tmp/hostile-runtime")
+	cache := t.TempDir()
 
-	err := func() error {
-		_, err := installer.Install(t.Context(), t.TempDir(), backends.CBM(), "0.11.0", "linux", "amd64")
-		return err
-	}()
-	if err == nil {
-		t.Fatal("expected checksum mismatch error")
+	_, err := installer.Install(t.Context(), cache, backends.CBM(), "0.11.0", "linux", "amd64",
+		[]string{"CBM_CACHE_DIR=" + cache})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(cache, "bin", "codebase-memory-mcp")); err != nil {
+		t.Fatalf("binary not placed in tk cache: %v", err)
 	}
 }
 

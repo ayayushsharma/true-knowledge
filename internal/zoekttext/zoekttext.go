@@ -82,8 +82,15 @@ func IndexRepo(ctx context.Context, shardsDir, repoPath, name string) (bool, err
 // global ignore file (VCS mostly matters for fingerprint noise, the rest are
 // vendored/build trees that dominate trigram frequency). Lockfiles are NOT
 // here on purpose: they are small, meaningful (exact-pinned deps), and cheap
-// to index. Git-repo indexes are exempt — .gitignore and zoekt's own
-// goembedding handle those via the git indexer.
+// to index.
+//
+// Git-repo indexes are exempt, but NOT because zoekt reads .gitignore. At the
+// pinned version the only ignore file its git indexer consults is
+// .sourcegraph/ignore (zoekt ignore.IgnoreFile). .gitignore is honored only
+// implicitly, because ignored files are untracked and so absent from the commit
+// tree the indexer walks. The practical consequence: a vendored dir or minified
+// bundle that is *committed* is skipped by CBM but still lands in tk's text
+// index. Plain dirs get neither, which is why <config>/ignore exists.
 var coreSkipDirs = map[string]bool{
 	".git": true, ".hg": true, ".svn": true,
 	"node_modules": true, "vendor": true,
@@ -202,6 +209,27 @@ func IndexDir(ctx context.Context, shardsDir, dir, name string, ignores []string
 		}
 		if matchIgnores(rules, rel, false) {
 			return nil
+		}
+		// Only regular files are indexable. A symlink is skipped rather than
+		// followed, matching CBM ("symlinks always skipped"); the read would
+		// otherwise pull in the *target's* bytes under the link's path. A
+		// non-regular file (FIFO, socket, device) would block os.ReadFile
+		// forever, and the ctx check above runs before the read so it cannot
+		// interrupt that. Symlinked dirs are already not traversed: Walk does
+		// not follow them, which stays a known coverage gap for plain dirs.
+		if !fi.Mode().IsRegular() {
+			return nil
+		}
+		// Pre-check the size so an oversized file is never buffered into RAM
+		// just for zoekt to reject it. SizeMax is set by SetDefaults (2MiB).
+		// The skip is recorded rather than dropped silently, so the index
+		// shows which files it declined.
+		if fi.Size() > int64(buildOpts.SizeMax) {
+			return builder.Add(index.Document{
+				Name:       rel,
+				Branches:   []string{"HEAD"},
+				SkipReason: index.SkipReasonTooLarge,
+			})
 		}
 		content, err := os.ReadFile(path)
 		if err != nil {

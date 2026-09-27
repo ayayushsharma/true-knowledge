@@ -27,7 +27,7 @@ Single resolver. No `os.UserConfigDir` branches. No `~/Library/*`, no `%AppData%
 ~/.local/state/true-knowledge/  logs/tk.log (unified JSONL trace), rendezvous/ (CBM_RUNTIME_DIR)
 ```
 
-`<config>/ignore` (optional) shapes plain-dir zoekt indexes: `#` comments, a leading `/` anchors to a project root, a trailing `/` targets directory subtrees, any other line matches a component at any depth. Core dependency dirs are always skipped regardless (see INDEXING.md). Missing file = no custom filters. Git-repo indexes keep using `.gitignore` (zoekt git indexer, not this file).
+`<config>/ignore` (optional) shapes plain-dir zoekt indexes: `#` comments, a leading `/` anchors to a project root, a trailing `/` targets directory subtrees, any other line matches a component at any depth. Core dependency dirs are always skipped regardless (see INDEXING.md). Missing file = no custom filters. Git-repo indexes ignore this file entirely — and note that `.gitignore` is *not* a substitute there: Zoekt's git indexer reads only `.sourcegraph/ignore`, so `.gitignore` applies to a git repo only implicitly (ignored files are untracked, hence absent from the commit tree). See INDEXING.md §"What tk's text index does not honor".
 
 tk-owned memory trees (all 0600 files, dirs 0700, CBM never touches them):
 

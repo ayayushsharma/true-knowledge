@@ -71,6 +71,26 @@ the optional global file `<config>/ignore` (`paths.IgnoreFile()`) applies a
 gitignore-lite pattern list to plain-dir indexes only: `#` comments, leading
 `/` root-anchors to a project root, trailing `/` targets directory subtrees,
 any other line matches a component at any depth (e.g. `secrets/`, `*.min.js`
-— no glob magic, one component/prefix per line). Git-repo indexes keep using
-`.gitignore` via zoekt's git indexer and ignore this file entirely (zoekt-pin
-limitation, documented in the comments-pass ADR).
+— no glob magic, one component/prefix per line). Git-repo indexes ignore this
+file entirely.
+
+**What tk's text index does *not* honor.** Neither the graph engine's filter
+chain above nor `.gitignore` applies to the Zoekt text index, and that is not a
+tk-side omission to be papered over — CBM owns filtering, tk only links Zoekt.
+Concretely, at the pinned Zoekt:
+
+* Only `.sourcegraph/ignore` is an explicit ignore file for git-repo indexes
+  (`ignore.IgnoreFile`). `.gitignore` is honored *implicitly and only* because
+  ignored files are untracked and therefore absent from the commit tree that
+  `gitindex` walks. **A committed `node_modules/`, `dist/` or `*.min.js` is
+  skipped by CBM and still indexed by tk** — the "same filtering as CBM"
+  property holds only for untracked paths.
+* Plain dirs get no `.gitignore` and no `.cbmignore` at all. `<config>/ignore`
+  is the only knob.
+* What tk *does* enforce itself, because these are correctness rather than
+  policy: non-regular files (FIFO, socket, device) and symlinks are never read
+  (a FIFO would block the walk forever; a symlink would be indexed by its
+  target's bytes), and files above Zoekt's `SizeMax` (2 MiB after
+  `SetDefaults`) are recorded as `SkipReasonTooLarge` without being buffered, so
+  an oversized file costs no RAM. CBM's `512 MiB` single-file cap,
+  `index_max_files/mb` and suffix filters are **not** applied to the text index.

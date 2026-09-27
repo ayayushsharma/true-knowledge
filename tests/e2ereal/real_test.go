@@ -44,6 +44,38 @@ type tk struct {
 	repo    string
 	project string
 	head    string
+	// cbmBin is the CBM every invocation is pinned to. Empty until
+	// installCBM resolves it, so the two pre-install calls cannot use an
+	// engine the test has not version-checked yet.
+	cbmBin string
+}
+
+// childEnv builds the environment for every tk invocation. The test process
+// environment is stripped of the keys that would let state outside this
+// TK_HOME redirect the engine: an inherited TK_CBM_BIN silently swaps the
+// binary, and inherited CBM_CACHE_DIR / CBM_RUNTIME_DIR / CBM_ALLOWED_ROOT
+// point the store, the daemon namespace, and the sandbox at someone else's
+// home. What this test means to use is added back explicitly, so the gate
+// cannot be moved by whatever the shell happens to export.
+func childEnv(h tk) []string {
+	drop := map[string]bool{
+		"TK_CBM_BIN":       true,
+		"CBM_CACHE_DIR":    true,
+		"CBM_RUNTIME_DIR":  true,
+		"CBM_ALLOWED_ROOT": true,
+	}
+	env := make([]string, 0, len(os.Environ())+2)
+	for _, kv := range os.Environ() {
+		if k, _, ok := strings.Cut(kv, "="); ok && drop[k] {
+			continue
+		}
+		env = append(env, kv)
+	}
+	env = append(env, "TK_HOME="+h.home)
+	if h.cbmBin != "" {
+		env = append(env, "TK_CBM_BIN="+h.cbmBin)
+	}
+	return env
 }
 
 func (h tk) run(t *testing.T, args ...string) result {
@@ -56,7 +88,7 @@ func (h tk) runWithin(t *testing.T, limit time.Duration, args ...string) result 
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, h.bin, args...)
-	cmd.Env = append(os.Environ(), "TK_HOME="+h.home)
+	cmd.Env = childEnv(h)
 	var out, errb strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	err := cmd.Run()
@@ -401,10 +433,18 @@ func setup(t *testing.T) tk {
 	if r := h.run(t, "config", "set", "allowed_root", filepath.Dir(repo)); r.code != 0 {
 		t.Fatalf("config set allowed_root: %s", r)
 	}
-	installCBM(t, h)
+	// Pin resolution before anything graph-backed runs. After this line every
+	// tk invocation names the same engine, whatever PATH or the shell says.
+	h.cbmBin = installCBM(t, h)
 	if r := h.run(t, "register", repo, "--name", name); r.code != 0 {
 		t.Fatalf("register: %s", r)
 	}
+
+	// CBM stops on last committed client disconnect, asynchronously. t.TempDir
+	// removes the home underneath that, and the next run inherits a runtime
+	// dir whose endpoint and cohort locks are already gone. Cleanups run LIFO,
+	// so this stops the daemon before the directory is removed.
+	t.Cleanup(func() { h.run(t, "daemon", "stop") })
 
 	mode := env2(t, "TK_E2E_MODE", "moderate")
 	t.Logf("indexing %s (%s, HEAD %s) with real cbm — this is the slow part", repo, mode, head[:12])
@@ -422,23 +462,47 @@ func setup(t *testing.T) tk {
 	return h
 }
 
-func installCBM(t *testing.T, h tk) {
+// installCBM returns the CBM the whole gate is pinned to. TK_E2E_CBM_BIN
+// reuses a local binary for offline runs, and it is still version-checked
+// against the pin: an unversioned engine is how this gate ends up reporting
+// two schema failures that read like tk defects. The versions go in the
+// failure message, because "0.10.8 does not match 0.11.0" is the whole
+// diagnosis and the caller otherwise has no way to see which engine ran.
+func installCBM(t *testing.T, h tk) string {
 	t.Helper()
-	if bin := os.Getenv("TK_E2E_CBM_BIN"); bin != "" {
-		t.Setenv("TK_CBM_BIN", bin)
-		return
-	}
-	if r := h.run(t, "install", "cbm"); r.code != 0 {
-		t.Fatalf("install cbm: %s", r)
+	bin := os.Getenv("TK_E2E_CBM_BIN")
+	if bin == "" {
+		if r := h.run(t, "install", "cbm"); r.code != 0 {
+			t.Fatalf("install cbm: %s", r)
+		}
+		bin = filepath.Join(h.home, "cache", "bin", "codebase-memory-mcp")
 	}
 	pin := strings.TrimSpace(h.run(t, "config", "get", "cbm_version_pin").stdout)
-	bin := filepath.Join(h.home, "cache", "bin", "codebase-memory-mcp")
-	got := strings.TrimSpace(out(t, "", bin, "--version"))
-	got = strings.TrimSpace(strings.TrimPrefix(got, "codebase-memory-mcp"))
+	got := cbmVersion(t, h, bin)
 	if got != pin {
-		t.Fatalf("installed cbm %q does not match config pin %q", got, pin)
+		t.Fatalf("cbm %s at %s does not match config pin %s.\n"+
+			"This gate asserts behavior of the pinned engine, so it refuses to run on "+
+			"another build: two versions fail differently and the differences look "+
+			"like tk bugs.\nUnset TK_E2E_CBM_BIN to install the pin, or point it at a %s build.",
+			got, bin, pin, pin)
 	}
-	t.Logf("cbm %s installed by tk at %s (checksum verified by the installer)", got, bin)
+	t.Logf("cbm %s at %s, matching pin %s (installer verified the checksum)", got, bin, pin)
+	return bin
+}
+
+// cbmVersion asks a binary for its version under this test's isolated
+// environment. A bare probe would inherit the shell's CBM_CACHE_DIR and read
+// whatever store it points at instead of this home's.
+func cbmVersion(t *testing.T, h tk, bin string) string {
+	t.Helper()
+	cmd := exec.Command(bin, "--version")
+	cmd.Env = childEnv(h)
+	b, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s --version: %v", bin, err)
+	}
+	got := strings.TrimSpace(string(b))
+	return strings.TrimSpace(strings.TrimPrefix(got, "codebase-memory-mcp"))
 }
 
 func buildTk(t *testing.T, out string) {
@@ -578,7 +642,7 @@ func (h tk) mcp(t *testing.T, requests ...map[string]any) []map[string]any {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, h.bin, "mcp")
-	cmd.Env = append(os.Environ(), "TK_HOME="+h.home)
+	cmd.Env = childEnv(h)
 	cmd.Stdin = strings.NewReader(stdin.String())
 	out, err := cmd.Output()
 	if err != nil {

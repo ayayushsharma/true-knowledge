@@ -282,8 +282,10 @@ func KnownKeys() []string {
 }
 
 // ProfileScout is the profile used when neither the --tool-profile flag nor
-// TK_MCP_PROFILE nor config mcp.profile selects one. Lives here because the
-// profile list is a config value (ValidProfiles); internal/mcp aliases it.
+// TK_MCP_PROFILE nor config mcp.profile selects one. It lives here because the
+// profile list is a config value (ValidProfiles), but internal/mcp keeps its
+// own copy of the constant: mcp must not import config, and one shared string
+// value is not worth an import cycle to deduplicate.
 const ProfileScout = "scout"
 
 // GetKey reads a dotted config key as the human `config get` face prints it,

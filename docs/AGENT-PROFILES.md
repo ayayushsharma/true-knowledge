@@ -1,8 +1,8 @@
 ---
 title: Agent profiles — 27B default
 status: authoritative
-date: 2026-09-26
-supersedes: [compatible-implementation-spec.md §15, docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (tk-side profile filter + validate), docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (memory profile), docs/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md (profile via env), docs/DECISIONS/2026-09-24-zoekt-staleness.md (source_search freshness contract), docs/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md (hidden-tool gate enforces the profile), docs/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md (trace_path joins the absence-annotated tools; tool counts unchanged), docs/DECISIONS/2026-09-26-structured-cbm-payloads.md (structured CBM passthrough; two read paths over one spawn); MCP result shape + engine paging fields ]
+date: 2026-09-27
+supersedes: [compatible-implementation-spec.md §15, docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (tk-side profile filter + validate), docs/DECISIONS/2026-09-23-mvp3-memory-layer.md (memory profile), docs/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md (profile via env), docs/DECISIONS/2026-09-24-zoekt-staleness.md (source_search freshness contract), docs/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md (hidden-tool gate enforces the profile), docs/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md (trace_path joins the absence-annotated tools; tool counts unchanged), docs/DECISIONS/2026-09-26-structured-cbm-payloads.md (structured CBM passthrough; two read paths over one spawn); MCP result shape + engine paging fields, docs/DECISIONS/2026-09-27-comments-pass-2.md (tool surface is a profile, counts pinned by test; notifications get no reply)]
 superseded-by: null
 ---
 

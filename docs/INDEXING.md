@@ -1,8 +1,8 @@
 ---
 title: Indexing — modes, discovery, watcher, zoekt text index
 status: authoritative
-date: 2026-09-25
-supersedes: [compatible-implementation-spec.md §7, docs/DECISIONS/2026-09-24-zoekt-staleness.md (source-search freshness contract), docs/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md (ctx cancellation), docs/DECISIONS/2026-09-25-comments-pass-fixes.md (sync = both backends fresh, plain-dir skip/ignore, <config>/ignore)]
+date: 2026-09-27
+supersedes: [compatible-implementation-spec.md §7, docs/DECISIONS/2026-09-24-zoekt-staleness.md (source-search freshness contract), docs/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md (ctx cancellation), docs/DECISIONS/2026-09-25-comments-pass-fixes.md (sync = both backends fresh, plain-dir skip/ignore, <config>/ignore), docs/DECISIONS/2026-09-27-comments-pass-2.md (plain-dir walk: non-regular files skipped, oversize skipped pre-read, .gitignore NOT honored by the text index)]
 superseded-by: null
 ---
 

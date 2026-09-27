@@ -31,8 +31,8 @@ var httpClient = &http.Client{Timeout: 5 * time.Minute}
 
 var semverRe = regexp.MustCompile(`\d+\.\d+\.\d+`)
 
-// maxArchiveBytes caps a downloaded archive. Kept for checksum-manifest
-// fetches and as the streaming download bound below.
+// maxArchiveBytes caps a downloaded archive, in both fetch paths: the
+// checksum manifest (a backstop for a wrong URL) and the streamed archive.
 const maxArchiveBytes = 512 << 20
 
 // Status describes one backend's install state.
@@ -209,7 +209,7 @@ func fetch(ctx context.Context, url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %s", resp.Status)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 512<<20)) // checksum manifests are tiny anyway; same guard
+	return io.ReadAll(io.LimitReader(resp.Body, maxArchiveBytes)) // manifests are kilobytes; this is a backstop, not a budget
 }
 
 // download streams a URL body to path while hashing it, bounded to the same
@@ -269,9 +269,13 @@ func checksumFor(manifest []byte, archive string) (string, error) {
 }
 
 // extractBinary pulls the single named executable out of a .tar.gz or .zip on
-// disk and streams it to dest (no size cap, no full buffering — backend
-// binaries can be hundreds of MB). Only entry content is used — archive paths
-// never touch disk (no traversal).
+// disk and streams it to dest — no full buffering, so a multi-hundred-MB CBM
+// binary never lands in memory. Only entry *content* is written: the entry name
+// is matched against the expected binary and never used as a path, so a
+// traversal entry in a hostile archive cannot escape dest. The entry itself is
+// not size-capped (maxArchiveBytes bounds the compressed download, not what a
+// crafted archive inflates to), which is safe here only because the archive
+// passed the pinned checksum.
 func extractBinary(blob, archive, binary, dest string) error {
 	if strings.HasSuffix(archive, ".zip") {
 		return extractZipToFile(blob, binary, archive, dest)

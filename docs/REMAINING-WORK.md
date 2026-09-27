@@ -1,8 +1,8 @@
 ---
 title: Remaining work — the deferred/parked backlog (survives code compaction)
 status: authoritative
-date: 2026-09-26
-supersedes: [docs/DECISIONS/2026-09-26-structured-cbm-payloads.md (structured CBM passthrough; §5 stale-cursor narrowed)]
+date: 2026-09-27
+supersedes: [docs/DECISIONS/2026-09-26-structured-cbm-payloads.md (structured CBM passthrough; §5 stale-cursor narrowed), docs/DECISIONS/2026-09-27-comments-pass-2.md (comments.md retired; plain-dir .gitignore divergence left standing, see §6 text index ignore parity)]
 superseded-by: null
 ---
 
@@ -165,3 +165,22 @@ search → ≤limit rows             search → results + cursor
   no continuation                resume → next window
   "absence" from top-20          index moved → STALE → "re-query"
 ```
+## 6. Text index ignore parity (P3, standing — deliberately not "fixed")
+
+`source_search` does not honor `.gitignore` or `.cbmignore`, at the pinned
+zoekt version: its git indexer reads only `.sourcegraph/ignore`, and
+`.gitignore` applies *implicitly* (ignored files are untracked, so absent from
+the commit tree). Plain dirs get neither. The visible consequence is narrow and
+documented (INDEXING.md, PATHS-CONFIG.md): a **committed** `node_modules/`,
+`dist/` or `*.min.js` is skipped by CBM and still indexed by tk, so a text hit
+can name a file the graph has never heard of.
+
+Left standing on purpose. Closing it means reimplementing the engine's filter
+chain inside tk, which AGENTS.md 1 forbids: two filter stacks drift, and the
+second one is the one nobody tests. The narrow alternative — honor
+`.sourcegraph/ignore` only, since that is the file the same library reads for
+git repos — is available if the divergence ever costs a real answer, and is
+still a tk-side filter, so it needs the same argument first.
+
+`TestIndexDirDoesNotReadGitignore` pins the current behavior, so this becomes a
+deliberate change with a failing test rather than a silent drift.

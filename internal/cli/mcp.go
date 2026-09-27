@@ -35,12 +35,12 @@ func cmdMCP(g *Globals) *cobra.Command {
 			s.ShardsFor = paths.ZoektShards
 			// source_search freshness contract: refresh before searching,
 			// live-slice results, and annotate any remaining staleness.
-			s.EnsureIndex = func(project string) error {
+			s.EnsureIndex = func(rctx context.Context, project string) error {
 				p, ok := ctx.Reg[project]
 				if !ok {
 					return fmt.Errorf("unknown project %q", project)
 				}
-				if _, zerr := ctx.ensureZoektAndTouch(cmd.Context(), project, p.Path, ctx.Cfg.IndexMode); zerr != nil {
+				if _, zerr := ctx.ensureZoektAndTouch(rctx, project, p.Path, ctx.Cfg.IndexMode); zerr != nil {
 					return zerr
 				}
 				return ctx.saveReg()
@@ -64,6 +64,11 @@ func cmdMCP(g *Globals) *cobra.Command {
 			if err == nil {
 				s.Mem = store
 			}
+			// A cancelled ctx means the client signalled us (Ctrl-C / SIGTERM).
+			// For a stdio server that is a normal shutdown rather than a fault,
+			// so the 1 Serve returns for it is deliberately not propagated -
+			// printing "context canceled" at a client that just closed us would
+			// be noise.
 			_ = s.Serve(cmd.Context())
 			return nil
 		},

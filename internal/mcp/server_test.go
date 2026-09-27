@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ayayushsharma/true-knowledge/internal/cbmexec"
 	"github.com/ayayushsharma/true-knowledge/internal/memory"
@@ -469,7 +471,7 @@ func TestSourceSearchHooks(t *testing.T) {
 	s := &Server{
 		Budget:      6000,
 		ShardsFor:   func(string) string { return shards },
-		EnsureIndex: func(string) error { indexed++; return nil },
+		EnsureIndex: func(context.Context, string) error { indexed++; return nil },
 		Staleness:   func(string) string { return "[source-search: 1 modified, 0 untracked in worktree not indexed]\n" },
 		ProjectRoot: func(string) string { return dir },
 	}
@@ -499,7 +501,7 @@ func TestSourceSearchRefreshFailOpen(t *testing.T) {
 	s := &Server{
 		Budget:      6000,
 		ShardsFor:   func(string) string { return shards },
-		EnsureIndex: func(string) error { return errors.New("reindex boom") },
+		EnsureIndex: func(context.Context, string) error { return errors.New("reindex boom") },
 		ProjectRoot: func(string) string { return dir },
 	}
 	resp := serveOne(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"source_search","arguments":{"pattern":"Alpha","project":"p"}}}`)
@@ -904,4 +906,157 @@ func TestManageADRModesMatchEngine(t *testing.T) {
 		return
 	}
 	t.Fatal("manage_adr not in the analysis profile")
+}
+
+// Cancellation and notifications
+// ---------------------------------------------------------------------------
+
+// TestServeEOFExitsZero: stdin close is still the instant clean exit AGENTS.md
+// 6 promises, and it stays distinguishable from a signal shutdown.
+func TestServeEOFExitsZero(t *testing.T) {
+	var out bytes.Buffer
+	s := &Server{In: strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}` + "\n"), OutW: &out}
+	if code := s.Serve(context.Background()); code != 0 {
+		t.Fatalf("EOF exit = %d, want 0", code)
+	}
+	if !strings.Contains(out.String(), `"result"`) {
+		t.Fatalf("ping unanswered: %q", out.String())
+	}
+}
+
+// TestServeCancelExits: a client that keeps the pipe open and then goes away
+// (Ctrl-C, SIGTERM, parent killed) must not leave tk running. Before this,
+// Serve only learned about EOF, so a cancelled context ended nothing: the
+// scanner sat in a blocking read on a pipe that would never be closed.
+func TestServeCancelExits(t *testing.T) {
+	pr, pw := io.Pipe() // never written to, never closed by the test
+	defer pw.Close()
+	var out bytes.Buffer
+	s := &Server{In: pr, OutW: &out}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() { done <- s.Serve(ctx) }()
+	cancel()
+	select {
+	case code := <-done:
+		if code != 1 {
+			t.Fatalf("cancel exit = %d, want 1", code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Serve did not return after its context was cancelled")
+	}
+}
+
+// TestServeCancelMidRequest: cancellation reaches work already in flight, not
+// just the idle wait for the next line.
+func TestServeCancelMidRequest(t *testing.T) {
+	entered := make(chan struct{})
+	s := &Server{
+		Budget: 4096,
+		In:     strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_graph","arguments":{"name_pattern":"x","project":"p"}}}` + "\n"),
+		Run:    &blockingRunner{entered: entered},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var out bytes.Buffer
+	s.OutW = &out
+	done := make(chan int, 1)
+	go func() { done <- s.Serve(ctx) }()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the graph tool call never reached the runner")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Serve did not return; the in-flight tool call ignored its context")
+	}
+}
+
+// blockingRunner records that a call started, then waits for its context.
+type blockingRunner struct{ entered chan struct{} }
+
+func (b *blockingRunner) RunJSON(ctx context.Context, _ string, _ map[string]any) (string, error) {
+	close(b.entered)
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+func (b *blockingRunner) RunStructured(ctx context.Context, _ string, _ map[string]any) (cbmexec.Result, error) {
+	close(b.entered)
+	<-ctx.Done()
+	return cbmexec.Result{}, ctx.Err()
+}
+
+// TestNotificationsGetNoReply: a notification carries no id, so answering it
+// produces a frame the client never asked for. tk used to reply to
+// notifications/initialized with a result and to any other notifications/*
+// with a null-id "method not found", which a strict client rejects as a
+// response to a message it marked as a notification.
+func TestNotificationsGetNoReply(t *testing.T) {
+	var out bytes.Buffer
+	s := &Server{
+		In: strings.NewReader(
+			`{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n" +
+				`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}` + "\n" +
+				`{"jsonrpc":"2.0","method":"notifications/somethingUnknown"}` + "\n" +
+				`{"jsonrpc":"2.0","id":7,"method":"ping"}` + "\n"),
+		OutW: &out,
+	}
+	if code := s.Serve(context.Background()); code != 0 {
+		t.Fatalf("serve exit = %d", code)
+	}
+	dec := json.NewDecoder(bytes.NewReader(out.Bytes()))
+	var frames []map[string]any
+	for dec.More() {
+		var m map[string]any
+		if err := dec.Decode(&m); err != nil {
+			t.Fatalf("bad stream %q: %v", out.String(), err)
+		}
+		frames = append(frames, m)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("want exactly one reply to the ping, got %d: %s", len(frames), out.String())
+	}
+	if id, _ := frames[0]["id"].(float64); id != 7 {
+		t.Fatalf("reply id = %v, want 7", frames[0]["id"])
+	}
+}
+
+// TestRequestContextReachesHooks: the context a hook receives is the request's,
+// so cancelling a request unblocks the refresh it started.
+func TestRequestContextReachesHooks(t *testing.T) {
+	dir, shards := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "w.go"), []byte("func Gamma() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := zoekttext.IndexDir(context.Background(), shards, dir, "p", nil); err != nil {
+		t.Fatal(err)
+	}
+	// Inspected inside the hook: handle cancels the request context on return,
+	// so anything sampled afterwards is dead by construction.
+	var ran, hasDeadline bool
+	var errAtEntry error
+	s := &Server{
+		Budget:    6000,
+		ShardsFor: func(string) string { return shards },
+		EnsureIndex: func(c context.Context, _ string) error {
+			ran = true
+			errAtEntry = c.Err()
+			_, hasDeadline = c.Deadline()
+			return nil
+		},
+		ProjectRoot: func(string) string { return dir },
+	}
+	serveOne(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"source_search","arguments":{"pattern":"Gamma","project":"p"}}}`)
+	if !ran {
+		t.Fatal("EnsureIndex never ran")
+	}
+	if errAtEntry != nil {
+		t.Errorf("hook context already dead on entry: %v", errAtEntry)
+	}
+	if !hasDeadline {
+		t.Error("hook context has no deadline; a wedged index refresh would hold the loop open")
+	}
 }

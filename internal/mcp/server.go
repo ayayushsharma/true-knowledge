@@ -1,7 +1,13 @@
 // Package mcp serves a minimal MCP stdio proxy over the CBM CLI.
-// Tools: list_projects, index_status, check_index_coverage, search_graph,
-// trace_path, search_code, get_architecture, get_code_snippet.
-// stdin EOF = instant exit (no flush/stop). Stdout is pure JSON-RPC.
+//
+// The tool surface is a profile, not a fixed list: scout (11) is the default,
+// analysis (14) adds the demo and graph-query tools, minimal (3) is the
+// smallest graph set, and memory (22) swaps the graph tools for tk's
+// in-process memory tools. `tk mcp --tool-profile` and tools() are the source
+// of truth; the counts are pinned by TestToolProfileCounts.
+//
+// stdin EOF = instant exit (no flush/stop), and so is a cancelled context.
+// Stdout is pure JSON-RPC: a notification gets no reply, by spec.
 package mcp
 
 import (
@@ -332,7 +338,9 @@ type Server struct {
 	// EnsureIndex refreshes a project's zoekt shards before source_search
 	// (nil = trust the shards as-is). Closes the committed-staleness gap:
 	// a failed refresh is fail-open (search proceeds, staleness is noted).
-	EnsureIndex func(project string) error
+	// It takes the request context, so a cancelled source_search does not
+	// leave a refresh running behind the client's back.
+	EnsureIndex func(ctx context.Context, project string) error
 	// Staleness returns a "[...]" annotation when the served index does not
 	// cover the live tree (committed or worktree drift); "" = fresh. The
 	// note is prepended verbatim to source_search text; agents can gate
@@ -356,7 +364,22 @@ type Server struct {
 	Mem *memory.Store
 }
 
-// Serve loops on stdin NDJSON; EOF exits 0 immediately.
+// requestTimeout bounds one JSON-RPC request, so a wedged CBM child cannot hold
+// the stdio loop open indefinitely. It is deliberately generous: the fastest
+// thing that can still be waiting on it is a CBM spawn, and a client that hits
+// this gets an error frame rather than a hang.
+const requestTimeout = 5 * time.Minute
+
+// Serve loops on stdin NDJSON. Two exits, both immediate: EOF on stdin, or a
+// cancelled ctx. The reader gets its own goroutine because bufio.Scanner
+// blocks in read(2), and no context can interrupt a blocked read - selecting on
+// ctx alone would cancel the in-flight tool call but leave an idle server
+// alive through Ctrl-C. Closing the reader to unblock it is not an option
+// either: stdin is os.Stdin, a descriptor tk does not own.
+//
+// Returns 0 on clean EOF, 1 when the caller cancelled us: a signal-driven
+// shutdown is not a protocol error, but it is not a clean EOF either, and
+// reporting them alike hid Ctrl-C from callers that care.
 func (s *Server) Serve(ctx context.Context) int {
 	in := s.In
 	if in == nil {
@@ -366,21 +389,65 @@ func (s *Server) Serve(ctx context.Context) int {
 	if out == nil {
 		out = os.Stdout
 	}
-	sc := bufio.NewScanner(in)
-	sc.Buffer(make([]byte, 1024*1024), 1024*1024)
+	type message struct {
+		line []byte
+		err  error
+	}
+	msgs := make(chan message, 1)
+	go func() {
+		defer close(msgs)
+		sc := bufio.NewScanner(in)
+		sc.Buffer(make([]byte, 1024*1024), 1024*1024)
+		for sc.Scan() {
+			// Copy: sc.Bytes() aliases the scanner buffer, which the next
+			// Scan overwrites, and this goroutine keeps scanning while the
+			// consumer is busy with the previous line.
+			select {
+			case msgs <- message{line: append([]byte(nil), sc.Bytes()...)}:
+			case <-ctx.Done():
+				return
+			}
+		}
+		select {
+		case msgs <- message{err: sc.Err()}:
+		case <-ctx.Done():
+		}
+	}()
+
 	enc := json.NewEncoder(out)
-	for sc.Scan() {
-		line := sc.Bytes()
-		if len(line) == 0 {
-			continue
+	for {
+		select {
+		case <-ctx.Done():
+			return 1
+		case msg, ok := <-msgs:
+			if !ok {
+				return exitCode(ctx)
+			}
+			if msg.err != nil {
+				return exitCode(ctx)
+			}
+			if len(msg.line) == 0 {
+				continue
+			}
+			var req rpcReq
+			if err := json.Unmarshal(msg.line, &req); err != nil {
+				_ = enc.Encode(rpcResp{JSONRPC: "2.0", ID: nil, Error: &rpcErr{-32700, "parse error"}})
+				continue
+			}
+			resp, reply := s.handle(ctx, req)
+			if !reply {
+				continue
+			}
+			_ = enc.Encode(resp)
 		}
-		var req rpcReq
-		if err := json.Unmarshal(line, &req); err != nil {
-			_ = enc.Encode(rpcResp{JSONRPC: "2.0", ID: nil, Error: &rpcErr{-32700, "parse error"}})
-			continue
-		}
-		resp := s.handle(ctx, req)
-		_ = enc.Encode(resp)
+	}
+}
+
+// exitCode maps a finished read to a status: EOF is 0, but the reader also
+// stops when the context is cancelled, and that is a shutdown, not an EOF.
+func exitCode(ctx context.Context) int {
+	if ctx.Err() != nil {
+		return 1
 	}
 	return 0
 }
@@ -395,8 +462,24 @@ func (s *Server) profile() string {
 	}
 }
 
-func (s *Server) handle(ctx context.Context, req rpcReq) rpcResp {
+// handle dispatches one message. The bool is whether to answer at all: a
+// JSON-RPC notification carries no id and must never get a reply. tk used to
+// answer notifications/* with a result frame and anything else unknown with a
+// null-id error frame, so a client's notifications/cancelled drew a response it
+// never asked for.
+func (s *Server) handle(ctx context.Context, req rpcReq) (rpcResp, bool) {
 	id := req.ID
+	if strings.HasPrefix(req.Method, "notifications/") {
+		// notifications/cancelled is honored structurally rather than by
+		// bookkeeping: every request below runs on a context derived from the
+		// server's, and the CBM spawn dies with it. Cancelling a request that
+		// has not been read yet is not tracked - there is no per-request
+		// registry, and adding one is not worth the state for a stdio server
+		// that handles one message at a time.
+		return rpcResp{}, false
+	}
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
 	switch req.Method {
 	case "initialize":
 		var p struct {
@@ -408,32 +491,30 @@ func (s *Server) handle(ctx context.Context, req rpcReq) rpcResp {
 			"protocolVersion": s.proto,
 			"serverInfo":      map[string]any{"name": "tk", "version": "0.1.0", "profile": s.profile()},
 			"capabilities":    map[string]any{"tools": map[string]any{}},
-		}}
-	case "notifications/initialized":
-		return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{}}
+		}}, true
 	case "tools/list":
 		tl := tools(s.profile())
 		names := make([]map[string]any, 0, len(tl))
 		for _, t := range tl {
 			names = append(names, map[string]any{"name": t.Name, "description": t.Description, "inputSchema": t.Schema})
 		}
-		return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{"tools": names}}
+		return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{"tools": names}}, true
 	case "tools/call":
 		var p struct {
 			Name      string         `json:"name"`
 			Arguments map[string]any `json:"arguments"`
 		}
 		if err := json.Unmarshal(req.Params, &p); err != nil {
-			return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32602, "invalid params"}}
+			return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32602, "invalid params"}}, true
 		}
 		t0 := time.Now()
 		resp := s.callTool(ctx, id, p.Name, p.Arguments)
 		s.logCall(req.Method, p.Name, p.Arguments, t0, resp)
-		return resp
+		return resp, true
 	case "ping":
-		return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{}}
+		return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{}}, true
 	default:
-		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32601, "method not found: " + req.Method}}
+		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32601, "method not found: " + req.Method}}, true
 	}
 }
 
@@ -773,7 +854,7 @@ func (s *Server) callSourceSearch(ctx context.Context, id any, args map[string]a
 	}
 	notes := []string{}
 	if s.EnsureIndex != nil {
-		if err := s.EnsureIndex(project); err != nil {
+		if err := s.EnsureIndex(ctx, project); err != nil {
 			// Fail-open: search the shards we have, but say they are stale.
 			notes = append(notes, "[source-search: index refresh failed: "+err.Error()+"]\n")
 		}

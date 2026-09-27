@@ -1,8 +1,8 @@
 ---
 title: CBM boundary — what tk never does
 status: authoritative
-date: 2026-09-26
-supersedes: [compatible-implementation-spec.md §5.2, §5.3, §12, §13, docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (envelope-first wrapper), docs/DECISIONS/2026-09-24-mcp-inputschema-spec.md (tools/list advertises inputSchema), docs/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md (mcp log redaction + profile gate), docs/DECISIONS/2026-09-26-structured-cbm-payloads.md (structured CBM passthrough; two read paths over one spawn) ]
+date: 2026-09-27
+supersedes: [compatible-implementation-spec.md §5.2, §5.3, §12, §13, docs/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md (envelope-first wrapper), docs/DECISIONS/2026-09-24-mcp-inputschema-spec.md (tools/list advertises inputSchema), docs/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md (mcp log redaction + profile gate), docs/DECISIONS/2026-09-26-structured-cbm-payloads.md (structured CBM passthrough; two read paths over one spawn), docs/DECISIONS/2026-09-27-comments-pass-2.md (MCP ctx cancellation + per-request timeout; notifications unanswered; tk never reimplements CBM ignore filtering)]
 superseded-by: null
 ---
 

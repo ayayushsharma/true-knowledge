@@ -55,13 +55,58 @@ if command -v git >/dev/null 2>&1; then
   git -C "$FIX" -c user.email=t@t -c user.name=t commit -qm init
 fi
 
-pass=0; fail=0
+pass=0; fail=0; skip=0
 check() { # desc, expected_exit, cmd...
   desc="$1"; want="$2"; shift 2
   if out=$("$@" 2>&1); then code=0; else code=$?; fi
   if [ "$code" = "$want" ]; then pass=$((pass+1)); printf 'ok   %s\n' "$desc";
   else fail=$((fail+1)); printf 'FAIL %s (exit=%s want=%s)\n  %s\n' "$desc" "$code" "$want" "$out"; fi
 }
+
+# JSON/envelope probes need python3, which is not a POSIX utility and is not
+# guaranteed present (macOS ships only a command-line-tools shim). Every such
+# probe must tolerate its absence without lying. Empty output would read as a
+# genuine FAIL, and a failing command substitution under `set -eu` aborts the
+# whole script with no summary at all - which is how a missing python3 used to
+# end this suite. Absent probes report `skip`: never pass, never fail.
+have_python3=0
+command -v python3 >/dev/null 2>&1 && have_python3=1
+[ "$have_python3" = 1 ] || echo "-- note: python3 absent; JSON probes report skip (not fail)"
+
+skipped() { skip=$((skip+1)); printf 'skip %s (%s)\n' "$1" "$2"; }
+
+# py runs a python3 probe, printing nothing when python3 is absent. It never
+# fails its caller: a probe that errors says so on stderr and yields empty
+# output, so the calling check reports a real FAIL instead of aborting the run.
+py() {
+  if [ "$have_python3" = 1 ]; then
+    python3 "$@" || printf 'py: probe failed: python3 %s\n' "$*" >&2
+  fi
+  return 0
+}
+
+# json_id extracts a review id from a `--json` list; $1 is an expression over
+# the decoded list bound to `d`. Empty output means "cannot proceed", so every
+# caller reports a skip instead of handing tk an empty argument.
+json_id() { py -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
+
+# toolcount <label> <expected> <cmd...> -- counts tools/list tools for a profile.
+toolcount() {
+  tc_label="$1"; tc_want="$2"; shift 2
+  if [ "$have_python3" != 1 ]; then skipped "$tc_label" "python3 absent"; return 0; fi
+  if ! tc_out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | "$@" 2>/dev/null); then
+    fail=$((fail+1)); printf 'FAIL %s (mcp exited non-zero)\n' "$tc_label"; return 0
+  fi
+  tc_n=$(printf '%s' "$tc_out" | py -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
+  if [ "$tc_n" = "$tc_want" ]; then pass=$((pass+1)); printf 'ok   %s\n' "$tc_label"
+  else fail=$((fail+1)); printf 'FAIL %s (n=%s want=%s)\n' "$tc_label" "$tc_n" "$tc_want"; fi
+}
+
+# mode600 <file> -- POSIX mode test. `find -perm 600` is an exact match, so test
+# its output (GNU and BSD find both exit 0 on no match). `stat -c` is GNU-only
+# and `stat -f` BSD-only, so neither is portable; the 0600 invariant is also
+# asserted portably in Go (internal/memory/{facts,notes,ledger}_test.go).
+mode600() { [ -n "$(find "$1" -perm 600 -print 2>/dev/null)" ]; }
 
 check init 0 $TK_BIN init
 check register 0 $TK_BIN register "$FIX" --name demo
@@ -156,18 +201,26 @@ check mem-save-global 0 $TK_BIN mem save api-base https://api.internal.example.c
 check mem-recall-global-fallback 0 $TK_BIN mem recall api-base --project demo
 check mem-secret-queued 0 $TK_BIN mem save openai-key "sk-proj-E2Ee2e01234567890123456789012" --project demo
 check mem-review-list 0 $TK_BIN mem review list
-memid=$("$TK_BIN" mem review list --json | python3 -c "import json,sys; print(json.load(sys.stdin)['reviews'][0]['id'])")
-check mem-review-approve 0 $TK_BIN mem review approve "$memid"
+memid=$("$TK_BIN" mem review list --json | json_id "d['reviews'][0]['id']")
+if [ -n "$memid" ]; then
+  check mem-review-approve 0 $TK_BIN mem review approve "$memid"
+else
+  skipped mem-review-approve "python3 absent"
+fi
 check mem-recall-approved-secret 0 $TK_BIN mem recall openai-key --project demo
 "$TK_BIN" mem save deadtoken "ghp_E2ETestToken01234567890123456789012" --project demo >/dev/null
-rid=$("$TK_BIN" mem review list --json | python3 -c "import json,sys; print([r['id'] for r in json.load(sys.stdin)['reviews'] if r['topic']=='deadtoken'][0])")
-check mem-review-reject 0 $TK_BIN mem review reject "$rid"
+rid=$("$TK_BIN" mem review list --json | json_id "[r['id'] for r in d['reviews'] if r['topic']=='deadtoken'][0]")
+if [ -n "$rid" ]; then
+  check mem-review-reject 0 $TK_BIN mem review reject "$rid"
+else
+  skipped mem-review-reject "python3 absent"
+fi
 if "$TK_BIN" mem recall deadtoken --project demo | grep -q 'E2ETestToken'; then
   fail=$((fail+1)); printf 'FAIL mem-rejected-not-stored\n'
 else
   pass=$((pass+1)); printf 'ok   mem-rejected-not-stored\n'
 fi
-if python3 -c 'import os,sys; print(int(oct(os.stat(sys.argv[1]).st_mode)[-3:]))' "$MEM/facts.db" 2>/dev/null | grep -q '^600$'; then
+if mode600 "$MEM/facts.db"; then
   pass=$((pass+1)); printf 'ok   mem-facts-db-0600\n'
 else
   fail=$((fail+1)); printf 'FAIL mem-facts-db-0600\n'
@@ -180,32 +233,49 @@ if $TK_BIN note search letsencrypt --project demo | grep -q 'proxy'; then
 else
   pass=$((pass+1)); printf 'ok   note-gated-before-approval\n'
 fi
-nid=$("$TK_BIN" note review list --json | python3 -c "import json,sys; print(json.load(sys.stdin)['reviews'][0]['id'])")
-check note-review-approve 0 $TK_BIN note review approve "$nid"
+nid=$("$TK_BIN" note review list --json | json_id "d['reviews'][0]['id']")
+# note_approved gates every later check that needs an *approved* note: a skipped
+# approval leaves the note in the review queue, so its markdown is never written
+# and note_search legitimately finds nothing. Those checks must skip, not fail.
+note_approved=0
+if [ -n "$nid" ]; then
+  check note-review-approve 0 $TK_BIN note review approve "$nid"
+  note_approved=1
+else
+  skipped note-review-approve "python3 absent"
+fi
 check note-search-hit 0 $TK_BIN note search letsencrypt --project demo
 check note-toc 0 $TK_BIN note toc --project demo
 "$TK_BIN" note save "superseded idea" --text "an old idea about feature flags that we dropped" --project demo >/dev/null
-nid2=$("$TK_BIN" note review list --json | python3 -c "import json,sys; print([r['id'] for r in json.load(sys.stdin)['reviews'] if r['title']=='superseded idea'][0])")
-check note-review-reject 0 $TK_BIN note review reject "$nid2"
+nid2=$("$TK_BIN" note review list --json | json_id "[r['id'] for r in d['reviews'] if r['title']=='superseded idea'][0]")
+if [ -n "$nid2" ]; then
+  check note-review-reject 0 $TK_BIN note review reject "$nid2"
+else
+  skipped note-review-reject "python3 absent"
+fi
 if $TK_BIN note search feature --project demo | grep -q 'old idea'; then
   fail=$((fail+1)); printf 'FAIL note-rejected-not-stored\n'
 else
   pass=$((pass+1)); printf 'ok   note-rejected-not-stored\n'
 fi
 check note-reindex 0 $TK_BIN note reindex
-md=$(python3 -c 'import os,sys
-p = sys.argv[1]
-import glob
-fs = sorted(glob.glob(p))
-print(int(oct(os.stat(fs[0]).st_mode)[-3:]) if fs else "", end="")' "$TK_HOME"/data/notes/demo/*.md 2>/dev/null)
-if [ "$md" = "600" ]; then
+# every note markdown must be 0600, and there must be at least one to check
+md_seen=0; md_bad=0
+for f in "$TK_HOME"/data/notes/demo/*.md; do
+  [ -f "$f" ] || continue
+  md_seen=$((md_seen+1))
+  mode600 "$f" || md_bad=$((md_bad+1))
+done
+if [ "$note_approved" = 0 ]; then
+  skipped note-md-0600 "note approval skipped, no markdown written"
+elif [ "$md_seen" -gt 0 ] && [ "$md_bad" = 0 ]; then
   pass=$((pass+1)); printf 'ok   note-md-0600\n'
 else
-  fail=$((fail+1)); printf 'FAIL note-md-0600\n'
+  fail=$((fail+1)); printf 'FAIL note-md-0600 (%s file(s), %s not 0600)\n' "$md_seen" "$md_bad"
 fi
 
 # --- embedding layer (optional external /api/embed, BM25-first) ---
-if command -v python3 >/dev/null 2>&1; then
+if [ "$have_python3" = 1 ]; then
   python3 - "$T" <<'PYEOF' >/dev/null 2>&1 &
 import sys, json, http.server, socketserver
 d = sys.argv[1]
@@ -230,7 +300,12 @@ with socketserver.TCPServer(('127.0.0.1', 0), H) as srv:
     srv.serve_forever()
 PYEOF
   EMB_PID=$!
-  for _ in $(seq 1 50); do [ -f "$T/mock_embed.port" ] && break; sleep 0.1; done
+  # POSIX wait: `seq` is not a POSIX utility and neither is a fractional
+  # `sleep`, so poll with integer arithmetic and whole seconds.
+  emb_wait=0
+  while [ ! -f "$T/mock_embed.port" ] && [ "$emb_wait" -lt 10 ]; do
+    emb_wait=$((emb_wait+1)); sleep 1
+  done
   EMB_PORT=$(cat "$T/mock_embed.port" 2>/dev/null)
   if [ -n "$EMB_PORT" ]; then
     check embed-set-model 0 $TK_BIN config set embedding.model e2e-notes
@@ -360,18 +435,23 @@ else
 fi
 check ledger-budget 0 $TK_BIN config set budgets.ledger_chars 24
 check ledger-update-trunc 0 $TK_BIN ledger update demo goal "much longer ledger text that must be truncated aggressively here"
-shortled=$(TK_HOME="$TK_HOME" $TK_BIN ledger get demo --json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['keys']['goal']['value'])" 2>/dev/null)
-if [ "${#shortled}" -le 24 ]; then
-  pass=$((pass+1)); printf 'ok   ledger-budget-enforced\n'
+if [ "$have_python3" = 1 ]; then
+  shortled=$(TK_HOME="$TK_HOME" $TK_BIN ledger get demo --json 2>/dev/null | py -c "import json,sys; print(json.load(sys.stdin)['keys']['goal']['value'])" 2>/dev/null)
+  if [ "${#shortled}" -le 24 ]; then
+    pass=$((pass+1)); printf 'ok   ledger-budget-enforced\n'
+  else
+    fail=$((fail+1)); printf 'FAIL ledger-budget-enforced (%d chars)\n' "${#shortled}"
+  fi
+  # the cap is retrieval-only: history still holds the value whole
+  longhist=$(TK_HOME="$TK_HOME" $TK_BIN ledger history demo --json 2>/dev/null | py -c "import json,sys; v=[e['value'] for e in json.load(sys.stdin)['entries'] if 'much longer ledger text' in e['value']]; print(v[-1] if v else '')" 2>/dev/null)
+  if [ "${#longhist}" -gt 24 ]; then
+    pass=$((pass+1)); printf 'ok   ledger-history-uncapped\n'
+  else
+    fail=$((fail+1)); printf 'FAIL ledger-history-uncapped\n'
+  fi
 else
-  fail=$((fail+1)); printf 'FAIL ledger-budget-enforced (%d chars)\n' "${#shortled}"
-fi
-# the cap is retrieval-only: history still holds the value whole
-longhist=$(TK_HOME="$TK_HOME" $TK_BIN ledger history demo --json 2>/dev/null | python3 -c "import json,sys; v=[e['value'] for e in json.load(sys.stdin)['entries'] if 'much longer ledger text' in e['value']]; print(v[-1] if v else '')" 2>/dev/null)
-if [ "${#longhist}" -gt 24 ]; then
-  pass=$((pass+1)); printf 'ok   ledger-history-uncapped\n'
-else
-  fail=$((fail+1)); printf 'FAIL ledger-history-uncapped\n'
+  skipped ledger-budget-enforced "python3 absent"
+  skipped ledger-history-uncapped "python3 absent"
 fi
 check ledger-disable 0 $TK_BIN config set ledger.enabled false
 if $TK_BIN ledger update demo goal "should fail when disabled" >/dev/null 2>&1; then
@@ -388,31 +468,13 @@ esac
 check ledger-reenable 0 $TK_BIN config set ledger.enabled true
 check ledger-budget-reset 0 $TK_BIN config set budgets.ledger_chars 1500
 
-out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | $TK_BIN mcp)
-n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
-if [ "$n" = "11" ]; then pass=$((pass+1)); printf 'ok   mcp-tools-11\n';
-else fail=$((fail+1)); printf 'FAIL mcp-tools (n=%s)\n' "$n"; fi
-out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | $TK_BIN mcp --tool-profile analysis)
-n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
-if [ "$n" = "14" ]; then pass=$((pass+1)); printf 'ok   mcp-tools-analysis-14\n';
-else fail=$((fail+1)); printf 'FAIL mcp-tools-analysis (n=%s)\n' "$n"; fi
-out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | $TK_BIN mcp --tool-profile minimal)
-n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
-if [ "$n" = "3" ]; then pass=$((pass+1)); printf 'ok   mcp-tools-minimal-3\n';
-else fail=$((fail+1)); printf 'FAIL mcp-tools-minimal (n=%s)\n' "$n"; fi
-out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | $TK_BIN mcp --tool-profile memory)
-n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
-if [ "$n" = "22" ]; then pass=$((pass+1)); printf 'ok   mcp-tools-memory-22\n';
-else fail=$((fail+1)); printf 'FAIL mcp-tools-memory (n=%s)\n' "$n"; fi
+toolcount mcp-tools-11 11 $TK_BIN mcp
+toolcount mcp-tools-analysis-14 14 $TK_BIN mcp --tool-profile analysis
+toolcount mcp-tools-minimal-3 3 $TK_BIN mcp --tool-profile minimal
+toolcount mcp-tools-memory-22 22 $TK_BIN mcp --tool-profile memory
 # profile is a runtime knob: TK_MCP_PROFILE env drives it, flag beats env, invalid env fails loudly
-out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | TK_MCP_PROFILE=analysis $TK_BIN mcp)
-n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
-if [ "$n" = "14" ]; then pass=$((pass+1)); printf 'ok   mcp-env-analysis-14\n';
-else fail=$((fail+1)); printf 'FAIL mcp-env-analysis (n=%s)\n' "$n"; fi
-out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | TK_MCP_PROFILE=minimal $TK_BIN mcp --tool-profile memory)
-n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
-if [ "$n" = "22" ]; then pass=$((pass+1)); printf 'ok   mcp-flag-beats-env-22\n';
-else fail=$((fail+1)); printf 'FAIL mcp-flag-beats-env (n=%s)\n' "$n"; fi
+toolcount mcp-env-analysis-14 14 env TK_MCP_PROFILE=analysis $TK_BIN mcp
+toolcount mcp-flag-beats-env-22 22 env TK_MCP_PROFILE=minimal $TK_BIN mcp --tool-profile memory
 if TK_MCP_PROFILE=bogus sh -c "printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}' | $TK_BIN mcp" 2>&1 | grep -q 'scout|analysis|minimal|memory'; then
   pass=$((pass+1)); printf 'ok   mcp-env-invalid-rejected\n'
 else
@@ -424,15 +486,9 @@ if $TK_BIN config get mcp.profile | grep -q '^analysis$'; then
 else
   fail=$((fail+1)); printf 'FAIL mcp-config-get\n'
 fi
-out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | $TK_BIN mcp)
-n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
-if [ "$n" = "14" ]; then pass=$((pass+1)); printf 'ok   mcp-config-profile-14\n';
-else fail=$((fail+1)); printf 'FAIL mcp-config-profile (n=%s)\n' "$n"; fi
+toolcount mcp-config-profile-14 14 $TK_BIN mcp
 check mcp-config-unset 0 $TK_BIN config set mcp.profile ""
-out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | $TK_BIN mcp)
-n=$(printf '%s' "$out" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['result']['tools']))")
-if [ "$n" = "11" ]; then pass=$((pass+1)); printf 'ok   mcp-config-unset-back-to-11\n';
-else fail=$((fail+1)); printf 'FAIL mcp-config-unset-back (n=%s)\n' "$n"; fi
+toolcount mcp-config-unset-back-to-11 11 $TK_BIN mcp
 # memory profile: in-process tools work even though CBM was killed in live mode
 out=$(printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mem_save","arguments":{"topic":"deploy-tool","value":"make deploy ship it","scope":"project","project":"demo","provenance":"e2e"}}}' | $TK_BIN mcp --tool-profile memory 2>/dev/null)
 case "$out" in
@@ -454,11 +510,15 @@ if printf '%s\n' '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name"
 else
   pass=$((pass+1)); printf 'ok   mcp-mem-secret-masked\n'
 fi
-out=$(printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"note_search","arguments":{"query":"letsencrypt","project":"demo"}}}' | $TK_BIN mcp --tool-profile memory 2>/dev/null)
-case "$out" in
-  *'tls config'*) pass=$((pass+1)); printf 'ok   mcp-note-search\n';;
-  *) fail=$((fail+1)); printf 'FAIL mcp-note-search\n  %s\n' "$out";;
-esac
+if [ "$note_approved" = 0 ]; then
+  skipped mcp-note-search "note approval skipped, nothing searchable"
+else
+  out=$(printf '%s\n' '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"note_search","arguments":{"query":"letsencrypt","project":"demo"}}}' | $TK_BIN mcp --tool-profile memory 2>/dev/null)
+  case "$out" in
+    *'tls config'*) pass=$((pass+1)); printf 'ok   mcp-note-search\n';;
+    *) fail=$((fail+1)); printf 'FAIL mcp-note-search\n  %s\n' "$out";;
+  esac
+fi
 out=$(printf '%s\n' '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"ledger_update","arguments":{"project":"demo","key":"goal","text":"demo serves the API and owns the tls config"}}}' | $TK_BIN mcp --tool-profile memory 2>/dev/null)
 case "$out" in
   *'appended ledger demo/goal'*) pass=$((pass+1)); printf 'ok   mcp-ledger-update\n';;
@@ -504,8 +564,8 @@ printf '\npass=%d fail=%d\n' "$pass" "$fail"
 # Unified trace log: every invocation recorded with input+output+backends.
 LOG="$TK_HOME/state/logs/tk.log"
 if [ ! -s "$LOG" ]; then fail=$((fail+1)); printf 'FAIL trace-log-missing\n';
-else
-  if python3 - "$LOG" <<'EOF'
+elif [ "$have_python3" != 1 ]; then skipped trace-log "python3 absent";
+elif python3 - "$LOG" <<'EOF'
 import json, sys
 recs = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
 assert recs, "empty log"
@@ -518,9 +578,8 @@ assert any(e.get("op") == "trace_path" for r in recs for e in r.get("events", []
 assert any(r.get("exit") != 0 for r in recs), "no failure records (grep-badregex should log exit=1)"
 print(f"trace-log ok ({len(recs)} records)")
 EOF
-  then pass=$((pass+1)); printf 'ok   trace-log\n';
-  else fail=$((fail+1)); printf 'FAIL trace-log\n'; fi
-fi
+then pass=$((pass+1)); printf 'ok   trace-log\n';
+else fail=$((fail+1)); printf 'FAIL trace-log\n'; fi
 
-printf 'trace: pass=%d fail=%d\n' "$pass" "$fail"
+printf 'trace: pass=%d fail=%d skip=%d\n' "$pass" "$fail" "$skip"
 [ "$fail" = "0" ]

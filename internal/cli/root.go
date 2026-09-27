@@ -42,11 +42,27 @@ type Ctx struct {
 
 // out renders human text or stable JSON envelope.
 func (c *Ctx) out(cmd *cobra.Command, text string, fields map[string]any) error {
+	return c.envelope(cmd, true, text, fields)
+}
+
+// outFailed renders the same envelope with ok:false and then returns err.
+//
+// Both faces have to agree. A machine reading --json and a shell reading $?
+// are the two ways a caller learns the command failed; if the envelope claims
+// ok while the exit code is 1, a caller that trusts the JSON is told the
+// install worked. The text is still rendered first, so the diagnostic a person
+// needs is on stdout before the error names it on stderr.
+func (c *Ctx) outFailed(cmd *cobra.Command, text string, fields map[string]any, err error) error {
+	_ = c.envelope(cmd, false, text, fields)
+	return err
+}
+
+func (c *Ctx) envelope(cmd *cobra.Command, ok bool, text string, fields map[string]any) error {
 	if !c.G.JSON {
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), text)
 		return nil
 	}
-	env := map[string]any{"ok": true, "text": text}
+	env := map[string]any{"ok": ok, "text": text}
 	for k, v := range fields {
 		env[k] = v
 	}

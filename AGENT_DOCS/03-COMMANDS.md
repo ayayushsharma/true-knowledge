@@ -3,7 +3,7 @@ id: 03-commands
 title: CLI surface — every verb, flag, alias
 status: authoritative
 date: 2026-09-28
-supersedes: [AGENT_DOCS/history/compatible-implementation-spec.md §8, AGENT_DOCS/history/DECISIONS/2026-09-28-delegate-backend-install-to-vendor.md, AGENT_DOCS/history/compatible-implementation-spec.md §8.4, AGENT_DOCS/history/DECISIONS/2026-09-25-flag-only-query-forms.md, AGENT_DOCS/history/DECISIONS/2026-09-26-select-flag-forces-project-picker.md, AGENT_DOCS/history/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
+supersedes: [AGENT_DOCS/history/compatible-implementation-spec.md §8, AGENT_DOCS/history/DECISIONS/2026-09-28-failed-install-is-a-failed-command.md, AGENT_DOCS/history/DECISIONS/2026-09-28-delegate-backend-install-to-vendor.md, AGENT_DOCS/history/compatible-implementation-spec.md §8.4, AGENT_DOCS/history/DECISIONS/2026-09-25-flag-only-query-forms.md, AGENT_DOCS/history/DECISIONS/2026-09-26-select-flag-forces-project-picker.md, AGENT_DOCS/history/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
 superseded-by: null
 ---
 
@@ -22,7 +22,7 @@ purpose.
 |---|---|---|
 | `tk init` | — | create the four `true-knowledge/` dirs plus default config; idempotent |
 | `tk setup` | `--register`, `--name`, `--client`, `--tool-profile`, `--dry-run` | init + install + opt-in register + opt-in client snippet |
-| `tk install [backend...]` | `--check`, `--dry-run`, `--update`, `--version` | backend = `cbm`; no argument means all missing. Runs the vendor installer script at the pin; an upgrade drains coordinated CBM sessions and may ask them to exit |
+| `tk install [backend...]` | `--check`, `--dry-run`, `--update`, `--version` | backend = `cbm`; no argument means all missing. Runs the vendor installer script at the pin; an upgrade drains coordinated CBM sessions and may ask them to exit. **Exits non-zero if any backend failed**, and the reason is the vendor's own diagnostic — see below |
 | `tk register <path>` | `--name` | registers a path, never indexes it; name defaults to the directory base |
 | `tk migrate` | `--from`, `--dry-run` | moves `~/.tk`, `$TK_HOME`, or `~/Library/Application Support/true-knowledge`; writes a `MIGRATED` marker, refuses a re-run without `--force` |
 | `tk status` | — | projects, HEAD, freshness; `--json` adds `head`, `current`, `zoekt_head`, `zoekt_fresh` |
@@ -117,3 +117,44 @@ Cobra only, standard and dynamic. Projects come from `tk.json` and
 on MCP cancellation. `tk mcp` deliberately does not propagate the cancellation
 `1` to the client. A version that cannot be resolved fails loudly; it never
 falls back silently.
+
+A mutating command that did not do its work is an error, and a degraded render
+is the one exception. `tk install` therefore exits `1` when any backend failed
+to install, after printing its table: the table is the diagnosis, the exit code
+is the verdict. `tk setup` is the deliberate opposite — a missing backend is one
+`tk install` away and must never block an agent, so it reports the failure and
+exits `0`.
+
+## Reading an install failure
+
+`tk install` does not summarise a failed install as an exit status. The vendor
+installer is the only component that knows why it stopped, so its output is
+carried into the error: the `FAILED` line holds the reason, then the vendor's
+own last lines, then — when a daemon is holding the coordination lock — the one
+command that clears it.
+
+```
+cbm      FAILED: the backend's installer failed
+  Stopping active CBM sessions and operations for install...
+  error: activation could not reserve exclusive access; no activation was committed.
+  if a backend daemon is running, stop it and retry: tk daemon stop
+```
+
+`tk` never stops that daemon itself: the coordination daemon is shared per
+account, and a CBM daemon from a version that predates the drain protocol cannot
+be asked to quiesce anyway. CBM refuses rather than guessing, and `tk` surfaces
+the refusal and the fix.
+
+Exit 0 from the vendor is not proof of anything. CBM leaves a binary owned by
+mise, Homebrew or nix alone, and a config-only install publishes no binary at
+all. `tk` therefore reads the version at `<cache>/bin/<binary>` afterwards and
+fails if it is not the pin. If the vendor's own text is enough to explain it,
+`tk` adds a hint; if CBM rewords that text, the diagnosis is still there and
+only the hint is lost.
+
+`TMPDIR` is pointed at a private dir inside the cache for the install, so the
+~340 MB of archive and unpacked binary does not land on a small system tmpfs.
+The backend stages its own prepared candidate elsewhere, per its own contract;
+when that space runs short, the error now says so instead of reading
+`exit status 2`.
+

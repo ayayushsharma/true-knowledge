@@ -246,6 +246,7 @@ Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DE
 			rows := []row{}
 			lines := []string{}
 			changedPin := false
+			failed := []string{}
 			for _, name := range names {
 				b, err := backends.ByName(name)
 				if err != nil {
@@ -283,6 +284,11 @@ Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DE
 				default:
 					plan, err := installer.Install(cmd.Context(), ctx.Paths.Cache, b, pin, backends.HostGOOS(), backends.HostGOARCH(), installEnv(ctx))
 					if err != nil {
+						// A backend that did not install is a failed command, not a
+						// warning. This used to print FAILED and continue, so
+						// `tk install` exited 0 with nothing at the target and the
+						// caller went looking for the problem somewhere else.
+						failed = append(failed, name)
 						rows = append(rows, row{name, "failed", err.Error()})
 						lines = append(lines, fmt.Sprintf("%-8s FAILED: %v", name, err))
 						continue
@@ -305,7 +311,12 @@ Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DE
 			if text == "" {
 				text = "nothing to do"
 			}
-			return ctx.out(cmd, text, map[string]any{"backends": rows})
+			fields := map[string]any{"backends": rows}
+			if len(failed) > 0 {
+				return ctx.outFailed(cmd, text, fields,
+					fail("%s: install failed; see the FAILED line above", strings.Join(failed, ", ")))
+			}
+			return ctx.out(cmd, text, fields)
 		},
 	}
 	c.Flags().BoolVar(&check, "check", false, "report status only, no network")

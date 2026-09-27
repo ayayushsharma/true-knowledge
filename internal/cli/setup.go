@@ -102,7 +102,13 @@ Steps: init dirs/config → install all backends at pins → (opt-in) register c
 				}
 				plan, err := installer.Install(cmd.Context(), ctx.Paths.Cache, b, pin, backends.HostGOOS(), backends.HostGOARCH(), installEnv(ctx))
 				if err != nil {
-					sections = append(sections, fmt.Sprintf("install %s: FAILED %v (agent continues fail-open)", b.Name, err))
+					// Fail-open is the contract: a missing backend is a tk install
+					// away, not a blocked agent. The reason is clipped to one line
+					// because a section is one line, and `tk install` is where the
+					// backend's full diagnostic is rendered.
+					sections = append(sections, fmt.Sprintf(
+						"install %s: FAILED %s (agent continues fail-open; run tk install %s for detail)",
+						b.Name, firstLine(err.Error()), b.Name))
 					continue
 				}
 				sections = append(sections, fmt.Sprintf("install %s: installed %s -> %s", b.Name, pin, plan.Dest))

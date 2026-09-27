@@ -13,6 +13,13 @@
 // release base, so a pinned install fetches exactly the pinned tag and
 // verifies it against that tag's checksums.txt — performed by CBM, not tk.
 //
+// What tk owns about failure: the reason. The backend's exit status alone is
+// "exit status 1" whether the disk filled, the archive was corrupt, or a
+// daemon it could not drain refused the swap — and CBM's own diagnostic is the
+// only thing that tells those apart. So tk keeps a copy, names the reason, and
+// checks that the pin actually landed, because a backend that exits 0 without
+// publishing anything is a real case, not a hypothetical one.
+//
 // A backend is added by extending internal/backends.
 package installer
 
@@ -142,6 +149,10 @@ func Inspect(ctx context.Context, cacheDir string, b backends.Backend, pin, goos
 //
 // env supplies the CBM_* identity for the install so the backend writes its
 // store to tk's cache and drains tk's cohort, not the account-wide one.
+//
+// It returns an *Error whenever the pin did not land, including when the
+// script exited 0 without publishing it. A caller that trusts the exit status
+// reports a successful install that no binary backs.
 func Install(ctx context.Context, cacheDir string, b backends.Backend, pin, goos, goarch string, env []string) (Plan, error) {
 	plan, err := ResolvePlan(cacheDir, b, pin, goos, goarch)
 	if err != nil {
@@ -150,29 +161,59 @@ func Install(ctx context.Context, cacheDir string, b backends.Backend, pin, goos
 	if err := os.MkdirAll(binDir(cacheDir), 0o700); err != nil {
 		return Plan{}, err
 	}
+	// One private dir holds the staged script and serves as the install's
+	// TMPDIR. The install is transient-heavy: install.sh downloads a 40 MB
+	// archive and unpacks a 300 MB binary into mktemp -d, which defaults to the
+	// system temp dir. On a small tmpfs that is ENOSPC, and the backend reports
+	// it as a bare exit status. This moves ~340 MB of transient space next to
+	// the target, on the cache's filesystem, where the binary is going anyway.
+	//
+	// It does not move everything. The backend's own prepared-candidate copy is
+	// staged under cbm_tmpdir(), which its own source documents as separate
+	// behaviour from $TMPDIR on POSIX, so that copy still follows the platform
+	// temp. tk does not reach past the vendor's contract to relocate it; what
+	// tk does is stop being opaque when that space runs out.
+	work, err := os.MkdirTemp(cacheDir, ".install-")
+	if err != nil {
+		return Plan{}, err
+	}
+	defer os.RemoveAll(work)
+
 	script, err := fetchScript(ctx, plan.ScriptURL)
 	if err != nil {
 		return Plan{}, fmt.Errorf("fetch %s: %w", plan.ScriptURL, err)
 	}
-	stage, err := stageScript(cacheDir, goos, script)
+	stage, err := stageScript(work, goos, script)
 	if err != nil {
 		return Plan{}, err
 	}
-	defer os.RemoveAll(filepath.Dir(stage))
-
 	args, err := scriptArgs(stage, plan, goos)
 	if err != nil {
 		return Plan{}, err
 	}
 	// Pin the download source to this tag so the script cannot drift to latest.
 	runEnv := append(scrubbedEnv(), env...)
-	runEnv = append(runEnv, "CBM_DOWNLOAD_URL="+b.ReleaseBase(b.Tag(pin)))
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-	cmd.Env = runEnv
-	cmd.Stdout = os.Stderr // CBM's progress lines: tk's own output is separate
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return Plan{}, fmt.Errorf("run %s: %w", filepath.Base(stage), err)
+	runEnv = append(runEnv,
+		"CBM_DOWNLOAD_URL="+b.ReleaseBase(b.Tag(pin)),
+		"TMPDIR="+work, "TMP="+work, "TEMP="+work,
+	)
+	out, err := runScript(ctx, args, runEnv)
+	if err != nil {
+		return Plan{}, scriptFailure(b, pin, out, fmt.Errorf("run %s: %w", filepath.Base(stage), err))
+	}
+	// Exit 0 is not proof the pin landed. CBM leaves a binary owned by
+	// mise/Homebrew/nix alone and says so, and a config-only install publishes
+	// no binary at all; both exit 0 with nothing at the target.
+	if _, err := os.Stat(plan.Dest); err != nil {
+		return Plan{}, unpinned(b, pin, out, "placed no binary at "+plan.Dest, err)
+	}
+	if got := DetectVersion(ctx, plan.Dest); got != pin {
+		seen := got
+		if seen == "" {
+			seen = "no version"
+		}
+		return Plan{}, unpinned(b, pin, out,
+			fmt.Sprintf("%s reports %s, not the pinned %s", plan.Dest, seen, pin), errNoPin)
 	}
 	return plan, nil
 }
@@ -199,18 +240,13 @@ func scriptArgs(stage string, plan Plan, goos string) ([]string, error) {
 // stageScript writes the fetched script to a private file and returns its path.
 // It is never the live path a previous run used, so a re-run cannot race or
 // read a half-written script.
-func stageScript(cacheDir, goos string, script []byte) (string, error) {
+func stageScript(dir, goos string, script []byte) (string, error) {
 	name := "install.sh"
 	if goos == "windows" {
 		name = "install.ps1"
 	}
-	dir, err := os.MkdirTemp(binDir(cacheDir), ".stage-")
-	if err != nil {
-		return "", err
-	}
 	path := filepath.Join(dir, name)
 	if err := os.WriteFile(path, script, 0o700); err != nil {
-		os.RemoveAll(dir)
 		return "", err
 	}
 	return path, nil

@@ -9,8 +9,13 @@ import (
 )
 
 // Store is the in-process backend for the MCP memory profile tools.
-// All fields may be nil individually; a nil sub-store surfaces as a tool
-// error rather than a panic.
+// All fields may be nil individually; a sub-store that is not usable surfaces
+// as a tool error rather than a panic. "Not usable" covers more than a nil
+// pointer: a zero-value sub-store (built directly instead of via OpenFacts /
+// OpenNotes / OpenLedger) has a nil *sql.DB or an empty directory, and
+// database/sql does not guard a nil receiver, so a pointer-only check would
+// hand a nil db to ExecContext and panic there. The guards below check the
+// handle, not the pointer. A nil *Store receiver is likewise an error.
 type Store struct {
 	Facts          *Facts
 	Notes          *Notes
@@ -27,21 +32,25 @@ var (
 )
 
 func (s *Store) facts() error {
-	if s.Facts == nil {
+	if s == nil || s.Facts == nil || s.Facts.db == nil {
 		return errFactsNil
 	}
 	return nil
 }
 
 func (s *Store) notes() error {
-	if s.Notes == nil {
+	if s == nil || s.Notes == nil || s.Notes.db == nil {
 		return errNotesNil
 	}
 	return nil
 }
 
 func (s *Store) ledger() error {
-	if s.Ledger == nil {
+	// dir, not just the pointer: an empty dir makes path() relative, so
+	// Append would quietly write <project>.jsonl into the process working
+	// directory instead of erroring. That silent wrong-directory write is
+	// worse than the panic the sibling stores would raise.
+	if s == nil || s.Ledger == nil || s.Ledger.dir == "" {
 		return errLedgerNil
 	}
 	return nil
@@ -158,6 +167,12 @@ func (s *Store) LedgerHistory(ctx context.Context, project string) ([]LedgerEntr
 // stay open. No concurrency fix is needed (see the ledger ADR): appends are
 // immutable, LWW by key, crash-tolerant, and all surfaces are single-threaded.
 func (s *Store) LedgerAppend(ctx context.Context, project, key, value string) (LedgerEntry, error) {
+	// Nil receiver is checked before the gate, unlike the gate-before-nil
+	// order below: reading s.LedgerEnabled on a nil s would panic, which is
+	// the one thing this whole guard chain exists to prevent.
+	if s == nil {
+		return LedgerEntry{}, errLedgerNil
+	}
 	if !s.LedgerEnabled {
 		return LedgerEntry{}, ErrLedgerDisabled
 	}

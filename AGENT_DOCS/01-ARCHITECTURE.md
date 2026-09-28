@@ -121,6 +121,14 @@ Raw-JSON argv is deprecated upstream. Every spawn sets `CBM_CACHE_DIR`,
 `CBM_RUNTIME_DIR=<state>/rendezvous`, `CBM_ALLOWED_ROOT`. Project is always
 required — tk never sends `""`.
 
+The C engine needs an 8MB main-thread stack, and the OS sizes that thread from
+the *parent's* inherited `RLIMIT_STACK` (macOS ARM64 and tightened launchd
+policies default to 512KB, and an overflow aborts a pipeline pass mid-run).
+The wrapper enforces a floor: a soft limit below 8MB gets the spawn rebuilt
+through `/bin/sh -c 'ulimit -s <hard> && exec "$0" "$@"'`, capped at the
+inherited hard limit; a floor-met parent is spawned directly. See
+`AGENT_DOCS/history/DECISIONS/2026-09-28-cbm-stack-floor-at-spawn.md`.
+
 Two read paths over one spawn, deliberately:
 
 | Path | Caller | Engine ask | Return |

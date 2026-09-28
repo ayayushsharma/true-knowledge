@@ -2,7 +2,7 @@
 id: 02-boundary
 title: The CBM boundary — what tk must never do
 status: authoritative
-date: 2026-09-27
+date: 2026-09-28
 supersedes: [AGENT_DOCS/history/CBM-BOUNDARY.md, AGENT_DOCS/history/DECISIONS/2026-09-24-mcp-inputschema-spec.md, AGENT_DOCS/history/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md, AGENT_DOCS/history/DECISIONS/2026-09-26-structured-cbm-payloads.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
 superseded-by: null
 ---
@@ -41,7 +41,11 @@ duplicates an engine.
   `CBM_CACHE_DIR`, `CBM_RUNTIME_DIR`, and `CBM_ALLOWED_ROOT`, plus
   `cbm config set`.
 * One spawn wrapper, `internal/cbmexec`, with environment propagation, budget
-  truncation, and fail-open behavior. When CBM is down, tk prints a
+  truncation, fail-open behavior, and an 8MB stack floor for the C engine on
+  Linux and macOS: when the inherited soft `RLIMIT_STACK` is below the floor,
+  the wrapper raises the child to the inherited hard limit through
+  `/bin/sh -c 'ulimit -s … && exec "$0" "$@"'` — a floor-met parent is spawned
+  directly, byte-identically. When CBM is down, tk prints a
   `tk install` hint and lets the agent continue. tk must never block an agent.
 * Three things tk adds to a payload it merely forwards: freshness fields, an
   absence verdict, and budget markers. Nothing else.

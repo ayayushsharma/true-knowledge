@@ -39,6 +39,7 @@ case "$tool" in
   check_index_coverage) echo 'generation_matches: true
 hash_records_complete: true
 recording_status: complete';;
+  stack_probe) ulimit -S -s;;
   *) echo "{\"ok\":true,\"tool\":\"$tool\"}";;
 esac
 EOF
@@ -557,6 +558,45 @@ out=$(printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"na
 case "$out" in
   *'Demo'*'main.go'*) pass=$((pass+1)); printf 'ok   mcp-scout-search-hit\n';;
   *) fail=$((fail+1)); printf 'FAIL mcp-scout-search-hit\n  %s\n' "$out";;
+esac
+
+# --- CBM stack-limit guard (linux/macos) ---
+# CBM's deep pipeline passes recurse hard, and a thin parent limit can hand
+# the engine a 512KB main-thread stack that overflows mid-index. The wrapper
+# raises the child soft stack to the 8MB floor when the inherited ulimit is
+# below it. Prove the raise reached the child, then prove spawns still work
+# from a crippled parent and from an already-raised parent. Each case runs in
+# a subshell so the suite's own limit is untouched afterwards. Use -S (soft
+# only): bash's bare `ulimit -s` also collapses the hard limit, which would
+# legitimately cap the raise and prove nothing.
+case "$(uname -s)" in
+  Linux|Darwin)
+    if [ "${TK_LIVE:-0}" != "1" ]; then
+      crippled="$( ( ulimit -S -s 512 2>/dev/null || true
+        TK_HOME="$TK_HOME" "$TK_BIN" cbm stack_probe 2>/dev/null || true ) )"
+      case "$crippled" in
+        unlimited) pass=$((pass+1)); printf 'ok   stack-guard-raised (unlimited)\n';;
+        *[!0-9]*|'') fail=$((fail+1)); printf 'FAIL stack-guard-raised (child soft=%s)\n' "$crippled";;
+        *) if [ "$crippled" -ge 8192 ]; then
+             pass=$((pass+1)); printf 'ok   stack-guard-raised (%sKB)\n' "$crippled"
+           else
+             fail=$((fail+1)); printf 'FAIL stack-guard-raised (child soft=%sKB, floor=8192KB)\n' "$crippled"
+           fi;;
+      esac
+    else
+      skipped stack-guard-raised "live mode has no stack_probe fake tool"
+    fi
+    if ( ulimit -S -s 512 2>/dev/null || true; "$TK_BIN" index demo >/dev/null 2>&1 ); then
+      pass=$((pass+1)); printf 'ok   stack-crippled-index\n'
+    else
+      fail=$((fail+1)); printf 'FAIL stack-crippled-index (index failed at ulimit -s 512)\n'
+    fi
+    if ( ulimit -S -s 65532 2>/dev/null || true; "$TK_BIN" sync demo >/dev/null 2>&1 ); then
+      pass=$((pass+1)); printf 'ok   stack-raised-parent-index\n'
+    else
+      fail=$((fail+1)); printf 'FAIL stack-raised-parent-index (sync failed at ulimit -s 65532)\n'
+    fi
+    ;;
 esac
 
 printf '\npass=%d fail=%d\n' "$pass" "$fail"

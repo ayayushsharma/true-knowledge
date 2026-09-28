@@ -83,8 +83,7 @@ func (r *Runner) Run(ctx context.Context, tool string, payload map[string]any) (
 		return "", err
 	}
 	defer cleanup()
-	cmd := exec.CommandContext(ctx, r.Bin, "cli", tool, "--args-file", argsPath)
-	cmd.Env = r.env()
+	cmd := r.commandContext(ctx, "cli", tool, "--args-file", argsPath)
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
@@ -152,8 +151,7 @@ func (r *Runner) runEnvelope(ctx context.Context, tool string, payload map[strin
 		return Result{}, err
 	}
 	defer cleanup()
-	cmd := exec.CommandContext(ctx, r.Bin, "cli", "--json", tool, "--args-file", argsPath)
-	cmd.Env = r.env()
+	cmd := r.commandContext(ctx, "cli", "--json", tool, "--args-file", argsPath)
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
@@ -373,6 +371,17 @@ func diagnosis(text string) string {
 	return msg
 }
 
+// commandContext builds one CBM spawn: the engine binary and argument list,
+// the shared environment map, and the platform stack-limit guard. Every
+// spawn funnels through here so the read paths, the raw passthrough, and
+// daemon control share identical env and child limits.
+func (r *Runner) commandContext(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, r.Bin, args...)
+	cmd.Env = r.env()
+	applyStackLimit(cmd)
+	return cmd
+}
+
 // env builds the spawn environment (shared by all Run variants).
 func (r *Runner) env() []string {
 	env := append(os.Environ(),
@@ -391,14 +400,7 @@ func (r *Runner) RunRaw(ctx context.Context, argv ...string) (string, error) {
 		defer cancel()
 	}
 	args := append([]string{"cli"}, argv...)
-	cmd := exec.CommandContext(ctx, r.Bin, args...)
-	cmd.Env = append(os.Environ(),
-		"CBM_CACHE_DIR="+r.Paths.CBMCacheDir(),
-		"CBM_RUNTIME_DIR="+r.Paths.CBMRuntimeDir(),
-	)
-	if r.Cfg.AllowedRoot != "" {
-		cmd.Env = append(cmd.Env, "CBM_ALLOWED_ROOT="+r.Cfg.AllowedRoot)
-	}
+	cmd := r.commandContext(ctx, args...)
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
@@ -424,14 +426,7 @@ func (r *Runner) RunDaemon(ctx context.Context, argv ...string) (string, error) 
 		ctx, cancel = deadline()
 		defer cancel()
 	}
-	cmd := exec.CommandContext(ctx, r.Bin, argv...)
-	cmd.Env = append(os.Environ(),
-		"CBM_CACHE_DIR="+r.Paths.CBMCacheDir(),
-		"CBM_RUNTIME_DIR="+r.Paths.CBMRuntimeDir(),
-	)
-	if r.Cfg.AllowedRoot != "" {
-		cmd.Env = append(cmd.Env, "CBM_ALLOWED_ROOT="+r.Cfg.AllowedRoot)
-	}
+	cmd := r.commandContext(ctx, argv...)
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb

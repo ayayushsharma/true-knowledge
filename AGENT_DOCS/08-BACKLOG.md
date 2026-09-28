@@ -106,14 +106,18 @@ or the evals harness wanting a project-state stream.
 
 ### Delivery
 
-Parked: `brew`, `nix`, and `npm` formulas, plus the team `.zst` cadence. The
-`.zst` artifacts themselves stay CBM-owned and unchanged; only tk's cadence is
-parked. Triggers: a team actually requiring a package manager, or verified
-demand for `.zst` age surfacing. Recorded direction, deliberately unbuilt:
-GitHub release page, platform binaries plus `checksums.txt`, fetched by simple
-`install.sh` (curl, sha256sum) and `install.ps1` (Invoke-WebRequest,
-Get-FileHash), latest-or-pinned tag. `tk install`, the CBM installer, is
-unrelated and unaffected.
+Built: the repo-root `install.sh` and `install.ps1`. Each installs tk from a
+GitHub release, verifies it against that release's `checksums.txt`, refuses an
+asset the manifest does not list, and then runs `tk install cbm`. They hold no
+CBM version input — `DefaultCBMPin` stays the only authority, so the scripts
+couple tk's release cadence to the CBM pin and that coupling is deliberate.
+They exist because tk cannot replace its own running binary.
+
+Still parked: `brew`, `nix`, and `npm` formulas, plus the team `.zst` cadence,
+and the release workflow that would publish the platform binaries the two
+scripts download. `tk` is unreleased, so that workflow does not exist yet and
+the scripts fail cleanly until it does. Triggers: a team actually requiring a
+package manager, or a first tagged release.
 
 ## Open work
 

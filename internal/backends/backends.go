@@ -28,10 +28,8 @@ type Backend struct {
 	Binary string
 	// TagPrefix prefixes the version to form the release tag (usually "v").
 	TagPrefix string
-	// Script is the release installer script, per GOOS, inside the tag's
-	// repository tree. tk runs it instead of reimplementing its download,
-	// checksum, and extraction logic.
-	Script func(goos string) string
+	// Checksums is the checksum manifest filename in the release.
+	Checksums string
 	// Archive maps runtime.GOOS/GOARCH to the release archive filename.
 	Archive func(goos, goarch string) (string, error)
 }
@@ -44,12 +42,7 @@ func CBM() Backend {
 		Repo:      "DeusData/codebase-memory-mcp",
 		Binary:    "codebase-memory-mcp",
 		TagPrefix: "v",
-		Script: func(goos string) string {
-			if goos == "windows" {
-				return "install.ps1"
-			}
-			return "install.sh"
-		},
+		Checksums: "checksums.txt",
 		Archive: func(goos, goarch string) (string, error) {
 			switch goos {
 			case "linux", "darwin":
@@ -103,22 +96,17 @@ func (b Backend) BinaryName(goos string) string {
 // Tag forms the release tag from a pinned version.
 func (b Backend) Tag(version string) string { return b.TagPrefix + version }
 
-// ReleaseBase returns the download base URL; TK_RELEASE_BASE_URL overrides
-// it (tests, mirrors). Override is joined as <base>/<tag>/.
+// ReleaseBase returns the download base URL; TK_RELEASE_BASE_URL overrides it
+// (tests, mirrors), and TK_RELEASE_BASE_URL_<NAME> overrides it for one
+// backend. Override is joined as <base>/<tag>/.
 func (b Backend) ReleaseBase(tag string) string {
+	if v := perBackendBaseOverride(b); v != "" {
+		return v + "/" + tag
+	}
 	if v := releaseBaseOverride(); v != "" {
 		return v + "/" + tag
 	}
 	return "https://github.com/" + b.Repo + "/releases/download/" + tag
-}
-
-// ScriptURL returns the raw URL of the release installer script at tag. The
-// script is not a release asset, so it comes from the tag's repository tree.
-func (b Backend) ScriptURL(tag, goos string) string {
-	if v := scriptBaseOverride(); v != "" {
-		return v + "/" + tag + "/" + b.Script(goos)
-	}
-	return "https://raw.githubusercontent.com/" + b.Repo + "/" + tag + "/" + b.Script(goos)
 }
 
 // HostGOOS/HostGOARCH expose runtime values for helpers/tests.

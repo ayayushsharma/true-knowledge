@@ -28,3 +28,23 @@ func TestCBMArchiveNames(t *testing.T) {
 		t.Fatal("expected error for unknown backend")
 	}
 }
+
+// The base URL is what a pin is fetched from, so the override order is a
+// safety property: a per-backend mirror must beat the global one, and both
+// must beat GitHub. A pin that can drift to a different host is a pin that
+// can be served different bytes.
+func TestReleaseBaseOverrideOrder(t *testing.T) {
+	b := backends.CBM()
+	tag := b.Tag("0.11.0")
+	if got, want := b.ReleaseBase(tag), "https://github.com/"+b.Repo+"/releases/download/"+tag; got != want {
+		t.Errorf("default = %q, want %q", got, want)
+	}
+	t.Setenv("TK_RELEASE_BASE_URL", "https://global.example")
+	if got, want := b.ReleaseBase(tag), "https://global.example/"+tag; got != want {
+		t.Errorf("global = %q, want %q", got, want)
+	}
+	t.Setenv("TK_RELEASE_BASE_URL_CBM", "https://per-backend.example")
+	if got, want := b.ReleaseBase(tag), "https://per-backend.example/"+tag; got != want {
+		t.Errorf("per-backend = %q, want %q (it must win over the global)", got, want)
+	}
+}

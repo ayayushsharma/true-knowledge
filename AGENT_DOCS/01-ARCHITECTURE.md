@@ -3,7 +3,7 @@ id: 01-architecture
 title: Architecture — thin shipper over CBM, managed backends, trace log
 status: authoritative
 date: 2026-09-28
-supersedes: [AGENT_DOCS/history/DECISIONS/2026-09-28-delegate-backend-install-to-vendor.md, AGENT_DOCS/history/DECISIONS/2026-09-22-thin-tk-over-cbm.md, AGENT_DOCS/history/DECISIONS/2026-09-23-tk-managed-backends.md, AGENT_DOCS/history/DECISIONS/2026-09-23-download-at-install-and-setup.md, AGENT_DOCS/history/DECISIONS/2026-09-23-zoekt-library-not-backend.md, AGENT_DOCS/history/DECISIONS/2026-09-23-explicit-source-search.md, AGENT_DOCS/history/ROADMAP.md §MVP1, AGENT_DOCS/history/DECISIONS/2026-09-27-consolidated-agent-docs.md]
+supersedes: [AGENT_DOCS/history/DECISIONS/2026-09-28-tk-owns-the-binary-and-the-quiesce.md, AGENT_DOCS/history/DECISIONS/2026-09-28-delegate-backend-install-to-vendor.md, AGENT_DOCS/history/DECISIONS/2026-09-22-thin-tk-over-cbm.md, AGENT_DOCS/history/DECISIONS/2026-09-23-tk-managed-backends.md, AGENT_DOCS/history/DECISIONS/2026-09-23-download-at-install-and-setup.md, AGENT_DOCS/history/DECISIONS/2026-09-23-zoekt-library-not-backend.md, AGENT_DOCS/history/DECISIONS/2026-09-23-explicit-source-search.md, AGENT_DOCS/history/ROADMAP.md §MVP1, AGENT_DOCS/history/DECISIONS/2026-09-27-consolidated-agent-docs.md]
 superseded-by: null
 ---
 
@@ -52,33 +52,47 @@ needs; no apt, brew, npm, or toolchain at runtime.
 * Resolver order: `TK_CBM_BIN` > config `cbm_binary` > sibling of the `tk`
   executable > `<cache>/bin` > `PATH`. The managed copy wins over `PATH` so
   `tk install` takes effect.
-* Install delegates to the vendor's own installer script for the pinned tag
-  (`install.sh`, or `install.ps1` on Windows), fetched from
-  `raw.githubusercontent.com/<repo>/<tag>/`. tk passes `--dir=<cache>/bin` and
-  `--skip-config`, and sets `CBM_DOWNLOAD_URL` to the tag's release base so a
-  pin cannot drift to latest. tk never downloads, checksums, or extracts an
-  archive itself.
-* The vendor script verifies SHA-256 against the tag's release manifest before
-  any write, and hands the swap to the candidate binary's own `install`, which
-  drains the cohort, holds the admission barrier, and commits the new binary
-  transactionally with rollback. That barrier is why an upgrade is safe with a
-  daemon already running, and it is not something tk could replicate cheaply.
-* The install runs with `HOME` and `USERPROFILE` pointed at
-  `<state>/install-home`, plus `CBM_CACHE_DIR`, `CBM_RUNTIME_DIR`, and
-  `CBM_ALLOWED_ROOT` from tk. The vendor script appends its bin dir to the
-  user's shell rc; the sandbox absorbs that write. tk never edits a file it does
-  not own.
-* Script fetch guard `maxScriptBytes = 1 MiB`; a non-HTTPS script URL is
-  refused because the script is executed.
-* Mirrors: `TK_RELEASE_BASE_URL` (release assets), `TK_SCRIPT_BASE_URL`
-  (installer script).
+* Install is tk's own. tk streams the archive for the pinned tag, verifies
+  SHA-256 against the tag's `checksums.txt` **before** opening the archive,
+  extracts the binary entry to `<cache>/bin/<binary>.new`, and only then
+  validates the staged file by asking it for `--version`. Nothing touches the
+  live path until the candidate has proven it is the pin.
+* The swap is transactional: stage `.new`, validate, rename the current binary
+  to `.prev`, rename `.new` into place, validate again, and roll back to `.prev`
+  on any failure. A failed swap leaves the previous image serving and the staged
+  candidate consumed, never a half-written binary.
+* The archive is never buffered whole in memory: a backend release is hundreds
+  of MB. It streams to `<state>/tmp` while the digest is computed inline.
+* Daemon quiescence is a precondition, not a side effect. Before a replacement
+  tk asks the *installed* binary `daemon status`; if one is running it runs
+  `daemon stop` first, and only restarts afterwards if it was running. A binary
+  swapped under a live daemon is one the daemon's build-identity gate refuses to
+  admit, so every later command would fail.
+* A daemon that refuses to stop — CBM refuses while clients are committed — is a
+  **failed install**. tk prints the committed pids, fetches nothing, writes
+  nothing, and exits non-zero. There is no flag that overrides the refusal.
+* `daemon start` creates a *permanent* daemon, so tk only calls it to restore one
+  that was already running. A first install leaves no daemon behind.
+* Stopping is scoped to tk: the daemon is namespaced by `CBM_RUNTIME_DIR`, which
+  tk points at `<state>/rendezvous`, so this can never stop an account-wide
+  daemon a consumer laptop is running. Stopping also crosses versions — CBM
+  handles control-plane requests ahead of its build check, so the newly
+  installed binary can stop an older daemon.
+* `--check` and `--dry-run` are reports: they never stop a daemon, and an
+  up-to-date no-op leaves a running daemon alone. Only a real replacement
+  quiesces.
+* `tk setup` quiesces the same way but stays fail-open: a busy daemon is one
+  clipped line and the agent continues.
 * Adding a backend is one registry entry (name, repo, binary, asset naming, tag
-  scheme, installer script). No per-backend code paths in installer, status, or
-  `tk install`.
-* Bytes are never rebuilt or stripped by tk. Trust comes from the vendor's
-  manifest verification at install time.
+  scheme, checksum manifest name). No per-backend code paths in installer,
+  status, or `tk install`.
+* Bytes are never rebuilt or stripped by tk. Trust comes from the manifest
+  verification tk performs at install time.
 * Never `go:embed` a multi-hundred-MB executable. Never compile anything on the
   user's machine.
+* tk never replaces *itself*. `install.sh` / `install.ps1` at the repo root do
+  that, because on Windows the image is locked and on Linux the running inode
+  survives a rename. They call `tk install cbm` and hold no CBM version input.
 
 `tk install [backend...]` flags: `--check` (report, no network), `--dry-run`
 (print plan URLs), `--update` (reinstall even when current), `--version X.Y.Z`

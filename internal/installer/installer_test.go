@@ -1,272 +1,382 @@
-package installer_test
+package installer
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/ayayushsharma/true-knowledge/internal/backends"
-	"github.com/ayayushsharma/true-knowledge/internal/installer"
 )
 
-// scriptServer serves body as the installer script for any install.sh request.
-func scriptServer(t *testing.T, body string) *httptest.Server {
+// fakeBinary is a shell script that reports a version, standing in for the real
+// 300 MB CBM image. The swap is about paths and versions, not size.
+const fakeBinary = "#!/bin/sh\necho codebase-memory-mcp %s\n"
+
+func cbmBackend() backends.Backend { return backends.CBM() }
+
+func contains(hay, needle string) bool { return strings.Contains(hay, needle) }
+
+func repeat64(s string) string { return strings.Repeat(s, 64) }
+
+func versionedScript(v string) []byte { return []byte(fmt.Sprintf(fakeBinary, v)) }
+
+// releaseServer serves a tar.gz holding one versioned binary plus a matching
+// checksums.txt, at the same tag-scoped paths the real release uses.
+func releaseServer(t *testing.T, version string) *httptest.Server {
 	t.Helper()
+	tgz := tarGz(t, "codebase-memory-mcp", versionedScript(version))
+	sum := sha256.Sum256(tgz)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "install.sh") || strings.HasSuffix(r.URL.Path, "install.ps1") {
-			fmt.Fprint(w, body)
-			return
+		switch {
+		case strings.HasSuffix(r.URL.Path, "checksums.txt"):
+			fmt.Fprintf(w, "%s  codebase-memory-mcp-linux-amd64.tar.gz\n", hex.EncodeToString(sum[:]))
+		case strings.HasSuffix(r.URL.Path, ".tar.gz"):
+			w.Write(tgz)
+		default:
+			http.NotFound(w, r)
 		}
-		http.NotFound(w, r)
 	})
 	s := httptest.NewServer(mux)
 	t.Cleanup(s.Close)
 	return s
 }
 
-// placingScript records argv and env, then places a binary that reports
-// version at the --dir it was given. This stands in for the real install.sh:
-// tk's job is to invoke the pinned script correctly and to notice what it did,
-// not to reimplement what it does.
-func placingScript(recordPath, version string) string {
-	return fmt.Sprintf(`#!/usr/bin/env bash
-set -euo pipefail
-{
-  echo "argv: $*"
-  echo "download_url: ${CBM_DOWNLOAD_URL:-}"
-  echo "tmpdir: ${TMPDIR:-}"
-} > %q
-for arg in "$@"; do
-  case "$arg" in
-    --dir=*) dir="${arg#--dir=}" ;;
-  esac
-done
-mkdir -p "$dir"
-cat > "$dir/codebase-memory-mcp" <<'BIN'
-#!/bin/sh
-echo cbm %s fake
-BIN
-chmod 755 "$dir/codebase-memory-mcp"
-`, recordPath, version)
+func tarGz(t *testing.T, name string, body []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: name, Mode: 0o755, Size: int64(len(body)), Typeflag: tar.TypeReg,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
-func TestInstallDelegatesToPinnedScript(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fake script is bash")
+func zipArchive(t *testing.T, name string, body []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create(name)
+	if err != nil {
+		t.Fatal(err)
 	}
-	record := filepath.Join(t.TempDir(), "record.txt")
-	s := scriptServer(t, placingScript(record, "0.11.0"))
-	t.Setenv("TK_SCRIPT_BASE_URL", s.URL)
-	t.Setenv("TK_RELEASE_BASE_URL", "https://example.invalid/dl")
+	if _, err := w.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func withReleaseBase(t *testing.T, s *httptest.Server) {
+	t.Setenv("TK_RELEASE_BASE_URL", s.URL)
+}
+
+func TestInstallFetchesVerifiesAndPublishes(t *testing.T) {
+	s := releaseServer(t, "0.11.0")
+	withReleaseBase(t, s)
 	cache := t.TempDir()
-	b := backends.CBM()
-
-	plan, err := installer.Install(t.Context(), cache, b, "0.11.0", "linux", "amd64", nil)
+	plan, err := Install(context.Background(), cache, cbmBackend(), "0.11.0", "linux", "amd64")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("install: %v", err)
 	}
-	if _, err := os.Stat(plan.Dest); err != nil {
-		t.Fatalf("dest missing: %v", err)
+	if got := DetectVersion(context.Background(), plan.Dest); got != "0.11.0" {
+		t.Fatalf("published binary reports %q, want 0.11.0", got)
 	}
-	raw, err := os.ReadFile(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := string(raw)
-	// The pin must reach the script as a tag-scoped download base, never latest.
-	if !strings.Contains(got, "https://example.invalid/dl/v0.11.0") {
-		t.Errorf("pin not passed to script:\n%s", got)
-	}
-	// Agent config is tk's job; CBM must not write any client mcp.json.
-	if !strings.Contains(got, "--skip-config") {
-		t.Errorf("--skip-config not passed:\n%s", got)
-	}
-	// The binary must land in tk's cache, not $HOME/.local/bin.
-	if !strings.Contains(got, "--dir="+filepath.Join(cache, "bin")) {
-		t.Errorf("--dir not passed:\n%s", got)
-	}
-	// TMPDIR must not be the system temp dir: the install needs ~340 MB
-	// transient, and the script unpacks it wherever TMPDIR points.
-	tmp := tmpdirOf(got)
-	if tmp == "" {
-		t.Fatalf("TMPDIR not set for the script:\n%s", got)
-	}
-	if !strings.HasPrefix(tmp, cache) {
-		t.Errorf("TMPDIR %q is outside the cache %q", tmp, cache)
-	}
-	// No staging residue: the private work dir is removed after the run.
-	entries, err := os.ReadDir(cache)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".install-") {
-			t.Errorf("staging residue left behind: %s", e.Name())
+	// A published install leaves no staging debris behind.
+	for _, suffix := range []string{".new", ".prev"} {
+		if _, err := os.Stat(plan.Dest + suffix); !os.IsNotExist(err) {
+			t.Fatalf("%s should not survive a clean install", suffix)
 		}
-	}
-
-	st := installer.Inspect(t.Context(), cache, b, "0.11.0", "linux")
-	if !st.UpToDate || st.NeedsInstall || !st.InCache {
-		t.Fatalf("status = %+v", st)
 	}
 }
 
-func tmpdirOf(record string) string {
-	for _, line := range strings.Split(record, "\n") {
-		if v, ok := strings.CutPrefix(line, "tmpdir: "); ok {
-			return v
-		}
+func TestInstallIsIdempotent(t *testing.T) {
+	s := releaseServer(t, "0.11.0")
+	withReleaseBase(t, s)
+	cache := t.TempDir()
+	first, err := Install(context.Background(), cache, cbmBackend(), "0.11.0", "linux", "amd64")
+	if err != nil {
+		t.Fatalf("first: %v", err)
 	}
-	return ""
+	second, err := Install(context.Background(), cache, cbmBackend(), "0.11.0", "linux", "amd64")
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	if first.Dest != second.Dest {
+		t.Fatalf("dest moved: %s vs %s", first.Dest, second.Dest)
+	}
+	if _, err := os.Stat(second.Dest + ".prev"); !os.IsNotExist(err) {
+		t.Fatal("an identical reinstall must not retain a generation")
+	}
 }
 
-func TestInstallRejectsMissingScript(t *testing.T) {
-	s := httptest.NewServer(http.NotFoundHandler())
+func TestInstallWritesNothingOnChecksumMismatch(t *testing.T) {
+	// The bytes are the ones a mirror or proxy would substitute: the archive
+	// resolves, but the manifest does not vouch for it.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "checksums.txt") {
+			fmt.Fprintf(w, "%s  codebase-memory-mcp-linux-amd64.tar.gz\n", repeat64("0"))
+			return
+		}
+		w.Write(tarGz(t, "codebase-memory-mcp", versionedScript("0.11.0")))
+	})
+	s := httptest.NewServer(mux)
 	t.Cleanup(s.Close)
-	t.Setenv("TK_SCRIPT_BASE_URL", s.URL)
-	_, err := installer.Install(t.Context(), t.TempDir(), backends.CBM(), "0.11.0", "linux", "amd64", nil)
-	if err == nil {
-		t.Fatal("expected an error when the installer script is absent")
-	}
-}
+	withReleaseBase(t, s)
 
-// TestInstallCarriesTheVendorDiagnostic: the exit status alone cannot tell a
-// full disk from a corrupt archive from a refused activation. tk must carry the
-// backend's own words, or the reader is left with "exit status 1".
-func TestInstallCarriesTheVendorDiagnostic(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fake script is bash")
-	}
-	body := "#!/usr/bin/env bash\n" +
-		"echo 'Downloading codebase-memory-mcp-linux-amd64-portable.tar.gz...'\n" +
-		"echo 'tar: install.sh: Cannot write: Disk quota exceeded' >&2\n" +
-		"exit 2\n"
-	s := scriptServer(t, body)
-	t.Setenv("TK_SCRIPT_BASE_URL", s.URL)
-
-	_, err := installer.Install(t.Context(), t.TempDir(), backends.CBM(), "0.11.0", "linux", "amd64", nil)
-	if err == nil {
-		t.Fatal("a failed script must be an error")
-	}
-	var ie *installer.Error
-	if !errors.As(err, &ie) {
-		t.Fatalf("want *installer.Error, got %T: %v", err, err)
-	}
-	if ie.Pin != "0.11.0" || ie.Backend != "cbm" {
-		t.Errorf("error lost its identity: %+v", ie)
-	}
-	if !strings.Contains(err.Error(), "Disk quota exceeded") {
-		t.Errorf("vendor diagnostic dropped:\n%v", err)
-	}
-	// A disk-full is not a daemon problem, so it must not borrow that hint.
-	if ie.Hint != "" {
-		t.Errorf("unrelated hint on a disk failure: %q", ie.Hint)
-	}
-}
-
-// TestInstallSuggestsStoppingADaemon: when the backend refused because a daemon
-// holds its coordination lock, the reader's next move is a command they can
-// type. The backend cannot drain a daemon that predates its drain protocol, so
-// this is the one install failure with a known fix.
-func TestInstallSuggestsStoppingADaemon(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fake script is bash")
-	}
-	body := "#!/usr/bin/env bash\n" +
-		"echo 'Stopping active CBM sessions and operations for install...'\n" +
-		"echo 'error: activation could not reserve exclusive access; no activation was committed.' >&2\n" +
-		"exit 1\n"
-	s := scriptServer(t, body)
-	t.Setenv("TK_SCRIPT_BASE_URL", s.URL)
-
-	_, err := installer.Install(t.Context(), t.TempDir(), backends.CBM(), "0.11.0", "linux", "amd64", nil)
-	if err == nil {
-		t.Fatal("a refused activation must be an error")
-	}
-	if !strings.Contains(err.Error(), "tk daemon stop") {
-		t.Errorf("no remediation for a refused activation:\n%v", err)
-	}
-	if !strings.Contains(err.Error(), "could not reserve exclusive access") {
-		t.Errorf("refusal text dropped:\n%v", err)
-	}
-}
-
-// TestInstallFailsWhenNothingWasPublished: CBM exits 0 and leaves a binary
-// owned by mise/Homebrew/nix alone, and a config-only install publishes no
-// binary at all. Trusting the exit status there reports an install that has no
-// binary behind it — which is what "installed, but the version reads -" is.
-func TestInstallFailsWhenNothingWasPublished(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fake script is bash")
-	}
-	body := "#!/usr/bin/env bash\n" +
-		"echo 'Binary is managed elsewhere by mise:'\n" +
-		"echo 'Leaving it and your PATH untouched; configuring agents only.'\n" +
-		"exit 0\n"
-	s := scriptServer(t, body)
-	t.Setenv("TK_SCRIPT_BASE_URL", s.URL)
-
-	_, err := installer.Install(t.Context(), t.TempDir(), backends.CBM(), "0.11.0", "linux", "amd64", nil)
-	if err == nil {
-		t.Fatal("exit 0 without a binary must still be a failure")
-	}
-	if !strings.Contains(err.Error(), "no binary at") {
-		t.Errorf("want the missing-binary reason, got:\n%v", err)
-	}
-}
-
-// TestInstallFailsOnTheWrongVersion: the pin is the one thing tk owns, so a
-// binary that reports anything else did not satisfy it, exit status or not.
-func TestInstallFailsOnTheWrongVersion(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fake script is bash")
-	}
-	record := filepath.Join(t.TempDir(), "record.txt")
-	s := scriptServer(t, placingScript(record, "0.10.8"))
-	t.Setenv("TK_SCRIPT_BASE_URL", s.URL)
-
-	_, err := installer.Install(t.Context(), t.TempDir(), backends.CBM(), "0.11.0", "linux", "amd64", nil)
-	if err == nil {
-		t.Fatal("a binary at the wrong version must not satisfy the pin")
-	}
-	if !strings.Contains(err.Error(), "0.10.8") || !strings.Contains(err.Error(), "0.11.0") {
-		t.Errorf("want both versions in the reason, got:\n%v", err)
-	}
-}
-
-// TestInstallPassesIsolatedCBMIdentity proves a hostile ambient CBM_* identity
-// cannot steer an install: the caller's env wins because it is appended last.
-func TestInstallPassesIsolatedCBMIdentity(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fake script is bash")
-	}
-	record := filepath.Join(t.TempDir(), "record.txt")
-	s := scriptServer(t, placingScript(record, "0.11.0"))
-	t.Setenv("TK_SCRIPT_BASE_URL", s.URL)
-	t.Setenv("CBM_CACHE_DIR", "/tmp/hostile-cache")
-	t.Setenv("CBM_RUNTIME_DIR", "/tmp/hostile-runtime")
 	cache := t.TempDir()
+	_, err := Install(context.Background(), cache, cbmBackend(), "0.11.0", "linux", "amd64")
+	if err == nil {
+		t.Fatal("a checksum mismatch must fail the install")
+	}
+	var ie *Error
+	if !errors.As(err, &ie) || !contains(ie.Error(), "checksum mismatch") {
+		t.Fatalf("want a checksum Error, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(cache, "bin", "codebase-memory-mcp")); !os.IsNotExist(statErr) {
+		t.Fatal("nothing may be published when the checksum fails")
+	}
+}
 
-	_, err := installer.Install(t.Context(), cache, backends.CBM(), "0.11.0", "linux", "amd64",
-		[]string{"CBM_CACHE_DIR=" + cache})
+func TestInstallRejectsACandidateThatIsNotThePin(t *testing.T) {
+	// Served bytes that match the manifest but report the wrong version: a
+	// release asset that does not match the pin tk was built with.
+	s := releaseServer(t, "0.10.0")
+	withReleaseBase(t, s)
+	cache := t.TempDir()
+	_, err := Install(context.Background(), cache, cbmBackend(), "0.11.0", "linux", "amd64")
+	if err == nil {
+		t.Fatal("a binary that does not report the pin must fail the install")
+	}
+	if !errors.Is(err, errNoPin) {
+		t.Fatalf("want errNoPin so the cause is machine-checkable, got %v", err)
+	}
+	// Validated before publication: the existing binary is untouched.
+	dest := filepath.Join(cache, "bin", "codebase-memory-mcp")
+	if _, statErr := os.Stat(dest); !os.IsNotExist(statErr) {
+		t.Fatal("a rejected candidate must never reach the published path")
+	}
+	if _, statErr := os.Stat(dest + ".new"); !os.IsNotExist(statErr) {
+		t.Fatal("a rejected candidate must not leave a stage behind")
+	}
+}
+
+func TestInstallRetainsAndRestoresThePriorGeneration(t *testing.T) {
+	cache := t.TempDir()
+	dest := filepath.Join(cache, "bin", "codebase-memory-mcp")
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	good := versionedScript("0.10.8")
+	if err := os.WriteFile(dest, good, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Publish a candidate that vanishes between staging and the final probe is
+	// the hard case; simulate the rollback directly instead, which is the only
+	// branch that can restore.
+	staged := dest + ".new"
+	if err := os.WriteFile(staged, versionedScript("0.11.0"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	swap(dest)
+	if _, err := os.Stat(dest + ".prev"); err != nil {
+		t.Fatalf("swap must retain the prior generation: %v", err)
+	}
+	rollback(dest)
+	if got := DetectVersion(context.Background(), dest); got != "0.10.8" {
+		t.Fatalf("rollback restored %q, want the retained 0.10.8", got)
+	}
+	if _, err := os.Stat(staged); !os.IsNotExist(err) {
+		t.Fatal("rollback leaves the staged candidate consumed, not dangling")
+	}
+}
+
+// A swap that cannot move the file must be an error, not a success report over
+// an unchanged binary.
+//
+// The reachable failure is an occupied `.prev`: a non-empty directory there
+// cannot be removed, and on Windows it also cannot be renamed over. This is the
+// shape a half-finished earlier install leaves behind, so it is the one worth
+// proving is reported rather than swallowed.
+func TestSwapReportsAFailedPublish(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "target")
+	if err := os.WriteFile(dest, versionedScript("0.10.8"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dest+".prev", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dest+".prev", "in-the-way"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dest+".new", versionedScript("0.11.0"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := swap(dest)
+	if err == nil {
+		t.Fatal("a swap that cannot publish must return an error, not report success")
+	}
+	if got := DetectVersion(context.Background(), dest); got != "0.10.8" {
+		t.Fatalf("a failed swap changed the target to %q; it must be left alone", got)
+	}
+	if _, statErr := os.Stat(dest + ".new"); statErr != nil {
+		t.Fatalf("a failed swap must leave the staged candidate in place: %v", statErr)
+	}
+}
+
+// The retained generation is the rollback path, and a re-install must not
+// accumulate them.
+func TestSwapRetainsExactlyOneGeneration(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "target")
+	if err := os.WriteFile(dest, versionedScript("0.10.8"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i, v := range []string{"0.10.8", "0.11.0"} {
+		if err := os.WriteFile(dest+".new", versionedScript(v), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := swap(dest); err != nil {
+			t.Fatalf("swap %d: %v", i, err)
+		}
+	}
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(cache, "bin", "codebase-memory-mcp")); err != nil {
-		t.Fatalf("binary not placed in tk cache: %v", err)
+	if len(entries) != 2 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("exactly one retained generation is the contract, got %v", names)
+	}
+	if got := DetectVersion(context.Background(), dest); got != "0.11.0" {
+		t.Fatalf("published %q, want 0.11.0", got)
+	}
+}
+
+func TestExtractBinaryIgnoresEntryPathsForWrites(t *testing.T) {
+	// A traversal entry name must never become a write path. The name is
+	// matched by base only, and the content lands at dest and nowhere else.
+	const escaped = "../../../../tmp/tk-traversal-probe"
+	evil := tarGz(t, escaped, versionedScript("0.11.0"))
+	blob := filepath.Join(t.TempDir(), "evil.tar.gz")
+	if err := os.WriteFile(blob, evil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(t.TempDir(), "out")
+	err := extractBinary(blob, "evil.tar.gz", "tk-traversal-probe", dest)
+	if err != nil {
+		t.Fatalf("entry content should still extract: %v", err)
+	}
+	if _, statErr := os.Stat("/tmp/tk-traversal-probe"); statErr == nil {
+		t.Fatal("a traversal entry escaped the destination")
+	}
+	if _, statErr := os.Stat(dest); statErr != nil {
+		t.Fatalf("content must land at dest: %v", statErr)
+	}
+}
+
+func TestExtractBinaryRejectsAnArchiveWithoutTheBinary(t *testing.T) {
+	blob := filepath.Join(t.TempDir(), "a.tar.gz")
+	if err := os.WriteFile(blob, tarGz(t, "some-other-tool", versionedScript("1.0.0")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := extractBinary(blob, "a.tar.gz", "codebase-memory-mcp", filepath.Join(t.TempDir(), "o")); err == nil {
+		t.Fatal("an archive missing the binary must fail, not publish nothing quietly")
+	}
+}
+
+func TestExtractBinaryReadsZip(t *testing.T) {
+	blob := filepath.Join(t.TempDir(), "a.zip")
+	if err := os.WriteFile(blob, zipArchive(t, "codebase-memory-mcp.exe", versionedScript("0.11.0")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(t.TempDir(), "o.exe")
+	if err := extractBinary(blob, "a.zip", "codebase-memory-mcp.exe", dest); err != nil {
+		t.Fatalf("zip extract: %v", err)
+	}
+	if got := DetectVersion(context.Background(), dest); got != "0.11.0" {
+		t.Fatalf("zip binary reports %q", got)
+	}
+}
+
+func TestChecksumForReadsBothManifestSpellings(t *testing.T) {
+	manifest := []byte(hex.EncodeToString(make([]byte, 32)) + "  a.tar.gz\n" +
+		repeat64("c") + " *b.tar.gz\n")
+	for _, archive := range []string{"a.tar.gz", "b.tar.gz"} {
+		if _, err := checksumFor(manifest, archive); err != nil {
+			t.Fatalf("%s should be found in either spelling: %v", archive, err)
+		}
+	}
+	if _, err := checksumFor(manifest, "missing.tar.gz"); err == nil {
+		t.Fatal("an unlisted archive must be an error, not a silent pass")
+	}
+}
+
+func TestDetectVersionIgnoresAnAmbientCBMIdentity(t *testing.T) {
+	// A PATH copy must not be able to redirect its own store by being asked
+	// its version, so the probe runs with the CBM identity scrubbed.
+	dir := t.TempDir()
+	probe := filepath.Join(dir, "probe.sh")
+	body := `#!/bin/sh
+if [ -n "${CBM_CACHE_DIR:-}" ] || [ -n "${CBM_RUNTIME_DIR:-}" ]; then
+  echo "identity leaked: $CBM_CACHE_DIR" >&2
+  exit 9
+fi
+echo codebase-memory-mcp 0.11.0
+`
+	if err := os.WriteFile(probe, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CBM_CACHE_DIR", "/should/not/reach/the/probe")
+	t.Setenv("CBM_RUNTIME_DIR", "/should/not/reach/the/probe")
+	if got := DetectVersion(context.Background(), probe); got != "0.11.0" {
+		t.Fatalf("probe reported %q; the CBM identity must be scrubbed", got)
 	}
 }
 
 func TestInspectMissing(t *testing.T) {
-	st := installer.Inspect(t.Context(), t.TempDir(), backends.CBM(), "0.11.0", "linux")
-	if !st.NeedsInstall || st.UpToDate {
-		t.Fatalf("status = %+v", st)
+	st := Inspect(context.Background(), t.TempDir(), cbmBackend(), "0.11.0", "nosuchgoos")
+	if !st.NeedsInstall {
+		t.Fatal("a missing binary needs an install")
+	}
+	if st.UpToDate {
+		t.Fatal("nothing installed is never up to date")
+	}
+}
+
+func TestResolvePlanRejectsAnUnsupportedPlatform(t *testing.T) {
+	if _, err := ResolvePlan(t.TempDir(), cbmBackend(), "0.11.0", "plan9", "amd64"); err == nil {
+		t.Fatal("an unsupported platform must be an error, not a bad URL")
 	}
 }

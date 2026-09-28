@@ -100,7 +100,16 @@ Steps: init dirs/config → install all backends at pins → (opt-in) register c
 					sections = append(sections, fmt.Sprintf("install %s: up-to-date %s (%s)", b.Name, st.InstalledVersion, st.Path))
 					continue
 				}
-				plan, err := installer.Install(cmd.Context(), ctx.Paths.Cache, b, pin, backends.HostGOOS(), backends.HostGOARCH(), installEnv(ctx))
+				// Same quiesce as `tk install`, but a busy daemon is one
+				// fail-open line here: setup must never block an agent.
+				q, qerr := ctx.quiesceDaemon(cmd.Context(), st.InCache)
+				if qerr != nil {
+					sections = append(sections, fmt.Sprintf(
+						"install %s: FAILED %s (agent continues fail-open; run tk install %s for detail)",
+						b.Name, firstLine(qerr.Error()), b.Name))
+					continue
+				}
+				plan, err := installer.Install(cmd.Context(), ctx.Paths.Cache, b, pin, backends.HostGOOS(), backends.HostGOARCH())
 				if err != nil {
 					// Fail-open is the contract: a missing backend is a tk install
 					// away, not a blocked agent. The reason is clipped to one line
@@ -111,7 +120,15 @@ Steps: init dirs/config → install all backends at pins → (opt-in) register c
 						b.Name, firstLine(err.Error()), b.Name))
 					continue
 				}
-				sections = append(sections, fmt.Sprintf("install %s: installed %s -> %s", b.Name, pin, plan.Dest))
+				note := ""
+				if q.Was {
+					if rerr := ctx.resumeDaemon(cmd.Context()); rerr != nil {
+						note = fmt.Sprintf(" (daemon not resumed: %s)", firstLine(rerr.Error()))
+					} else {
+						note = " (daemon restarted)"
+					}
+				}
+				sections = append(sections, fmt.Sprintf("install %s: installed %s -> %s%s", b.Name, pin, plan.Dest, note))
 			}
 			// 3. opt-in register of cwd.
 			if doRegister {

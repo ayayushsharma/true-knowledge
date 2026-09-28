@@ -22,7 +22,7 @@ purpose.
 |---|---|---|
 | `tk init` | — | create the four `true-knowledge/` dirs plus default config; idempotent |
 | `tk setup` | `--register`, `--name`, `--client`, `--tool-profile`, `--dry-run` | init + install + opt-in register + opt-in client snippet |
-| `tk install [backend...]` | `--check`, `--dry-run`, `--update`, `--version` | backend = `cbm`; no argument means all missing. Runs the vendor installer script at the pin; an upgrade drains coordinated CBM sessions and may ask them to exit. **Exits non-zero if any backend failed**, and the reason is the vendor's own diagnostic — see below |
+| `tk install [backend...]` | `--check`, `--dry-run`, `--update`, `--version` | backend = `cbm`; no argument means all missing. tk downloads and checksum-verifies the pinned release itself. A replacement stops the daemon holding the binary first, and restarts it only if it was running. **Exits non-zero if any backend failed** — see below |
 | `tk register <path>` | `--name` | registers a path, never indexes it; name defaults to the directory base |
 | `tk migrate` | `--from`, `--dry-run` | moves `~/.tk`, `$TK_HOME`, or `~/Library/Application Support/true-knowledge`; writes a `MIGRATED` marker, refuses a re-run without `--force` |
 | `tk status` | — | projects, HEAD, freshness; `--json` adds `head`, `current`, `zoekt_head`, `zoekt_fresh` |
@@ -127,34 +127,35 @@ exits `0`.
 
 ## Reading an install failure
 
-`tk install` does not summarise a failed install as an exit status. The vendor
-installer is the only component that knows why it stopped, so its output is
-carried into the error: the `FAILED` line holds the reason, then the vendor's
-own last lines, then — when a daemon is holding the coordination lock — the one
-command that clears it.
+tk writes every line of an install failure itself, so the `FAILED` line always
+names the cause. The exit status is the verdict; the line is the diagnosis.
 
 ```
-cbm      FAILED: the backend's installer failed
-  Stopping active CBM sessions and operations for install...
-  error: activation could not reserve exclusive access; no activation was committed.
-  if a backend daemon is running, stop it and retry: tk daemon stop
+cbm      FAILED: the CBM daemon has live sessions and refused to stop; tk did not replace the binary it holds.
+  daemon: refusing to stop; committed clients: 4242 5150
+  Close those sessions, then re-run `tk install` — tk cannot override the refusal, and swapping past it would leave a binary the daemon refuses to admit.
 ```
 
-`tk` never stops that daemon itself: the coordination daemon is shared per
-account, and a CBM daemon from a version that predates the drain protocol cannot
-be asked to quiesce anyway. CBM refuses rather than guessing, and `tk` surfaces
-the refusal and the fix.
+The refusal case is the one that matters. tk stops the daemon before it replaces
+a binary, and a CBM daemon with committed clients refuses to stop. tk surfaces
+the committed pids because those pids are the entire fix. It cannot offer a
+force: a binary swapped under that daemon would be refused admission by the
+daemon's own build-identity gate, so every later command would fail. Nothing is
+downloaded and nothing is written.
 
-Exit 0 from the vendor is not proof of anything. CBM leaves a binary owned by
-mise, Homebrew or nix alone, and a config-only install publishes no binary at
-all. `tk` therefore reads the version at `<cache>/bin/<binary>` afterwards and
-fails if it is not the pin. If the vendor's own text is enough to explain it,
-`tk` adds a hint; if CBM rewords that text, the diagnosis is still there and
-only the hint is lost.
+Ordinary causes are the manifest and the candidate:
+
+```
+cbm      FAILED: checksum mismatch for the codebase-memory-mcp release asset
+  manifest 032b33c1…, downloaded 9f1c02ab…
+  a mirror or proxy is serving different bytes; set TK_RELEASE_BASE_URL to a trusted base, or retry
+```
+
+A checksum is verified before the archive is opened, so a mismatch means nothing
+was written. A candidate that verifies but does not report the pin fails the
+same way, with the version it did report named. In both cases the previous
+binary is untouched, and a swap that fails after staging rolls back.
 
 `TMPDIR` is pointed at a private dir inside the cache for the install, so the
 ~340 MB of archive and unpacked binary does not land on a small system tmpfs.
-The backend stages its own prepared candidate elsewhere, per its own contract;
-when that space runs short, the error now says so instead of reading
-`exit status 2`.
 

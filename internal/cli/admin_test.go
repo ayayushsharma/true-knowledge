@@ -1,37 +1,100 @@
 package cli
 
 import (
+	"archive/tar"
+	"archive/zip"
 	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/ayayushsharma/true-knowledge/internal/backends"
+	"github.com/ayayushsharma/true-knowledge/internal/config"
 )
 
-// failingScriptServer serves a backend installer that fails the way a real one
-// does: progress on stdout, the cause on stderr, non-zero exit.
-func failingScriptServer(t *testing.T) *httptest.Server {
+// fakeRelease serves a CBM release the way GitHub does — a tag-scoped
+// checksums.txt plus one archive — so the CLI is exercised over the same
+// network path a real install uses. badSum makes the manifest vouch for bytes
+// that are not the bytes served, which is what a mirror does.
+func fakeRelease(t *testing.T, version string, badSum bool) string {
 	t.Helper()
-	body := "#!/usr/bin/env bash\n" +
-		"echo 'Downloading codebase-memory-mcp-linux-amd64-portable.tar.gz...'\n" +
-		"echo 'tar: install.sh: Cannot write: Disk quota exceeded' >&2\n" +
-		"exit 2\n"
+	goos, goarch := backends.HostGOOS(), backends.HostGOARCH()
+	archive, err := backends.CBM().Archive(goos, goarch)
+	if err != nil {
+		t.Skipf("no fake release for %s/%s: %v", goos, goarch, err)
+	}
+	body := fakeImage(version)
+	var blob []byte
+	if strings.HasSuffix(archive, ".zip") {
+		blob = zipBytes(t, backends.CBM().BinaryName(goos), body)
+	} else {
+		blob = tarBytes(t, backends.CBM().BinaryName(goos), body)
+	}
+	sum := sha256.Sum256(blob)
+	digest := hex.EncodeToString(sum[:])
+	if badSum {
+		digest = strings.Repeat("0", 64)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "install.sh") || strings.HasSuffix(r.URL.Path, "install.ps1") {
-			fmt.Fprint(w, body)
-			return
+		switch {
+		case strings.HasSuffix(r.URL.Path, "checksums.txt"):
+			fmt.Fprintf(w, "%s  %s\n", digest, archive)
+		case strings.HasSuffix(r.URL.Path, archive):
+			w.Write(blob)
+		default:
+			http.NotFound(w, r)
 		}
-		http.NotFound(w, r)
 	})
 	s := httptest.NewServer(mux)
 	t.Cleanup(s.Close)
-	return s
+	t.Setenv("TK_RELEASE_BASE_URL", s.URL)
+	return s.URL
+}
+
+func fakeImage(version string) []byte {
+	return []byte(fmt.Sprintf("#!/bin/sh\necho codebase-memory-mcp %s\n", version))
+}
+
+func tarBytes(t *testing.T, name string, body []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: name, Mode: 0o755, Size: int64(len(body)), Typeflag: tar.TypeReg,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	tw.Close()
+	gz.Close()
+	return buf.Bytes()
+}
+
+func zipBytes(t *testing.T, name string, body []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	zw.Close()
+	return buf.Bytes()
 }
 
 func runInstall(t *testing.T, home string, asJSON bool) (string, error) {
@@ -56,12 +119,7 @@ func runInstall(t *testing.T, home string, asJSON bool) (string, error) {
 // was told the install worked, and went looking for the missing binary
 // somewhere else entirely.
 func TestInstallFailureExitsNonZero(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fake script is bash")
-	}
-	s := failingScriptServer(t)
-	t.Setenv("TK_SCRIPT_BASE_URL", s.URL)
-
+	fakeRelease(t, config.DefaultCBMPin, true)
 	out, err := runInstall(t, t.TempDir(), false)
 	if err == nil {
 		t.Fatalf("a failed backend install must exit non-zero; output was:\n%s", out)
@@ -69,9 +127,10 @@ func TestInstallFailureExitsNonZero(t *testing.T) {
 	if !strings.Contains(out, "FAILED") {
 		t.Errorf("human face lost the failure line:\n%s", out)
 	}
-	// The vendor's own words are the diagnosis; a bare exit status is not.
-	if !strings.Contains(out, "Disk quota exceeded") {
-		t.Errorf("human face lost the backend's diagnostic:\n%s", out)
+	// tk writes no vendor diagnostic any more, so the cause is tk's own. An
+	// exit status alone is not a diagnosis.
+	if !strings.Contains(out, "checksum mismatch") {
+		t.Errorf("human face lost the cause:\n%s", out)
 	}
 }
 
@@ -79,12 +138,7 @@ func TestInstallFailureExitsNonZero(t *testing.T) {
 // envelope that says ok:true next to a non-zero exit is a lie one of the two
 // callers always believes.
 func TestInstallFailureJSONFaceSaysNotOK(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fake script is bash")
-	}
-	s := failingScriptServer(t)
-	t.Setenv("TK_SCRIPT_BASE_URL", s.URL)
-
+	fakeRelease(t, config.DefaultCBMPin, true)
 	out, err := runInstall(t, t.TempDir(), true)
 	if err == nil {
 		t.Fatalf("a failed backend install must exit non-zero; output was:\n%s", out)
@@ -107,8 +161,8 @@ func TestInstallFailureJSONFaceSaysNotOK(t *testing.T) {
 	if len(env.Backends) != 1 || env.Backends[0].Status != "failed" {
 		t.Fatalf("backends = %+v", env.Backends)
 	}
-	if !strings.Contains(env.Backends[0].Detail, "Disk quota exceeded") {
-		t.Errorf("row lost the backend's diagnostic: %q", env.Backends[0].Detail)
+	if !strings.Contains(env.Backends[0].Detail, "checksum mismatch") {
+		t.Errorf("row lost the cause: %q", env.Backends[0].Detail)
 	}
 }
 
@@ -116,21 +170,18 @@ func TestInstallFailureJSONFaceSaysNotOK(t *testing.T) {
 // would make the next run report "up-to-date" against a binary that is not
 // there, and the pin would outlive the failure that caused it.
 func TestInstallDoesNotPinOnFailure(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fake script is bash")
-	}
-	s := failingScriptServer(t)
-	t.Setenv("TK_SCRIPT_BASE_URL", s.URL)
+	fakeRelease(t, config.DefaultCBMPin, true)
 	home := t.TempDir()
 
 	if _, err := runInstall(t, home, false); err == nil {
 		t.Fatal("expected a non-zero exit")
 	}
-	if _, err := os.Stat(filepath.Join(home, "config", "config.json")); err == nil {
-		raw, rerr := os.ReadFile(filepath.Join(home, "config", "config.json"))
-		if rerr == nil && strings.Contains(string(raw), "cbm_version_pin") {
-			t.Errorf("a failed install pinned a version:\n%s", raw)
-		}
+	if _, err := os.Stat(filepath.Join(home, "cache", "bin", backends.CBM().BinaryName(backends.HostGOOS()))); err == nil {
+		t.Error("a failed install published a binary")
+	}
+	raw, rerr := os.ReadFile(filepath.Join(home, "config", "config.json"))
+	if rerr == nil && strings.Contains(string(raw), "cbm_version_pin") {
+		t.Errorf("a failed install pinned a version:\n%s", raw)
 	}
 }
 
@@ -138,24 +189,8 @@ func TestInstallDoesNotPinOnFailure(t *testing.T) {
 // exit 0 only ever came from the failure path, the assertions would pass with a
 // command that cannot install anything.
 func TestInstallSuccessKeepsExitZero(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fake script is bash")
-	}
-	body := "#!/usr/bin/env bash\n" +
-		"set -euo pipefail\n" +
-		"for arg in \"$@\"; do case \"$arg\" in --dir=*) dir=\"${arg#--dir=}\" ;; esac; done\n" +
-		"mkdir -p \"$dir\"\n" +
-		"printf '#!/bin/sh\\necho cbm 0.11.0 fake\\n' > \"$dir/codebase-memory-mcp\"\n" +
-		"chmod 755 \"$dir/codebase-memory-mcp\"\n"
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, body)
-	})
-	s := httptest.NewServer(mux)
-	t.Cleanup(s.Close)
-	t.Setenv("TK_SCRIPT_BASE_URL", s.URL)
+	fakeRelease(t, config.DefaultCBMPin, false)
 	home := t.TempDir()
-
 	out, err := runInstall(t, home, false)
 	if err != nil {
 		t.Fatalf("a successful install must exit 0: %v\n%s", err, out)
@@ -163,7 +198,16 @@ func TestInstallSuccessKeepsExitZero(t *testing.T) {
 	if !strings.Contains(out, "installed") {
 		t.Errorf("human face lost the installed line:\n%s", out)
 	}
-	if _, err := os.Stat(filepath.Join(home, "cache", "bin", "codebase-memory-mcp")); err != nil {
+	dest := filepath.Join(home, "cache", "bin", backends.CBM().BinaryName(backends.HostGOOS()))
+	if _, err := os.Stat(dest); err != nil {
 		t.Errorf("binary not installed into the cache: %v", err)
+	}
+	// Second run must recognize its own work and change nothing.
+	again, err := runInstall(t, home, false)
+	if err != nil {
+		t.Fatalf("re-run must stay green: %v\n%s", err, again)
+	}
+	if !strings.Contains(again, "up-to-date") {
+		t.Errorf("a reinstall of the same pin must be a no-op:\n%s", again)
 	}
 }

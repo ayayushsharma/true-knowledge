@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -215,6 +217,8 @@ func cmdInstall(g *Globals) *cobra.Command {
 		Short: "Install/update managed indexing backends (default: all)",
 		Long: `Installs missing backends and updates stale ones to their pins.
 Backends live in <cache>/bin (== CBM_CACHE_DIR/bin); checksums verified before any write.
+Replacing a managed binary stops the daemon holding it first, and a daemon with
+live sessions refuses to stop — close them, then retry. No flag overrides that.
 Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DECISIONS.`,
 		Example: `  tk install                  # install all missing backends
   tk install cbm --update     # (re)install cbm at its pin
@@ -282,7 +286,20 @@ Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DE
 					rows = append(rows, row{name, "up-to-date", st.Path})
 					lines = append(lines, fmt.Sprintf("%-8s up-to-date %s (%s)", name, st.InstalledVersion, displayPath(st)))
 				default:
-					plan, err := installer.Install(cmd.Context(), ctx.Paths.Cache, b, pin, backends.HostGOOS(), backends.HostGOARCH(), installEnv(ctx))
+					// Only a real replacement stops a daemon. --check, --dry-run
+					// and an up-to-date no-op never reach this branch, and a
+					// first install has no daemon to stop.
+					q, qerr := ctx.quiesceDaemon(cmd.Context(), st.InCache)
+					if qerr != nil {
+						failed = append(failed, name)
+						rows = append(rows, row{name, "failed", qerr.Error()})
+						lines = append(lines, fmt.Sprintf("%-8s FAILED: %v", name, qerr))
+						continue
+					}
+					if q.Was {
+						lines = append(lines, fmt.Sprintf("%-8s %s", name, q.Note()))
+					}
+					plan, err := installer.Install(cmd.Context(), ctx.Paths.Cache, b, pin, backends.HostGOOS(), backends.HostGOARCH())
 					if err != nil {
 						// A backend that did not install is a failed command, not a
 						// warning. This used to print FAILED and continue, so
@@ -293,8 +310,21 @@ Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DE
 						lines = append(lines, fmt.Sprintf("%-8s FAILED: %v", name, err))
 						continue
 					}
+					// A daemon that was running is brought back on the new binary.
+					// The old image survives a rename, so without this the new
+					// build would not be in use until the daemon drained on its
+					// own. A failure to resume is reported, not fatal: the install
+					// itself succeeded and the binary is on disk.
+					note := ""
+					if q.Was {
+						if rerr := ctx.resumeDaemon(cmd.Context()); rerr != nil {
+							note = fmt.Sprintf(" (daemon not resumed: %v)", rerr)
+						} else {
+							note = " (daemon restarted)"
+						}
+					}
 					rows = append(rows, row{name, "installed", plan.Dest})
-					lines = append(lines, fmt.Sprintf("%-8s installed %s -> %s", name, pin, plan.Dest))
+					lines = append(lines, fmt.Sprintf("%-8s installed %s -> %s%s", name, pin, plan.Dest, note))
 				}
 				if version != "" && pin == version {
 					ctx.Cfg.CBMVersionPin = version
@@ -326,32 +356,112 @@ Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DE
 	return c
 }
 
-// installEnv is the identity handed to a backend install: the backend writes
-// its store to tk's cache and drains tk's cohort, never the account-wide one a
-// consumer laptop may be running.
+// quiesceDaemon stops the daemon holding the managed binary, once, and reports
+// what it found so the caller can bring it back on the new image.
 //
-// HOME is redirected too. The backend's own installer appends its bin dir to
-// the user's shell rc, and tk never edits a file it does not own; the sandbox
-// absorbs that write. The bin dir itself is passed explicitly, so nothing the
-// user needs is lost.
-func installEnv(ctx *Ctx) []string {
-	env := []string{
-		"CBM_CACHE_DIR=" + ctx.Paths.CBMCacheDir(),
-		"CBM_RUNTIME_DIR=" + ctx.Paths.CBMRuntimeDir(),
-		"HOME=" + installHome(ctx),
-		"USERPROFILE=" + installHome(ctx),
+// It stops only when the install will actually replace a binary. A daemon on a
+// live image is the reason a rename is unsafe: on Windows the .exe cannot
+// replace itself, and on Linux the running process keeps the old inode.
+//
+// A refusal is a failed install. `cbm daemon stop` is refuse-if-busy, not force:
+// it names the committed clients and stops nothing. tk does not swap past that
+// refusal, because the new binary would then be refused admission by the very
+// daemon it was installed under — every later command would fail a build
+// comparison. The fix is the one the daemon itself prints: close the sessions.
+//
+// The stop is scoped to tk's own rendezvous (CBM_RUNTIME_DIR is
+// <state>/rendezvous), so this can never stop an account-wide daemon a consumer
+// laptop is running. Stopping is safe across a version boundary: CBM handles
+// control-plane requests ahead of its build-identity check, so the installed
+// binary can stop a daemon that is an older build.
+func (c *Ctx) quiesceDaemon(ctx context.Context, replacing bool) (Quiesce, error) {
+	if !replacing || c.Run == nil || !c.CBMOK {
+		return Quiesce{}, nil // nothing installed, or nothing to replace
 	}
-	if ctx.Cfg.AllowedRoot != "" {
-		env = append(env, "CBM_ALLOWED_ROOT="+ctx.Cfg.AllowedRoot)
+	out, _ := c.cbmDaemon(ctx, "daemon", "status")
+	if !daemonActive(out) {
+		return Quiesce{}, nil
 	}
-	return env
+	q := Quiesce{Was: true, Pid: daemonPid(out)}
+	stopped, err := c.cbmDaemon(ctx, "daemon", "stop")
+	if err != nil {
+		return Quiesce{}, busyDaemon(stopped, err)
+	}
+	return q, nil
 }
 
-// installHome is the throwaway HOME a backend install runs under.
-func installHome(ctx *Ctx) string {
-	dir := filepath.Join(ctx.Paths.State, "install-home")
-	_ = os.MkdirAll(dir, 0o700)
-	return dir
+// Quiesce is what a stop found. Was is the only thing that decides whether to
+// start a daemon again; Pid is reported so the operator can see exactly which
+// process tk retired.
+type Quiesce struct {
+	Was bool
+	Pid string
+}
+
+// Note is the line tk prints when it stops something. Announcing the pid is not
+// decoration: a daemon stop is the one action tk takes on a process the user did
+// not name, so it has to be attributable.
+func (q Quiesce) Note() string {
+	if q.Pid == "" {
+		return "stopped the tk daemon before replacing its binary"
+	}
+	return fmt.Sprintf("stopped the tk daemon (pid %s) before replacing its binary", q.Pid)
+}
+
+// resumeDaemon starts a fresh daemon on the newly installed binary. Only called
+// when one was running before, so a first install never creates a permanent
+// daemon that nothing asked for.
+func (c *Ctx) resumeDaemon(ctx context.Context) error {
+	_, err := c.cbmDaemon(ctx, "daemon", "start")
+	return err
+}
+
+// daemonActive reads `daemon status` output. It exits nonzero when nothing is
+// running and says "daemon: not running", which cbmDaemon preserves, so the
+// prose is the signal rather than the exit code.
+func daemonActive(out string) bool {
+	return strings.Contains(out, "daemon: active")
+}
+
+var pidLine = regexp.MustCompile(`(?m)^\s*pid:\s*(\d+)`)
+
+// daemonPid pulls the pid out of `daemon status`, which prints it on its own
+// indented line:
+//
+//	daemon: active (permanent)
+//	  pid: 13482
+//
+// Best-effort: an output shape tk does not recognise still yields a usable
+// Quiesce with an empty Pid, because refusing to stop on an unparsed status
+// would be worse than stopping without naming the pid.
+func daemonPid(out string) string {
+	if m := pidLine.FindStringSubmatch(out); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// busyDaemon turns a refused stop into an actionable error carrying the client
+// pids CBM printed. Those pids are the whole fix.
+func busyDaemon(out string, err error) error {
+	detail := strings.TrimSpace(out)
+	if detail == "" {
+		detail = err.Error()
+	}
+	return fail("the CBM daemon has live sessions and refused to stop; tk did not replace the binary it holds.\n%s\nClose those sessions, then re-run `tk install` — tk cannot override the refusal, and swapping past it would leave a binary the daemon refuses to admit.",
+		indent(detail))
+}
+
+// indent shifts a multi-line daemon report under the error's first line.
+func indent(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		if i == 0 {
+			continue
+		}
+		lines[i] = "  " + l
+	}
+	return strings.Join(lines, "\n")
 }
 
 func displayPath(st installer.Status) string {

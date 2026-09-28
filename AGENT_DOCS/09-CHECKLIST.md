@@ -35,21 +35,18 @@ superseded-by: null
    `tk setup` is the fail-open face and exits `0`. `tk install` is the operator
    face: if a backend did not install, it prints the table, then exits `1`. A
    mutating command that quietly reports success is worse than one that fails.
-   And never summarise a failure you do not own — the backend's installer is the
-   only thing that knows why it stopped, so carry its words into the error and
-   truncate by whole lines, marked. When a budget truncates output, drop whole
+   Truncate by whole lines, marked — never a half line. When a budget truncates output, drop whole
    records and mark it with `...truncated` or `budget_truncated`. Never
    character-slice JSON.
 5. **Completion is Cobra's job, and nothing else is.** Dynamic completion comes
    from Cobra: projects, config keys, `--client`, `--tool-profile`. Test it with
    `tk __complete`. Do not hand-roll a completion engine.
 6. **Close fast.** No flush and no stop on session end. stdin EOF is an instant
-   exit. The only command that ever holds an admission barrier is
-   `install --update`, and it holds to a deadline. `tk` never stops the shared
-   daemon to make its own work easier: it prints the command to run. That
-   daemon is shared per account, and a CBM from a version older than the drain
-   protocol cannot be asked to quiesce anyway, so it refuses rather than
-   guessing.
+   exit. The one daemon tk stops is the one holding the binary it is replacing,
+   and only in tk's own `CBM_RUNTIME_DIR` namespace — never an account-wide
+   daemon. A report (`--check`, `--dry-run`, an up-to-date no-op) stops
+   nothing. A daemon that refuses to stop is a failed install: print the
+   committed pids, write nothing, and do not offer a force.
 7. **Docs change the way the index does.** Write the ADR first, then the rule.
    See the change procedure in `00-INDEX.md`.
 8. **A fake engine is not evidence at scale.** The shell fake in

@@ -69,8 +69,10 @@ drift, and the second one is the one nobody tests. See `05-INDEXING.md`.
 text to manufacture structure, do not slice JSON to fit a budget, and do not
 substitute a tk schema for the engine's. `04-MCP.md` has the exact contract.
 
-**Never control the daemon from MCP.** `tk daemon` is CLI-only. Stopping the
-shared daemon would strand every other agent's watcher.
+**Never control the daemon from MCP.** `tk daemon` is CLI-only. The one daemon
+control tk performs on its own is stopping and restarting the daemon that holds
+the binary it is replacing, and that is scoped to tk's own `CBM_RUNTIME_DIR`
+namespace, never an account-wide daemon. `01-ARCHITECTURE.md` has the rules.
 
 **Never validate a CBM tool's arguments.** CBM validates them server-side. tk
 gates profiles and wraps errors, nothing else. tk-owned memory tools validate

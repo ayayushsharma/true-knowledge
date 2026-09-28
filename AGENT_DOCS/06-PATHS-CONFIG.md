@@ -43,7 +43,7 @@ as `TK_HOME`.
 | `<data>/notes/review/` | `<project>.jsonl`, captured notes awaiting approval |
 | `<data>/ledger/<project>.jsonl` | append-only ledger |
 | `<cache>/zoekt/<project>/` | text-index shards |
-| `<cache>/bin/` | managed backend binaries, plus `.json` with installed versions |
+| `<cache>/bin/` | managed backend binaries; tk reads the installed version back from the binary, so there is no installed-version ledger file |
 | `<state>/logs/tk.log` | unified JSONL trace, `0600`, 10 MiB ×2 rotation |
 | `<state>/rendezvous/` | `CBM_RUNTIME_DIR` |
 
@@ -109,7 +109,7 @@ Shape rules:
 | `TK_HOME` | all four at once |
 | `TK_MCP_PROFILE` | MCP tool surface; loses to `--tool-profile`, beats config `mcp.profile` |
 | `TK_CBM_BIN` | wins the backend resolver |
-| `TK_RELEASE_BASE_URL` | download mirror fallback |
+| `TK_RELEASE_BASE_URL` | release-asset mirror base; also how the install tests serve a fake release |
 | `TK_RELEASE_BASE_URL_CBM` | per-backend mirror, wins over the global one |
 
 ## Migration

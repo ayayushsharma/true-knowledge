@@ -1,30 +1,27 @@
-// Package installer installs backend binaries by delegating to the backend's
-// own release installer script.
+// Package installer fetches, verifies, and atomically installs backend binaries.
 //
-// Design: tk does not reimplement download, checksum verification, or archive
-// extraction. codebase-memory-mcp ships install.sh (install.ps1 on Windows)
-// which does all three and then hands the job to the candidate binary's own
-// `install` command, which owns process draining, the admission barrier, and a
-// transactional binary swap with rollback. That swap is what makes a warm
-// daemon and a running Windows image safe; tk cannot replicate it cheaply, so
-// it does not try.
+// Design: stdlib only (net/http, crypto/sha256, archive/tar+zip), checksum
+// verification mandatory before any write, and a staged swap: the candidate is
+// validated beside the target before the target is replaced, and the old file is
+// retained one generation so a failed publish rolls back.
 //
-// What tk still owns: the version pin. CBM_DOWNLOAD_URL is set to the tag's
-// release base, so a pinned install fetches exactly the pinned tag and
-// verifies it against that tag's checksums.txt — performed by CBM, not tk.
+// The swap is the whole reason this package is not a shell out. A warm daemon
+// holds the old image, and a bare rename over a live target is wrong on both
+// platforms — on Windows a running .exe cannot replace its own image, and on
+// Linux the running process keeps the old inode after the rename. Stopping that
+// daemon is the caller's job, not this package's: this one owns bytes and the
+// filesystem, and never spawns a backend. See internal/cli.quiesceDaemon.
 //
-// What tk owns about failure: the reason. The backend's exit status alone is
-// "exit status 1" whether the disk filled, the archive was corrupt, or a
-// daemon it could not drain refused the swap — and CBM's own diagnostic is the
-// only thing that tells those apart. So tk keeps a copy, names the reason, and
-// checks that the pin actually landed, because a backend that exits 0 without
-// publishing anything is a real case, not a hypothetical one.
-//
-// A backend is added by extending internal/backends.
+// A backend is added by extending internal/backends — this package is generic.
 package installer
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -42,9 +39,9 @@ var httpClient = &http.Client{Timeout: 5 * time.Minute}
 
 var semverRe = regexp.MustCompile(`\d+\.\d+\.\d+`)
 
-// maxScriptBytes caps the installer script fetch. A script is kilobytes; this
-// is a backstop against a hostile or wrong URL, not a budget.
-const maxScriptBytes = 1 << 20
+// maxArchiveBytes caps a downloaded archive, in both fetch paths: the
+// checksum manifest (a backstop for a wrong URL) and the streamed archive.
+const maxArchiveBytes = 512 << 20
 
 // Status describes one backend's install state.
 type Status struct {
@@ -57,17 +54,17 @@ type Status struct {
 	NeedsInstall     bool
 }
 
-// Plan describes the concrete install for one backend.
+// Plan describes the concrete download for one backend.
 type Plan struct {
-	Backend    backends.Backend
-	Pin        string
-	Archive    string
-	ArchiveURL string
-	ScriptURL  string
-	Dest       string // <cache>/bin/<binary>
+	Backend      backends.Backend
+	Pin          string
+	Archive      string
+	ArchiveURL   string
+	ChecksumsURL string
+	Dest         string // <cache>/bin/<binary>
 }
 
-// ResolvePlan builds the install plan for the host (or given) platform.
+// ResolvePlan builds the download plan for the host (or given) platform.
 func ResolvePlan(cacheDir string, b backends.Backend, pin, goos, goarch string) (Plan, error) {
 	archive, err := b.Archive(goos, goarch)
 	if err != nil {
@@ -76,16 +73,17 @@ func ResolvePlan(cacheDir string, b backends.Backend, pin, goos, goarch string) 
 	tag := b.Tag(pin)
 	base := b.ReleaseBase(tag)
 	return Plan{
-		Backend:    b,
-		Pin:        pin,
-		Archive:    archive,
-		ArchiveURL: base + "/" + archive,
-		ScriptURL:  b.ScriptURL(tag, goos),
-		Dest:       filepath.Join(cacheDir, "bin", b.BinaryName(goos)),
+		Backend:      b,
+		Pin:          pin,
+		Archive:      archive,
+		ArchiveURL:   base + "/" + archive,
+		ChecksumsURL: base + "/" + b.Checksums,
+		Dest:         filepath.Join(cacheDir, "bin", b.BinaryName(goos)),
 	}, nil
 }
 
-// binDir is <cache>/bin, which is also CBM_CACHE_DIR/bin.
+// binDir is <cache>/bin, which is also CBM_CACHE_DIR/bin — the same place the
+// daemon looks, so an installed binary and a running daemon are one subject.
 func binDir(cacheDir string) string { return filepath.Join(cacheDir, "bin") }
 
 // DetectVersion runs <bin> --version and parses the first X.Y.Z.
@@ -122,7 +120,7 @@ func scrubbedEnv() []string {
 }
 
 // Inspect returns the install status. PATH copies count as installed but not
-// tk-managed (tk always installs its managed copy alongside).
+// tk-managed (updates replace the cache copy, never touch PATH).
 func Inspect(ctx context.Context, cacheDir string, b backends.Backend, pin, goos string) Status {
 	st := Status{Backend: b, Pin: pin, NeedsInstall: true}
 	dest := filepath.Join(binDir(cacheDir), b.BinaryName(goos))
@@ -144,121 +142,140 @@ func Inspect(ctx context.Context, cacheDir string, b backends.Backend, pin, goos
 	return st
 }
 
-// Install installs the backend at its pin by running the pin's own installer
-// script. It is idempotent: re-running at the same pin is a no-op upstream.
+// Install downloads, checksum-verifies, and atomically installs the backend.
+// It is idempotent: byte-identical re-runs rewrite the same file.
 //
-// env supplies the CBM_* identity for the install so the backend writes its
-// store to tk's cache and drains tk's cohort, not the account-wide one.
+// The archive is streamed to a temp file while its sha256 is computed inline
+// (never buffered whole in memory — backend archives are hundreds of MB), then
+// verified against the manifest before the binary entry is streamed out.
 //
-// It returns an *Error whenever the pin did not land, including when the
-// script exited 0 without publishing it. A caller that trusts the exit status
-// reports a successful install that no binary backs.
-func Install(ctx context.Context, cacheDir string, b backends.Backend, pin, goos, goarch string, env []string) (Plan, error) {
+// Order matters and is the design: verify, stage beside the target, validate the
+// staged file, retain the current one, publish, validate again, roll back on any
+// failure. A caller that has not stopped the daemon holding this image is on its
+// own — see the package comment.
+func Install(ctx context.Context, cacheDir string, b backends.Backend, pin, goos, goarch string) (Plan, error) {
 	plan, err := ResolvePlan(cacheDir, b, pin, goos, goarch)
 	if err != nil {
 		return Plan{}, err
 	}
+	sums, err := fetch(ctx, plan.ChecksumsURL)
+	if err != nil {
+		return Plan{}, fmt.Errorf("fetch %s: %w", plan.ChecksumsURL, err)
+	}
+	want, err := checksumFor(sums, plan.Archive)
+	if err != nil {
+		return Plan{}, fmt.Errorf("checksum manifest: %w", err)
+	}
 	if err := os.MkdirAll(binDir(cacheDir), 0o700); err != nil {
 		return Plan{}, err
 	}
-	// One private dir holds the staged script and serves as the install's
-	// TMPDIR. The install is transient-heavy: install.sh downloads a 40 MB
-	// archive and unpacks a 300 MB binary into mktemp -d, which defaults to the
-	// system temp dir. On a small tmpfs that is ENOSPC, and the backend reports
-	// it as a bare exit status. This moves ~340 MB of transient space next to
-	// the target, on the cache's filesystem, where the binary is going anyway.
-	//
-	// It does not move everything. The backend's own prepared-candidate copy is
-	// staged under cbm_tmpdir(), which its own source documents as separate
-	// behaviour from $TMPDIR on POSIX, so that copy still follows the platform
-	// temp. tk does not reach past the vendor's contract to relocate it; what
-	// tk does is stop being opaque when that space runs out.
-	work, err := os.MkdirTemp(cacheDir, ".install-")
+	blob := filepath.Join(binDir(cacheDir), "tk-dl-"+plan.Archive+".tmp")
+	defer os.Remove(blob) // best-effort: leftover temp is overwritten next run
+	got, err := download(ctx, plan.ArchiveURL, blob)
 	if err != nil {
-		return Plan{}, err
+		return Plan{}, fmt.Errorf("fetch %s: %w", plan.ArchiveURL, err)
 	}
-	defer os.RemoveAll(work)
+	if hex.EncodeToString(got[:]) != want {
+		return Plan{}, mismatched(b, pin, want, hex.EncodeToString(got[:]))
+	}
+	return publish(ctx, plan, b, blob)
+}
 
-	script, err := fetchScript(ctx, plan.ScriptURL)
-	if err != nil {
-		return Plan{}, fmt.Errorf("fetch %s: %w", plan.ScriptURL, err)
-	}
-	stage, err := stageScript(work, goos, script)
-	if err != nil {
+// publish extracts, validates, and swaps the binary into place.
+func publish(ctx context.Context, plan Plan, b backends.Backend, blob string) (Plan, error) {
+	staged := plan.Dest + ".new"
+	// Stream the entry straight to disk: backend binaries can exceed hundreds of
+	// MB (CBM embeds grammars + embeddings), so never buffer it in memory.
+	if err := extractBinary(blob, plan.Archive, b.BinaryName(backends.HostGOOS()), staged); err != nil {
+		_ = os.Remove(staged)
 		return Plan{}, err
 	}
-	args, err := scriptArgs(stage, plan, goos)
-	if err != nil {
+	if err := os.Chmod(staged, 0o755); err != nil {
+		_ = os.Remove(staged)
 		return Plan{}, err
 	}
-	// Pin the download source to this tag so the script cannot drift to latest.
-	runEnv := append(scrubbedEnv(), env...)
-	runEnv = append(runEnv,
-		"CBM_DOWNLOAD_URL="+b.ReleaseBase(b.Tag(pin)),
-		"TMPDIR="+work, "TMP="+work, "TEMP="+work,
-	)
-	out, err := runScript(ctx, args, runEnv)
-	if err != nil {
-		return Plan{}, scriptFailure(b, pin, out, fmt.Errorf("run %s: %w", filepath.Base(stage), err))
+	// Validate before touching the target. A candidate that will not report the
+	// pin must never reach the path other processes resolve.
+	if v := DetectVersion(ctx, staged); v != plan.Pin {
+		_ = os.Remove(staged)
+		return Plan{}, unpinned(b, plan.Pin, seenVersion(v), "the downloaded binary reports "+seenVersion(v))
 	}
-	// Exit 0 is not proof the pin landed. CBM leaves a binary owned by
-	// mise/Homebrew/nix alone and says so, and a config-only install publishes
-	// no binary at all; both exit 0 with nothing at the target.
-	if _, err := os.Stat(plan.Dest); err != nil {
-		return Plan{}, unpinned(b, pin, out, "placed no binary at "+plan.Dest, err)
+	// A swap that half-completes is the one failure this package cannot paper
+	// over: the staged file is already gone, and a silent error here would leave
+	// the old binary in place under a success report.
+	if err := swap(plan.Dest); err != nil {
+		_ = os.Remove(staged)
+		return Plan{}, err
 	}
-	if got := DetectVersion(ctx, plan.Dest); got != pin {
-		seen := got
-		if seen == "" {
-			seen = "no version"
+	// Validate again at the published path, so a failed install is never
+	// reported as a successful one and never leaves a caller believing a pin
+	// landed that did not.
+	if v := DetectVersion(ctx, plan.Dest); v != plan.Pin {
+		rerr := rollback(plan.Dest)
+		err := unpinned(b, plan.Pin, seenVersion(v), "the published binary reports "+seenVersion(v))
+		if rerr != nil {
+			err.Detail = append(err.Detail, "rollback also failed: "+rerr.Error())
+			err.Hint = "no working binary is in place; re-run `tk install` to fetch the pin again"
 		}
-		return Plan{}, unpinned(b, pin, out,
-			fmt.Sprintf("%s reports %s, not the pinned %s", plan.Dest, seen, pin), errNoPin)
+		return Plan{}, err
 	}
+	_ = os.Remove(plan.Dest + ".prev")
 	return plan, nil
 }
 
-// scriptArgs builds the interpreter and argv for the pinned installer script.
-// Windows uses the PowerShell variant; POSIX shells out to bash, which is the
-// documented invocation for this script.
-func scriptArgs(stage string, plan Plan, goos string) ([]string, error) {
-	if goos == "windows" {
-		shell, err := exec.LookPath("powershell")
-		if err != nil {
-			return nil, fmt.Errorf("powershell not found; CBM install on windows needs it")
+// swap renames dest to .prev and the staged file into place. Both renames are on
+// one filesystem by construction — the stage sits beside the target — so neither
+// is a copy. Errors are returned rather than swallowed: the second rename is the
+// point of no return, and a caller that cannot tell it happened would report a
+// successful install over an unchanged binary.
+func swap(dest string) error {
+	if err := os.Remove(dest + ".prev"); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("clear the retained generation: %w", err)
+	}
+	if _, err := os.Stat(dest); err == nil {
+		if err := os.Rename(dest, dest+".prev"); err != nil {
+			// The target is still exactly where it was, so leaving the staged
+			// candidate beside it is a clean no-op, not a partial install.
+			return fmt.Errorf("retain the current binary: %w", err)
 		}
-		return []string{shell, "-ExecutionPolicy", "Bypass", "-File", stage,
-			"--dir=" + filepath.Dir(plan.Dest), "--skip-config"}, nil
 	}
-	shell, err := exec.LookPath("bash")
-	if err != nil {
-		return nil, fmt.Errorf("bash not found; CBM install needs it on this platform")
+	if err := os.Rename(dest+".new", dest); err != nil {
+		return fmt.Errorf("publish the new binary: %w", err)
 	}
-	return []string{shell, stage, "--dir=" + filepath.Dir(plan.Dest), "--skip-config"}, nil
+	return nil
 }
 
-// stageScript writes the fetched script to a private file and returns its path.
-// It is never the live path a previous run used, so a re-run cannot race or
-// read a half-written script.
-func stageScript(dir, goos string, script []byte) (string, error) {
-	name := "install.sh"
-	if goos == "windows" {
-		name = "install.ps1"
+// rollback restores the retained generation. A rollback that itself fails is
+// reported: the caller is already returning an error, and adding why the
+// recovery failed is the difference between "re-run tk install" and "you have no
+// working binary".
+func rollback(dest string) error {
+	if _, err := os.Stat(dest + ".prev"); err != nil {
+		return nil // nothing retained, so nothing to restore
 	}
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, script, 0o700); err != nil {
-		return "", err
+	if err := os.Rename(dest+".prev", dest); err != nil {
+		// dest may still hold the rejected binary. Clearing it is what lets the
+		// rename succeed on Windows, where a rename cannot replace an existing
+		// file.
+		if rmErr := os.Remove(dest); rmErr == nil {
+			if err2 := os.Rename(dest+".prev", dest); err2 == nil {
+				return nil
+			}
+		}
+		return err
 	}
-	return path, nil
+	return nil
 }
 
-// fetchScript GETs an installer script over HTTPS. A non-HTTPS scheme is
-// refused outright: the script is executed, so it must not be interceptable.
-func fetchScript(ctx context.Context, url string) ([]byte, error) {
-	if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "http://127.0.0.1") &&
-		!strings.HasPrefix(url, "http://localhost") {
-		return nil, fmt.Errorf("refusing non-HTTPS installer URL: %s", url)
+// seenVersion names a version for an error, where "" means the probe found none.
+func seenVersion(v string) string {
+	if v == "" {
+		return "no version"
 	}
+	return v
+}
+
+func fetch(ctx context.Context, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -272,12 +289,172 @@ func fetchScript(ctx context.Context, url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %s", resp.Status)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxScriptBytes))
+	return io.ReadAll(io.LimitReader(resp.Body, maxArchiveBytes)) // manifests are kilobytes; this is a backstop, not a budget
+}
+
+// download streams a URL body to path while hashing it, bounded to the same
+// maxArchiveBytes whole-archive cap. Memory stays flat regardless of archive
+// size.
+func download(ctx context.Context, url, path string) ([sha256.Size]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return [sha256.Size]byte{}, err
 	}
-	if len(body) == 0 {
-		return nil, fmt.Errorf("empty installer script")
+	req.Header.Set("User-Agent", "tk-installer")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return [sha256.Size]byte{}, err
 	}
-	return body, nil
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return [sha256.Size]byte{}, fmt.Errorf("HTTP %s", resp.Status)
+	}
+	out, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	hasher := sha256.New()
+	n, err := io.Copy(io.MultiWriter(out, hasher), io.LimitReader(resp.Body, maxArchiveBytes+1))
+	if cerr := out.Close(); err == nil && cerr != nil {
+		err = cerr
+	}
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	if n > maxArchiveBytes {
+		return [sha256.Size]byte{}, fmt.Errorf("archive exceeds %d MiB cap", maxArchiveBytes>>20)
+	}
+	var sum [sha256.Size]byte
+	copy(sum[:], hasher.Sum(nil))
+	return sum, nil
+}
+
+// checksumFor finds "<sha256>  <filename>" (or *binary) lines.
+func checksumFor(manifest []byte, archive string) (string, error) {
+	for _, line := range strings.Split(string(manifest), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		name := strings.TrimPrefix(f[1], "*")
+		if name == archive {
+			sum := strings.ToLower(f[0])
+			if len(sum) != 64 {
+				return "", fmt.Errorf("bad sha256 %q for %s", f[0], archive)
+			}
+			return sum, nil
+		}
+	}
+	return "", fmt.Errorf("%s not listed in manifest", archive)
+}
+
+// extractBinary pulls the single named executable out of a .tar.gz or .zip on
+// disk and streams it to dest — no full buffering, so a multi-hundred-MB CBM
+// binary never lands in memory. Only entry *content* is written: the entry name
+// is matched against the expected binary and never used as a path, so a
+// traversal entry in a hostile archive cannot escape dest. The entry itself is
+// not size-capped (maxArchiveBytes bounds the compressed download, not what a
+// crafted archive inflates to), which is safe here only because the archive
+// passed the pinned checksum.
+func extractBinary(blob, archive, binary, dest string) error {
+	if strings.HasSuffix(archive, ".zip") {
+		return extractZipToFile(blob, binary, archive, dest)
+	}
+	return extractTarGzToFile(blob, binary, archive, dest)
+}
+
+func extractZipToFile(blob, binary, archive, dest string) error {
+	f, err := os.Open(blob)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	zr, err := zip.NewReader(f, fi.Size())
+	if err != nil {
+		return fmt.Errorf("open zip: %w", err)
+	}
+	for _, zf := range zr.File {
+		if base(zf.Name) == binary {
+			return streamEntry(zf.Open, dest)
+		}
+	}
+	return fmt.Errorf("%s not found in %s", binary, archive)
+}
+
+func extractTarGzToFile(blob, binary, archive, dest string) error {
+	f, err := os.Open(blob)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("open tar.gz: %w", err)
+	}
+	defer gr.Close()
+	tr := tar.NewReader(gr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read tar: %w", err)
+		}
+		if hdr.Typeflag != tar.TypeReg || base(hdr.Name) != binary {
+			continue
+		}
+		out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(out, tr)
+		closeErr := out.Close()
+		if copyErr != nil {
+			return fmt.Errorf("extract %s: %w", binary, copyErr)
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		return nil
+	}
+	return fmt.Errorf("%s not found in %s", binary, archive)
+}
+
+// streamEntry copies a zip entry's content to dest.
+func streamEntry(open func() (io.ReadCloser, error), dest string) error {
+	rc, err := open()
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, rc)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
+}
+
+func base(p string) string {
+	p = strings.ReplaceAll(p, "\\", "/")
+	if i := strings.LastIndex(p, "/"); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
+func short(s string) string {
+	if len(s) > 12 {
+		return s[:12]
+	}
+	return s
 }

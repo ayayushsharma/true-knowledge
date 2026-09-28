@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -419,7 +420,7 @@ func setup(t *testing.T) tk {
 	}
 	name := env2(t, "TK_E2E_NAME", filepath.Base(repo))
 
-	home := t.TempDir()
+	home := e2eHome(t)
 	bin := filepath.Join(t.TempDir(), "tk")
 	buildTk(t, bin)
 
@@ -460,6 +461,39 @@ func setup(t *testing.T) tk {
 		t.Fatalf("index %s --mode %s: %s", name, mode, r)
 	}
 	return h
+}
+
+// daemonSocketBudget is the room this gate guarantees for the daemon's unix
+// socket. The CBM daemon binds a socket under <TK_HOME>/state/rendezvous, and
+// Darwin caps sun_path at 104 bytes. The socket name sits in that budget too,
+// so the rendezvous directory itself must stay well short of it; 96 leaves a
+// sane margin and keeps the check meaningful on Linux's 108 as well.
+const daemonSocketBudget = 96
+
+// e2eHome returns a short TK_HOME for the gate. This is not test tidiness: the
+// gate drives the real daemon, which binds a real unix socket at
+// <home>/state/rendezvous, and Darwin's sun_path is 104 bytes. macOS $TMPDIR
+// is /var/folders/<xx>/<hash>/T/, deep enough that the inherited home plus the
+// daemon's socket overflows it and the daemon cannot bind — a failure that
+// reads like a tk defect. /tmp is /private/tmp (~12 bytes), so the resolved
+// socket path stays tiny. Only the home is shortened: the binary path and the
+// repo are file paths, not sockets. The lone remaining risk — a future home
+// layout drifting back past the budget — is a hard failure, not a mystery.
+func e2eHome(t *testing.T) string {
+	t.Helper()
+	base := os.TempDir()
+	if runtime.GOOS == "darwin" {
+		base = "/tmp"
+	}
+	dir, err := os.MkdirTemp(base, "tk-e2e-*")
+	if err != nil {
+		t.Fatalf("mktemp %s: %v", base, err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	if n := len(filepath.Join(dir, "state", "rendezvous")); n > daemonSocketBudget {
+		t.Fatalf("rendezvous path is %d bytes, over the %d-byte unix-socket budget on macOS: %s", n, daemonSocketBudget, dir)
+	}
+	return dir
 }
 
 // installCBM returns the CBM the whole gate is pinned to. TK_E2E_CBM_BIN

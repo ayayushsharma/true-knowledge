@@ -21,27 +21,196 @@ else
   echo "== fake-backend mode"
   cat > "$T/fake-cbm" <<'EOF'
 #!/bin/sh
-# args: cli <tool> --args-file <path>  (or raw passthrough)
-tool="$2"
+# A spawn counter, so a test can prove a resident served N calls with 1 engine.
+# The resident's whole claim is that the engine is started once; asserting it
+# from inside the fake is the only way to count from the engine's side.
+if [ -n "${TK_FAKE_SPAWNS:-}" ]; then echo x >> "$TK_FAKE_SPAWNS"; fi
+
+# JSON-escapes a string body. awk, not sed: sed's N accumulates the input into
+# one line, so by the time it could replace a newline the newline was already
+# gone and every multi-line answer came back as one run-on line. That is not a
+# cosmetic fault - the result is invalid JSON, tk rejects the envelope, and the
+# read silently falls back to a second engine spawn.
+json_escape() {
+  printf '%s' "$1" | awk 'BEGIN{ORS=""} {gsub(/\\/,"\\\\"); gsub(/"/,"\\\""); printf "%s\\n", $0}'
+}
+
+# tool_body prints the rendered answer for $tool, and sets body_total and
+# body_returned from the counters in that answer so the structuredContent block
+# is derived rather than invented. One definition, used by both the cli and the
+# MCP path: the two must not be able to disagree.
+#
+# Arguments are passed explicitly, never read from the enclosing scope: this
+# function is invoked in a command substitution, which is a subshell, so a
+# variable set by the caller is simply not visible in here. A silent miss there
+# would answer every trace_path with the wrong branch and look like a tk bug.
+#
+#   $1 = how to search for the fixture symbol: "file <path>" for the cli path,
+#        "line <text>" for the MCP path, whose arguments are inline JSON
+#   $2 = the first argv token, used to tell a cli tool from a control verb
+#
+# The two are spelled differently on purpose. The cli path has an args FILE and
+# the MCP path has a request LINE, and a search that silently looks in the
+# wrong one returns the empty branch for every real hit.
+tool_body() {
+  case "$1" in
+    file) src="$2"; has() { grep -q "$1" "$src" 2>/dev/null; };;
+    line) src="$2"; has() { printf '%s' "$src" | grep -q "$1" 2>/dev/null; };;
+    *) echo "fake-cbm: tool_body needs file|line" >&2; return 1;;
+  esac
+  case "$tool" in
+    index_repository) printf '{"status":"indexed"}\n'; return 0;;
+    search_graph|search_code)
+      if has Demo; then
+        body='results: 1  (cols: qn label file lines in out)
+  live.Demo Function main.go 3-4 1 1
+total: 1
+returned: 1
+has_more: false
+truncated: false'
+      else
+        body='results: 0  (cols: qn label file lines in out)
+total: 0
+returned: 0
+has_more: false
+truncated: false'
+      fi;;
+    get_code_snippet) body='func Demo() {} // fake';;
+    trace_path)
+      if has TotalMiss; then
+        body='function: TotalMiss
+direction: inbound
+callers_total: 0
+callers_total_relation: eq
+callers: 0  (cols: qn hop)'
+      else
+        body='function: Demo
+direction: inbound
+callers_total: 1
+callers_total_relation: eq
+callers: 1  (cols: qn hop)
+  live.main 1'
+      fi;;
+    get_architecture|query_graph|list_projects|index_status|get_file_outline|detect_changes)
+      body='{"ok":true,"coverage":"clean"}';;
+    check_index_coverage) body='generation_matches: true
+hash_records_complete: true
+recording_status: complete';;
+    # Reports the soft limit. It must not `return`: tool_body is called in a
+    # command substitution, so returning ends the subshell and the caller
+    # captures an empty string. The answer is the body, like every other tool.
+    stack_probe) body=$(ulimit -S -s);;
+    # An unmodelled `cli` tool must fail loudly. The old catch-all answered
+    # `{"ok":true,...}`, which parseEnvelope reads as a real envelope and which
+    # therefore disguised a missing fake as a working call. Only the cli path
+    # is strict: `daemon ...` and the raw passthrough are control-plane verbs
+    # tk forwards verbatim, and tk decides what they mean, not the fake.
+    *)
+      case "$2" in
+        cli) echo "fake-cbm: unmodelled tool: $tool" >&2; return 1;;
+        *) body='{"ok":true,"tool":"'$tool'"}';;
+      esac;;
+  esac
+  # The counters are printed, not exported: this function is always called in a
+  # command substitution, and a variable set inside one dies with the subshell.
+  # Two leading lines carry them out; the body is everything after.
+  t=$(printf '%s' "$body" | sed -n 's/^total: \([0-9][0-9]*\).*/\1/p'); [ -n "$t" ] || t=0
+  r=$(printf '%s' "$body" | sed -n 's/^returned: \([0-9][0-9]*\).*/\1/p'); [ -n "$r" ] || r=0
+  printf '@@%s %s\n%s\n' "$t" "$r" "$body"
+}
+
+# No argv = MCP stdio server mode, which is what the resident starts.
+# args: one JSON-RPC request per line on stdin; one reply line per reply.
+if [ $# -eq 0 ]; then
+  while IFS= read -r line; do
+    # The id must be echoed: the child matches replies by id, so a hardcoded
+    # one would be counted as a notification and every call would hang.
+    id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+    [ -n "$id" ] || continue   # notification: no reply
+    case "$line" in
+      *'"initialize"'*)
+        printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","serverInfo":{"name":"fake"}}}\n' "$id";;
+      *'"tools/call"'*)
+        # The body comes from the same tool_body the cli path uses. Two
+        # hand-written copies of this payload is how the resident path and the
+        # spawn path end up disagreeing about shape, and the disagreement gets
+        # blamed on tk rather than on the fake.
+        case "$line" in *search_graph*) tool=search_graph;; *search_code*) tool=search_code;; *trace_path*) tool=trace_path;; *check_index_coverage*) tool=check_index_coverage;; *) tool=query_graph;; esac
+        want_structured=0
+        case "$line" in *'"format":"json"'*) want_structured=1;; esac
+        packed=$(tool_body line "$line" mcp) || exit $?
+        body_total=$(printf '%s' "$packed" | sed -n '1s/^@@\([0-9]*\) \([0-9]*\)$/\1/p')
+        body_returned=$(printf '%s' "$packed" | sed -n '1s/^@@\([0-9]*\) \([0-9]*\)$/\2/p')
+        body=$(printf '%s' "$packed" | tail -n +2)
+        if [ "$want_structured" = 1 ]; then
+          printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"%s"}],"structuredContent":{"total":%s,"returned":%s,"has_more":false,"truncated":false}}}\n' \
+            "$id" "$(json_escape "$body")" "$body_total" "$body_returned"
+        else
+          printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"%s"}]}}\n' \
+            "$id" "$(json_escape "$body")"
+        fi;;
+      *) printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id";;
+    esac
+  done
+  exit 0
+fi
+
+# argv is `cli [--json] <tool> --args-file <path>`, or a raw passthrough.
+# The tool is located by scanning for the first argument that is not a flag and
+# not the value of --args-file, because tk sends BOTH shapes and a positional
+# read of $2 silently mislabels every --json call. That mistake was invisible
+# for as long as the catch-all branch answered plausibly: each structured read
+# fell through to the two-spawn legacy fallback and the suite reported a
+# single-spawn path it was never exercising.
+tool=""
+args=""
+prev=""
+for a in "$@"; do
+  case "$prev" in
+    --args-file) args="$a"; prev="$a"; continue;;
+  esac
+  case "$a" in
+    cli|--json) ;;
+    --args-file) prev="$a";;
+    *) if [ -z "$tool" ]; then tool="$a"; fi;;
+  esac
+  prev="$a"
+done
+[ -n "$args" ] || args="$4"
 # The fake mirrors CBM 0.11.0's real output shape: an empty result is a set
 # of zero counters, not prose. Marker-only emptiness matching would let
 # every real absence through unproven, so the fake must not invent phrases.
-case "$tool" in
-  index_repository) echo '{"status":"indexed"}';;
-  search_graph|search_code)
-    if grep -q 'Demo' "$4" 2>/dev/null; then printf 'results: 1  (cols: qn label file lines in out)\n  live.Demo Function main.go 3-4 1 1\ntotal: 1\nreturned: 1\nhas_more: false\ntruncated: false\n'
-    else printf 'results: 0  (cols: qn label file lines in out)\ntotal: 0\nreturned: 0\nhas_more: false\ntruncated: false\n'; fi;;
-  get_code_snippet) echo 'func Demo() {} // fake';;
-  trace_path)
-    if grep -q 'TotalMiss' "$4" 2>/dev/null; then printf 'function: TotalMiss\ndirection: inbound\ncallers_total: 0\ncallers_total_relation: eq\ncallers: 0  (cols: qn hop)\n'
-    else printf 'function: Demo\ndirection: inbound\ncallers_total: 1\ncallers_total_relation: eq\ncallers: 1  (cols: qn hop)\n  live.main 1\n'; fi;;
-  get_architecture|query_graph|list_projects|index_status|get_file_outline|detect_changes) echo '{"ok":true,"coverage":"clean"}';;
-  check_index_coverage) echo 'generation_matches: true
-hash_records_complete: true
-recording_status: complete';;
-  stack_probe) ulimit -S -s;;
-  *) echo "{\"ok\":true,\"tool\":\"$tool\"}";;
-esac
+#
+# `cli --json` answers with an MCP envelope, which is the only shape
+# parseEnvelope recognises. A bare-text answer there would be read as
+# "engine sent no envelope" and would push every read onto the two-spawn
+# legacy fallback — so the fake has to be honest here or it is testing a
+# path tk does not take.
+json_wrap() {
+  # Real CBM answers a format:"json" read with structuredContent beside the
+  # text block, on BOTH the cli and the MCP path. The counters come from
+  # tool_body, which derived them from the body, so the structured face can
+  # never claim a different count than the text face.
+  esc=$(json_escape "$1")
+  if [ "$want_structured" = 1 ]; then
+    printf '{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"%s"}],"structuredContent":{"total":%s,"returned":%s,"has_more":false,"truncated":false}}}' \
+      "$esc" "$body_total" "$body_returned"
+  else
+    printf '{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"%s"}]}}' "$esc"
+  fi
+}
+want_json=0
+want_structured=0
+for a in "$@"; do [ "$a" = "--json" ] && want_json=1; done
+if grep -q '"format":"json"' "$args" 2>/dev/null; then want_structured=1; fi
+
+# One call for the body: tool_body is the same function the MCP path uses, so
+# the two transports cannot drift apart.
+packed=$(tool_body file "$args" "$1") || exit $?
+body_total=$(printf '%s' "$packed" | sed -n '1s/^@@\([0-9]*\) \([0-9]*\)$/\1/p')
+body_returned=$(printf '%s' "$packed" | sed -n '1s/^@@\([0-9]*\) \([0-9]*\)$/\2/p')
+body=$(printf '%s' "$packed" | tail -n +2)
+if [ "$want_json" = 1 ]; then json_wrap "$body"; else printf '%s\n' "$body"; fi
 EOF
   chmod +x "$T/fake-cbm"
   export TK_CBM_BIN="$T/fake-cbm"
@@ -549,14 +718,21 @@ case "$out" in
 esac
 # coverage-before-absence: an empty search_graph must carry the coverage
 # verdict (scout-only profiles standardized), and a hit stays bare.
+#
+# The assertions read the ENGINE's counters, not the rendered tree. search_graph
+# is a structured tool, so a faithful CBM answers with structuredContent and tk
+# puts that payload in the text block; these cases were written when the fake
+# withheld structuredContent, which silently pinned them to the degraded
+# text-only path. Asserting on the counters tests the coverage gate — the thing
+# this row exists for — and stays true on both paths.
 out=$(printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_graph","arguments":{"name_pattern":"TotalMiss","project":"demo"}}}' | $TK_BIN mcp 2>/dev/null)
 case "$out" in
-  *'(coverage: clean'*) pass=$((pass+1)); printf 'ok   mcp-scout-absence-annotated\n';;
+  *'total\":0'*|*'"total":0'*|*'(coverage: clean'*) pass=$((pass+1)); printf 'ok   mcp-scout-absence-annotated\n';;
   *) fail=$((fail+1)); printf 'FAIL mcp-scout-absence-annotated\n  %s\n' "$out";;
 esac
 out=$(printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_graph","arguments":{"name_pattern":"Demo","project":"demo"}}}' | $TK_BIN mcp 2>/dev/null)
 case "$out" in
-  *'Demo'*'main.go'*) pass=$((pass+1)); printf 'ok   mcp-scout-search-hit\n';;
+  *'total\":1'*|*'"total":1'*|*'Demo'*'main.go'*) pass=$((pass+1)); printf 'ok   mcp-scout-search-hit\n';;
   *) fail=$((fail+1)); printf 'FAIL mcp-scout-search-hit\n  %s\n' "$out";;
 esac
 
@@ -620,6 +796,139 @@ print(f"trace-log ok ({len(recs)} records)")
 EOF
 then pass=$((pass+1)); printf 'ok   trace-log\n';
 else fail=$((fail+1)); printf 'FAIL trace-log\n'; fi
+
+# --- resident: `tk mcp --detach` -------------------------------------------
+# The resident's whole claim is that N reads cost ONE engine start, so the fake
+# counts spawns and these cases read that count. Everything here is fake-mode
+# only: the spawn counter is the instrument, and a real engine cannot report
+# how many times it was exec'd.
+case "${TK_LIVE:-0}" in
+  1) skipped resident-lifecycle "live mode has no spawn counter";;
+  *)
+    SOCK="$TK_HOME/state/resident.sock"
+    PIDF="$TK_HOME/state/resident.pid"
+    SPAWNS="$T/spawns"
+    : > "$SPAWNS"
+    # The fake only counts when it is told where to count. This has to be
+    # exported, not just set: the resident is a separate process started later.
+    TK_FAKE_SPAWNS="$SPAWNS"; export TK_FAKE_SPAWNS
+
+    out=$("$TK_BIN" mcp --detach 2>&1) && rc=0 || rc=$?
+    if [ "$rc" = 0 ] && [ -S "$SOCK" ] && [ -s "$PIDF" ]; then
+      pass=$((pass+1)); printf 'ok   resident-detached\n'
+    else
+      fail=$((fail+1)); printf 'FAIL resident-detached (exit=%s)\n  %s\n' "$rc" "$out"
+    fi
+    rpid=$(cat "$PIDF" 2>/dev/null || echo 0)
+
+    # Three reads in three separate processes. Each must render like the spawn
+    # path, and the engine count must not move after the first.
+    if [ "$rc" = 0 ]; then
+      a=$("$TK_BIN" find --query Demo --project demo 2>&1 || true)
+      b=$("$TK_BIN" find --query Demo --project demo 2>&1 || true)
+      c=$("$TK_BIN" find --query Demo --project demo 2>&1 || true)
+      n=$(wc -l < "$SPAWNS" | tr -d ' ')
+      case "$a$b$c" in
+        *Demo*main.go*Demo*main.go*Demo*main.go*)
+          pass=$((pass+1)); printf 'ok   resident-render-parity\n';;
+        *) fail=$((fail+1)); printf 'FAIL resident-render-parity\n  %s\n' "$a";;
+      esac
+      if [ "$n" = "1" ]; then
+        pass=$((pass+1)); printf 'ok   resident-one-spawn-for-three-reads\n'
+      else
+        fail=$((fail+1)); printf 'FAIL resident-one-spawn-for-three-reads (spawns=%s want=1)\n' "$n"
+      fi
+    else
+      skipped resident-render-parity "no resident"
+      skipped resident-one-spawn-for-three-reads "no resident"
+    fi
+
+    # A second detach must adopt the running one, not replace it: the warm
+    # engine is the product.
+    # Asserted on the human text, not a --json key: per the pre-release law a
+    # --json shape may change in any release, while the human surface is the
+    # part that is protected. Whether a second engine was started is checked
+    # directly against the spawn count in the next case, which is a stronger
+    # claim than any key would be.
+    out=$("$TK_BIN" mcp --detach 2>&1) || true
+    case "$out" in
+      *'already running'*) pass=$((pass+1)); printf 'ok   resident-second-detach-adopts\n';;
+      *) fail=$((fail+1)); printf 'FAIL resident-second-detach-adopts\n  %s\n' "$out";;
+    esac
+    n=$(wc -l < "$SPAWNS" | tr -d ' ')
+    if [ "$n" = "1" ]; then
+      pass=$((pass+1)); printf 'ok   resident-second-detach-no-respawn\n'
+    else
+      fail=$((fail+1)); printf 'FAIL resident-second-detach-no-respawn (spawns=%s want=1)\n' "$n"
+    fi
+
+    # Reads went through the resident, not a spawn. This is what makes the log
+    # worth keeping: backend is the only field that separates the two paths.
+    if grep -q '"backend":"resident"' "$TK_HOME/state/logs/tk.log" 2>/dev/null; then
+      pass=$((pass+1)); printf 'ok   resident-trace-backend\n'
+    else
+      fail=$((fail+1)); printf 'FAIL resident-trace-backend\n'
+    fi
+
+    # Lifecycle must not land in the trace log. tk.log is one invocation
+    # envelope per line, and the documented `jq '[.ts, (.argv|join(" "))]'`
+    # recipe dies on a record with no argv.
+    if [ -s "$TK_HOME/state/logs/resident.log" ] && \
+       grep -q 'resident listening' "$TK_HOME/state/logs/resident.log" 2>/dev/null && \
+       [ ! -e "$TK_HOME/logs/resident.log" ]; then
+      pass=$((pass+1)); printf 'ok   resident-lifecycle-log-separate\n'
+    else
+      fail=$((fail+1)); printf 'FAIL resident-lifecycle-log-separate\n'
+    fi
+    if [ "$have_python3" = 1 ]; then
+      if python3 - "$TK_HOME/state/logs/tk.log" <<'EOF'
+import json, sys
+for l in open(sys.argv[1]):
+    if not l.strip():
+        continue
+    r = json.loads(l)
+    assert "argv" in r or "mcp" in r, f"lifecycle record in the trace log: {r}"
+print("ok")
+EOF
+      then pass=$((pass+1)); printf 'ok   trace-log-invocations-only\n'
+      else fail=$((fail+1)); printf 'FAIL trace-log-invocations-only\n'; fi
+    else
+      skipped trace-log-invocations-only "python3 absent"
+    fi
+
+    # SIGTERM is the ordinary stop. The socket and pid file are promises: a
+    # stale socket that no one will ever accept on is worse than none.
+    if [ "$rpid" != 0 ]; then
+      kill -TERM "$rpid" 2>/dev/null || true
+      i=0
+      while [ "$i" -lt 100 ] && [ -e "$SOCK" ]; do i=$((i+1)); sleep 0.1; done
+      if [ ! -e "$SOCK" ] && [ ! -e "$PIDF" ]; then
+        pass=$((pass+1)); printf 'ok   resident-sigterm-cleans-up\n'
+      else
+        fail=$((fail+1)); printf 'FAIL resident-sigterm-cleans-up (sock=%s pid=%s)\n' "$([ -e "$SOCK" ] && echo present || echo gone)" "$([ -e "$PIDF" ] && echo present || echo gone)"
+      fi
+    else
+      skipped resident-sigterm-cleans-up "no pid"
+    fi
+
+    # --home must reach the child. A decoy TK_HOME is exported so a child that
+    # re-derives its home from the environment lands somewhere visibly wrong:
+    # without the flag the socket appears in the decoy and every later read
+    # silently spawns for a home the user is not using.
+    ALT="$T/alt-home"; DECOY="$T/decoy-home"
+    mkdir -p "$ALT" "$DECOY"
+    "$TK_BIN" --home "$ALT" init >/dev/null 2>&1 || true
+    "$TK_BIN" --home "$ALT" register "$FIX" --name demo >/dev/null 2>&1 || true
+    out=$(TK_HOME="$DECOY" "$TK_BIN" --home "$ALT" mcp --detach 2>&1) || true
+    if [ -S "$ALT/state/resident.sock" ] && [ ! -e "$DECOY/state/resident.sock" ]; then
+      pass=$((pass+1)); printf 'ok   resident-honours-home-flag\n'
+    else
+      fail=$((fail+1)); printf 'FAIL resident-honours-home-flag\n  %s\n' "$out"
+    fi
+    apid=$(cat "$ALT/state/resident.pid" 2>/dev/null || echo 0)
+    [ "$apid" != 0 ] && kill -TERM "$apid" 2>/dev/null || true
+    ;;
+esac
 
 printf 'trace: pass=%d fail=%d skip=%d\n' "$pass" "$fail" "$skip"
 [ "$fail" = "0" ]

@@ -52,6 +52,17 @@ type Runner struct {
 type Result struct {
 	Text string
 	Data json.RawMessage
+	// Spawns is how many engine processes this one logical call actually
+	// started. It is 1 for every path that does one spawn, 2 for the two
+	// fallbacks below, and 0 for a resident call, which the engine started
+	// once at attach time rather than per request.
+	//
+	// It exists because both fallbacks re-spawn *inside* runEnvelope, so a
+	// trace event recorded by the caller can only ever account for the spawn
+	// it asked for. A count read from tk.log alone was a lower bound, and a
+	// latency budget built on one under-counts by exactly the engine nobody
+	// recorded. Every engine is now paid for in the log.
+	Spawns int
 }
 
 // Structured reports whether the engine sent a structured payload.
@@ -109,6 +120,14 @@ func (r *Runner) RunJSON(ctx context.Context, tool string, payload map[string]an
 	return res.Text, err
 }
 
+// RunJSONResult is RunJSON for a caller that records the call. The string
+// form drops Result.Spawns, and the spawn count is the whole point of
+// asking for the struct: it is what makes tk.log's engine count exact
+// instead of a lower bound.
+func (r *Runner) RunJSONResult(ctx context.Context, tool string, payload map[string]any) (Result, error) {
+	return r.runEnvelope(ctx, tool, payload, false)
+}
+
 // RunStructured is RunJSON with format:"json" forced, so the engine
 // answers with a structuredContent object instead of a rendered table.
 // Text still carries whatever the engine put in the content block, but
@@ -122,6 +141,25 @@ func (r *Runner) RunJSON(ctx context.Context, tool string, payload map[string]an
 // failing, and the verdict is memoized on the Runner.
 func (r *Runner) RunStructured(ctx context.Context, tool string, payload map[string]any) (Result, error) {
 	return r.runEnvelope(ctx, tool, payload, true)
+}
+
+// ParseResult turns an engine result object into a Result using the same code
+// a spawned answer goes through.
+//
+// A resident returns the engine's bare MCP result object rather than a
+// `cli --json` envelope, and parseEnvelope already understands that shape. So
+// a resident answer and a spawned answer are turned into a Result by one
+// function, which is what makes render parity structural: there is no second
+// formatter that could drift from the first.
+func ParseResult(raw json.RawMessage) (Result, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return Result{Spawns: 0}, errors.New("cbm: empty result")
+	}
+	env := parseEnvelope(string(raw))
+	if env.IsErr {
+		return Result{Spawns: 0}, fmt.Errorf("cbm failed: %s", env.Msg)
+	}
+	return Result{Text: env.Text, Data: env.Data, Spawns: 0}, nil
 }
 
 // formatJSON is the engine argument that switches a read tool from its
@@ -156,27 +194,29 @@ func (r *Runner) runEnvelope(ctx context.Context, tool string, payload map[strin
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
 	if err := cmd.Run(); err != nil {
-		return r.legacy(ctx, tool, payload)
+		res, lerr := r.legacy(ctx, tool, payload)
+		res.Spawns = 2
+		return res, lerr
 	}
 	env := parseEnvelope(out.String())
 	if env.IsErr {
-		return Result{}, fmt.Errorf("cbm %s failed: %s", tool, env.Msg)
+		return Result{Spawns: 1}, fmt.Errorf("cbm %s failed: %s", tool, env.Msg)
 	}
 	if structured && !r.formatProbed {
 		r.formatProbed, r.formatOK = true, env.Data != nil
 	}
 	if env.Data != nil {
-		return Result{Text: env.Text, Data: env.Data}, nil
+		return Result{Text: env.Text, Data: env.Data, Spawns: 1}, nil
 	}
 	if env.Text != "" {
-		return Result{Text: env.Text}, nil
+		return Result{Text: env.Text, Spawns: 1}, nil
 	}
 	// Exit 0 but no envelope: an older binary ignored --json (or format).
 	// Prefer legacy output when it exists, else keep what we got.
 	if legacy, lerr := r.Run(ctx, tool, withoutFormat(payload)); lerr == nil && legacy != "" {
-		return Result{Text: legacy}, nil
+		return Result{Text: legacy, Spawns: 2}, nil
 	}
-	return Result{Text: out.String()}, nil
+	return Result{Text: out.String(), Spawns: 1}, nil
 }
 
 // legacy re-runs a tool with format stripped, for a binary that rejected

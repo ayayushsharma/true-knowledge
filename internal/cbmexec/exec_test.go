@@ -784,3 +784,59 @@ func TestQualifiedNamesFromTextIgnoresNonRows(t *testing.T) {
 		t.Errorf("QualifiedNamesFromText = %q, want none", got)
 	}
 }
+
+// TestSpawnsMatchRealProcesses: Result.Spawns is the number of engine
+// processes the call actually started, and it is checked against the fake
+// engine's own log rather than against the code path that set it.
+//
+// Both fallbacks in runEnvelope re-spawn inside the function the caller
+// recorded, so a count derived from the call site is structurally unable to
+// notice them. That was the bug this field exists to fix: a spawn count read
+// out of tk.log was a lower bound, and a latency budget built on one
+// under-counts by exactly the engine nobody recorded. If this test ever
+// needs its expectation relaxed, the honest fix is a new field, not a
+// smaller number.
+func TestSpawnsMatchRealProcesses(t *testing.T) {
+	// engines() counts real executions. Each spawn writes its payload to its
+	// own temp args file, so the number of distinct --args-file paths in the
+	// fake's log is the number of processes that actually ran — read from the
+	// engine's side, not from the code that set Spawns.
+	engines := func(lines []string) int {
+		seen := map[string]bool{}
+		for _, l := range lines {
+			if strings.HasPrefix(l, "/tmp/tk-args-") {
+				seen[l] = true
+			}
+		}
+		return len(seen)
+	}
+
+	t.Run("envelope answer costs one", func(t *testing.T) {
+		dir := t.TempDir()
+		r, calls := recordingCBM(t, dir, structuredReply)
+		res, err := r.RunStructured(context.Background(), "search_graph", map[string]any{"project": "demo"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Spawns != engines(calls()) {
+			t.Errorf("Spawns = %d but the engine ran %d times", res.Spawns, engines(calls()))
+		}
+	})
+
+	// An engine that ignores --json exits 0 with nothing parseable, which is
+	// the fallback that was invisible in the log.
+	t.Run("exit-0-no-envelope fallback costs two", func(t *testing.T) {
+		dir := t.TempDir()
+		r, calls := recordingCBM(t, dir, "not json at all")
+		res, err := r.RunJSONResult(context.Background(), "search_graph", map[string]any{"project": "demo"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Spawns != engines(calls()) {
+			t.Errorf("Spawns = %d but the engine ran %d times", res.Spawns, engines(calls()))
+		}
+		if res.Spawns < 2 {
+			t.Errorf("the fallback respawn was not accounted for: Spawns = %d", res.Spawns)
+		}
+	})
+}

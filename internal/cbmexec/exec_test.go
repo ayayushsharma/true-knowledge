@@ -801,10 +801,17 @@ func TestSpawnsMatchRealProcesses(t *testing.T) {
 	// own temp args file, so the number of distinct --args-file paths in the
 	// fake's log is the number of processes that actually ran — read from the
 	// engine's side, not from the code that set Spawns.
+	//
+	// Matched on the file NAME, never on the directory. writeArgs uses
+	// os.CreateTemp("", ...), so the directory is whatever TMPDIR says:
+	// /tmp on Linux, but /var/folders/... on macOS. A "/tmp/tk-args-" prefix
+	// silently matched nothing there, which made every subtest fail on the
+	// platform tk calls first-class — the test was only ever green on the
+	// machine it was written on.
 	engines := func(lines []string) int {
 		seen := map[string]bool{}
 		for _, l := range lines {
-			if strings.HasPrefix(l, "/tmp/tk-args-") {
+			if strings.HasPrefix(filepath.Base(l), "tk-args-") {
 				seen[l] = true
 			}
 		}

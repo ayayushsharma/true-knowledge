@@ -11,15 +11,17 @@ import "os"
 // fail with a sentence instead of panicking on a nil.
 var errAddrInUse = errUnsupported
 
-// sig0 keeps the same name as the Unix probe so server.go compiles unchanged.
-// On this platform the probe is a no-op: PidAlive cannot ask, so it does not
-// claim, and a caller that needs certainty starts its own engine.
-var sig0 os.Signal = sigZero{}
-
-type sigZero struct{}
-
-// Signal implements os.Signal for platforms whose Signal takes no argument.
-func (sigZero) Signal() {}
-
-// String satisfies fmt.Stringer, which os.Signal requires everywhere.
-func (sigZero) String() string { return "sig0" }
+// pidAlive reports false because liveness is unknowable here, not because the
+// process is gone.
+//
+// An earlier version of this file defined a no-op os.Signal whose Signal()
+// returned nil, which made this answer TRUE for every syntactically valid pid
+// — a stale pid file would have been reported as a live resident forever, and
+// the comment claimed the opposite. A reporting helper that cannot ask must say
+// "unknown", and the only honest encoding of unknown in a bool is false: the
+// caller then reports no resident, which is a gap someone can act on, rather
+// than a warm resident that does not exist.
+//
+// It is not used to decide socket takeover, so the conservative direction costs
+// nothing. If that ever changes, this needs a real probe, not a default.
+func pidAlive(*os.Process) bool { return false }

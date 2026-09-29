@@ -178,27 +178,61 @@ func TestChildCloseIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestCallTimeoutKeepsChildAlive: a timeout bounds the wait, not the
-// process. Discarding a warm child because one query was slow would
-// reintroduce exactly the spawn cost the child exists to remove.
+// TestCallTimeoutKeepsChildAlive: a timeout bounds the wait, not the process.
+// Discarding a warm child because one query was slow would reintroduce exactly
+// the spawn cost the child exists to remove.
+//
+// The fake is in `slow` mode and stalls AFTER reading the request, so the
+// client is genuinely waiting on an engine that is sitting on the call. The
+// previous version of this test aimed a nanosecond deadline at an instant fake
+// and skipped itself when the fake won — which it always did, so the test that
+// guarded the surviving child never guarded anything.
+//
+// It also pins the sharp edge CallTimeout's contract has: the abandoned call
+// keeps the serial slot until the engine answers, so the next caller waits
+// behind it. The child is never lost, but it is not instantly free either.
+// Asserting "immediately reusable" here would be asserting a pool this design
+// deliberately does not have.
 func TestCallTimeoutKeepsChildAlive(t *testing.T) {
-	c, err := childRunner(t, fakeMCP(t, "ok")).StartChild()
+	t.Setenv("FAKEMCP_SLOW_MS", "500")
+	c, err := childRunner(t, fakeMCP(t, "slow")).StartChild()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
 	pid := c.Pid()
+
 	start := time.Now()
-	// The fake answers instantly, so this asserts the shape of the deadline
-	// rather than a slow query. A real timeout is exercised by the resident's
-	// own tests against a hanging engine.
-	if _, err := c.CallTimeout("search_graph", nil, time.Nanosecond); err == nil {
-		t.Skip("the fake beat the deadline; this run proves nothing")
+	res, err := c.CallTimeout("search_graph", nil, 30*time.Millisecond)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatalf("a 500ms call cannot answer a 30ms deadline: %s", res)
 	}
-	if time.Since(start) > 2*time.Second {
-		t.Error("CallTimeout did not return promptly")
+	if elapsed > 400*time.Millisecond {
+		t.Errorf("CallTimeout waited %s, so it did not honour its own deadline", elapsed)
 	}
 	if c.Pid() != pid || pid == 0 {
 		t.Errorf("a request timeout killed the child: %d -> %d", pid, c.Pid())
 	}
+
+	// The child must still be the same live process afterwards, and must serve
+	// again once the abandoned call drains. This is the claim the whole design
+	// rests on: a slow query costs a slow answer, not a new engine.
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		out, err := c.CallTimeout("search_graph", nil, 2*time.Second)
+		if err == nil {
+			if !strings.Contains(string(out), "answer for search_graph") {
+				t.Fatalf("reused child returned the wrong answer: %s", out)
+			}
+			if c.Pid() != pid {
+				t.Errorf("the child was replaced instead of reused: %d -> %d", pid, c.Pid())
+			}
+			return
+		}
+		lastErr = err
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("the child never became usable again after a timeout: %v", lastErr)
 }

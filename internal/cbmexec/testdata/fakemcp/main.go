@@ -12,6 +12,7 @@
 //	ok        handshake + tools/call, echoing the tool name
 //	noisy     ok, plus a notification and a bare log line before each answer
 //	crash     answers once, then exits non-zero with a reason on stderr
+//	slow      ok, but every tools/call takes slowMS to answer
 package main
 
 import (
@@ -19,13 +20,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
+
+// slowMS is how long the slow mode stalls per call. Long enough that a test
+// deadline of a few milliseconds cannot accidentally win the race, short enough
+// that a test waiting for the call to drain does not sit there.
+const slowMS = 400
 
 func main() {
 	mode := "ok"
 	if len(os.Args) > 1 {
 		mode = os.Args[1]
+	}
+	stall := time.Duration(slowMS) * time.Millisecond
+	if v := os.Getenv("FAKEMCP_SLOW_MS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			stall = time.Duration(n) * time.Millisecond
+		}
 	}
 	noise := []string{
 		`{"jsonrpc":"2.0","method":"notifications/progress","params":{}}`,
@@ -65,6 +79,12 @@ func main() {
 			for _, n := range noise {
 				os.Stdout.WriteString(n + "\n")
 			}
+		}
+		// The stall happens AFTER the request is read and BEFORE the reply, so
+		// the client is genuinely waiting on a call the engine is sitting on.
+		// Sleeping before the read would not exercise the timeout at all.
+		if mode == "slow" && method == "tools/call" {
+			time.Sleep(stall)
 		}
 		result := `{}`
 		switch method {

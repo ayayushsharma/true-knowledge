@@ -476,3 +476,44 @@ func TestResidentDropsSilentConnection(t *testing.T) {
 		t.Errorf("a closed peer broke the resident: %v", err)
 	}
 }
+
+// A socket path that cannot bind must say so in terms the user can act on. The
+// kernel's own answer is "bind: invalid argument", which names neither the
+// cause nor the fix, and the cause here is a TK_HOME the user chose.
+//
+// Asserted through Serve rather than the unexported listen, because Serve is
+// the contract a caller actually gets.
+func TestServeRejectsAnOverlongSocketPath(t *testing.T) {
+	dir := t.TempDir()
+	// Grow the path past sun_path without needing a real 100-deep tree.
+	addr := filepath.Join(dir, strings.Repeat("p", 120))
+	srv := &resident.Server{
+		Addr:    addr,
+		PidFile: filepath.Join(dir, "resident.pid"),
+		Start:   func() (resident.Engine, error) { return newStub(), nil },
+	}
+	err := srv.Serve(context.Background())
+	if err == nil {
+		t.Fatal("expected an overlong socket path to be refused")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "TK_HOME") {
+		t.Errorf("error must name the thing to change: %v", err)
+	}
+	if !strings.Contains(msg, "shorter") {
+		t.Errorf("error must say which direction to move: %v", err)
+	}
+	// The portable limit, not Linux's. A path that fits Linux's 108-byte
+	// sun_path but not macOS's 104 must be refused here, because a tk that
+	// starts on one machine and moves to the other must not fail on arrival.
+	if !strings.Contains(msg, "103") {
+		t.Errorf("error must state the portable limit (103), not a platform-specific one: %v", err)
+	}
+	// Nothing may be left behind by a refusal.
+	if _, statErr := os.Stat(addr); !os.IsNotExist(statErr) {
+		t.Errorf("a refused listen left a socket file at %s", addr)
+	}
+	if _, statErr := os.Stat(srv.PidFile); !os.IsNotExist(statErr) {
+		t.Errorf("a refused listen left a pid file behind: %v", statErr)
+	}
+}

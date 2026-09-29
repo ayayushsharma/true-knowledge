@@ -72,6 +72,7 @@ var ErrQuiesced = errors.New("resident: quiesced for engine swap")
 func (s *Server) Serve(ctx context.Context) error {
 	ln, err := s.listen()
 	if err != nil {
+		s.logStartFailure(err)
 		return err
 	}
 	s.mu.Lock()
@@ -86,6 +87,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		defer os.Remove(s.PidFile)
 	}
 	if err := s.ensureEngine(); err != nil {
+		s.logStartFailure(err)
 		return err
 	}
 	s.log("resident listening on " + s.Addr)
@@ -231,6 +233,32 @@ func (s *Server) serveAction(conn io.Writer, req Request) {
 	}
 }
 
+// logStartFailure records why the resident never came up.
+//
+// Without it the only evidence of a failed start is the reason in a process
+// that has already exited. `tk mcp --detach` waits for a socket, and on
+// failure it can only say "nothing is listening" and point at this log — which
+// is a dead end if the log is empty. The common causes (a TK_HOME too long for
+// sun_path, a binary that will not exec) are exactly the ones a user needs
+// spelled out, and they are all knowable only here.
+func (s *Server) logStartFailure(err error) {
+	s.log("resident failed to start: " + oneLine(err.Error()))
+}
+
+// oneLine keeps a log record to one line. The log is line-delimited JSON, so a
+// multi-line reason would break the format for every record after it — and a
+// broken log is worse than a truncated message.
+func oneLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 300 {
+		s = s[:300] + "..."
+	}
+	return s
+}
+
 func writeReply(w io.Writer, r Reply) error {
 	raw, err := Encode(r)
 	if err != nil {
@@ -342,6 +370,16 @@ func (s *Server) Close() {
 	}
 }
 
+// maxAddrLen is the longest socket path that binds on every platform tk ships.
+//
+// sockaddr_un.sun_path is a fixed buffer: 104 bytes on macOS, 108 on Linux, both
+// counting the NUL. 103 is the smaller of the two usable lengths, so a path
+// that passes here works on both. The check exists because the kernel's own
+// answer is `bind: invalid argument`, which names neither the cause nor the
+// fix — and the cause is a long TK_HOME, which is exactly the kind of thing a
+// user needs told plainly.
+const maxAddrLen = 103
+
 // listen binds the socket, taking over a stale one.
 //
 // A leftover socket file from a crashed resident would otherwise make every
@@ -351,6 +389,10 @@ func (s *Server) Close() {
 // reuse. A live resident is never displaced — that would break every client
 // mid-call.
 func (s *Server) listen() (net.Listener, error) {
+	if len(s.Addr) > maxAddrLen {
+		return nil, fmt.Errorf("resident: socket path is %d bytes, over the %d a unix socket can hold; "+
+			"use a shorter TK_HOME (set --home or TK_HOME to a path under ~100 characters)", len(s.Addr), maxAddrLen)
+	}
 	ln, err := net.Listen("unix", s.Addr)
 	if err == nil {
 		return ln, nil
@@ -407,7 +449,7 @@ func PidAlive(path string) bool {
 	if err != nil {
 		return false
 	}
-	return proc.Signal(os.Signal(sig0)) == nil
+	return pidAlive(proc)
 }
 
 // log appends one line to tk.log's sibling resident log. Best-effort: a

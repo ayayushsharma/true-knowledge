@@ -217,8 +217,20 @@ func (c *Child) send(msg map[string]any) error {
 
 // CallTimeout bounds one call so a wedged engine cannot hold the resident's
 // single serial slot forever. It is a wall-clock cap on the request, not a
-// cancel of the child: the engine keeps running and stays usable, because a
-// slow query is not a reason to throw away a warm process.
+// cancel of the child: the engine keeps running, because a slow query is not a
+// reason to throw away a warm process.
+//
+// What "stays usable" means, precisely, because the weaker reading is a trap:
+// the abandoned call is still in flight and still holds the serial mutex, so
+// the next caller queues behind it and only proceeds once the engine answers or
+// dies. The child is never lost, but it is not instantly free either.
+//
+// That is a deliberate trade, not an oversight. Releasing the slot early would
+// mean either demultiplexing replies by id across concurrent readers — the
+// pool this design refused to build — or abandoning the child and paying a
+// fresh handshake, which is the spawn cost the child exists to remove. So the
+// timeout bounds what the CALLER waits, and a genuinely wedged engine
+// eventually trips the child into a dead state that fails fast.
 func (c *Child) CallTimeout(tool string, args map[string]any, d time.Duration) (json.RawMessage, error) {
 	if d <= 0 {
 		return c.CallTool(tool, args)

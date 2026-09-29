@@ -14,6 +14,7 @@ import (
 
 func cmdMCP(g *Globals) *cobra.Command {
 	var profile string
+	var detach bool
 	c := &cobra.Command{
 		Use:   "mcp",
 		Short: "Run MCP stdio proxy (profile: scout|analysis|minimal|memory), stdin EOF = instant exit",
@@ -21,6 +22,9 @@ func cmdMCP(g *Globals) *cobra.Command {
 			ctx, err := load(*g)
 			if err != nil {
 				return err
+			}
+			if detach {
+				return runDetach(cmd, ctx)
 			}
 			profile, err := resolveProfile(cmd.Flags().Changed("tool-profile"), profile, os.Getenv("TK_MCP_PROFILE"), ctx.Cfg.MCP.Profile)
 			if err != nil {
@@ -75,6 +79,8 @@ func cmdMCP(g *Globals) *cobra.Command {
 	}
 	c.Flags().StringVar(&profile, "tool-profile", mcp.ProfileScout,
 		"tool surface: scout (11) | analysis (14) | minimal (3) | memory (22); explicit flag beats TK_MCP_PROFILE and config mcp.profile")
+	c.Flags().BoolVar(&detach, "detach", false,
+		"start a background resident holding one warm CBM child, then return; later tk reads use it, and every command still works without it")
 	_ = c.RegisterFlagCompletionFunc("tool-profile", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		return config.ValidProfiles(), cobra.ShellCompDirectiveNoFileComp
 	})

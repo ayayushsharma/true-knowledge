@@ -13,6 +13,7 @@ import (
 	"github.com/ayayushsharma/true-knowledge/internal/config"
 	"github.com/ayayushsharma/true-knowledge/internal/gitx"
 	"github.com/ayayushsharma/true-knowledge/internal/paths"
+	"github.com/ayayushsharma/true-knowledge/internal/resident"
 	"github.com/ayayushsharma/true-knowledge/internal/store"
 	"github.com/ayayushsharma/true-knowledge/internal/trace"
 	"github.com/spf13/cobra"
@@ -145,6 +146,11 @@ func sinceMs(t time.Time) int64 { return time.Since(t).Milliseconds() }
 
 // cbmCall runs one graph tool through the single spawn wrapper,
 // recording timing for tk.log. Use everywhere instead of r.Run.
+//
+// Writes go here and stay one-shot. A resident is a read accelerator: letting
+// a write share the child's state would mean a resident that quietly mutates
+// a store while an index is running, and the failure would be a corrupt graph
+// rather than a visible error.
 func (c *Ctx) cbmCall(ctx context.Context, tool string, payload map[string]any) (string, error) {
 	t0 := time.Now()
 	out, err := c.Run.Run(ctx, tool, payload)
@@ -156,17 +162,85 @@ func (c *Ctx) cbmCall(ctx context.Context, tool string, payload map[string]any) 
 	return out, err
 }
 
+// residentTry asks a running resident to answer one read.
+//
+// It returns ok=false when there is no resident to ask, which is the normal case
+// and not an error: the resident is opt-in, so most invocations spawn exactly
+// as they did before it existed.
+//
+// A resident that answers with an error is NOT treated as absent — the engine
+// said no, and re-running the same call in a fresh process would only produce
+// the same no, slower. So the three outcomes stay distinct, which is why this
+// returns a separate error rather than folding the refusal into ok=false:
+// absent, refused, and answered must never collapse into one. Folding them
+// reports a failed engine call as a successful empty result.
+func (c *Ctx) residentTry(tool string, payload map[string]any, structured bool) (cbmexec.Result, bool, error) {
+	if !c.CBMOK {
+		return cbmexec.Result{}, false, nil
+	}
+	t0 := time.Now()
+	reply, err := (&resident.Client{Addr: c.Paths.ResidentSocket()}).Call(resident.Request{
+		Tool: tool, Args: payload, Structured: structured,
+	})
+	if err != nil {
+		return cbmexec.Result{}, false, nil
+	}
+	if reply.Error != "" {
+		// The engine refused. That is an answer, and it is recorded as a
+		// failed cbm call so tk.log shows what happened without inventing a
+		// second attempt nobody made.
+		ev := trace.Event{Backend: "resident", Op: tool, Ms: sinceMs(t0), OK: false, Error: firstLine(reply.Error)}
+		c.record(ev)
+		return cbmexec.Result{}, true, errors.New(reply.Error)
+	}
+	res, perr := cbmexec.ParseResult(reply.Result)
+	ev := trace.Event{Backend: "resident", Op: tool, Ms: sinceMs(t0), OK: perr == nil, Structured: res.Data != nil}
+	if perr != nil {
+		ev.Error = firstLine(perr.Error())
+	}
+	c.record(ev)
+	if perr != nil {
+		return cbmexec.Result{}, true, perr
+	}
+	return res, true, nil
+}
+
 // cbmCallJSON runs a read-only graph tool through the envelope-first
 // wrapper, recording timing for tk.log. Writes stay on cbmCall.
+//
+// A resident is asked first and the spawn is the fallback. The order matters:
+// the resident is warm and the spawn is not, so dialling first is what makes a
+// running resident worth starting. Falling back on any dial failure is what
+// makes the resident safe to leave running.
 func (c *Ctx) cbmCallJSON(ctx context.Context, tool string, payload map[string]any) (string, error) {
+	if res, ok, rerr := c.residentTry(tool, payload, false); ok {
+		if rerr != nil {
+			return "", fmt.Errorf("cbm %s: %w", tool, rerr)
+		}
+		if res.Text == "" && res.Data == nil {
+			return "", fmt.Errorf("cbm %s: resident returned nothing", tool)
+		}
+		return res.Text, nil
+	}
 	t0 := time.Now()
-	out, err := c.Run.RunJSON(ctx, tool, payload)
-	ev := trace.Event{Backend: "cbm", Op: tool, Ms: sinceMs(t0), OK: err == nil}
+	res, err := c.Run.RunJSONResult(ctx, tool, payload)
+	ev := trace.Event{Backend: "cbm", Op: tool, Ms: sinceMs(t0), OK: err == nil, Detail: spawnDetail(res)}
 	if err != nil {
 		ev.Error = firstLine(err.Error())
 	}
 	c.record(ev)
-	return out, err
+	return res.Text, err
+}
+
+// spawnDetail annotates the call's engine cost when it was not the expected
+// one. One is unremarkable and stays out of the log; two names the format
+// fallback that caused it, which is the only way a reader can tell an engine
+// that needed two spawns from one that needed one.
+func spawnDetail(res cbmexec.Result) string {
+	if res.Spawns > 1 {
+		return fmt.Sprintf("spawns=%d", res.Spawns)
+	}
+	return ""
 }
 
 // cbmRaw runs raw `cbm cli` argv (tk cbm passthrough), recorded.
@@ -205,9 +279,15 @@ func (c *Ctx) projectNames() []string {
 // recorded for tk.log like every other call. The caller gets both faces of
 // the reply: Data for machines, Text for humans.
 func (c *Ctx) cbmCallStructured(ctx context.Context, tool string, payload map[string]any) (cbmexec.Result, error) {
+	if res, ok, rerr := c.residentTry(tool, payload, true); ok {
+		if rerr != nil {
+			return cbmexec.Result{}, fmt.Errorf("cbm %s: %w", tool, rerr)
+		}
+		return res, nil
+	}
 	t0 := time.Now()
 	res, err := c.Run.RunStructured(ctx, tool, payload)
-	ev := trace.Event{Backend: "cbm", Op: tool, Ms: sinceMs(t0), OK: err == nil, Structured: res.Data != nil}
+	ev := trace.Event{Backend: "cbm", Op: tool, Ms: sinceMs(t0), OK: err == nil, Structured: res.Data != nil, Detail: spawnDetail(res)}
 	if err != nil {
 		ev.Error = firstLine(err.Error())
 	}

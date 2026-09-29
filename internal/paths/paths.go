@@ -98,6 +98,29 @@ func (p Paths) ConfigFile() string   { return filepath.Join(p.Config, "config.js
 func (p Paths) RegistryFile() string { return filepath.Join(p.Data, "tk.json") }
 func (p Paths) LogFile() string      { return filepath.Join(p.State, "logs", "tk.log") }
 
+// ResidentLog is the resident's own lifecycle log, deliberately NOT tk.log.
+//
+// tk.log is one JSON invocation envelope per line and is read with jq
+// recipes AGENTS.md documents, including `[.ts, (.argv|join(" "))]`. A
+// resident "listening" line is not an invocation — it has no argv, and one
+// such line makes that recipe fail for the whole file rather than for itself.
+// Lifecycle belongs beside the trace, not inside it.
+func (p Paths) ResidentLog() string { return filepath.Join(p.State, "logs", "resident.log") }
+
+// ResidentSocket is the Unix socket `tk mcp --detach` listens on, and
+// ResidentPid the pid file beside it.
+//
+// The socket lives in State rather than in the CBM runtime dir because it is
+// tk's own endpoint, not a rendezvous token CBM hands out. State is already
+// 0700 from Ensure, so the socket inherits an owner-only directory: a peer
+// that cannot enter the directory cannot dial the socket either.
+//
+// The name is short on purpose. A Unix socket path is a sun_path, capped at
+// 104 bytes on macOS, and a State path built from a deep XDG home can reach
+// that. "resident.sock" leaves room that a descriptive name would spend.
+func (p Paths) ResidentSocket() string { return filepath.Join(p.State, "resident.sock") }
+func (p Paths) ResidentPid() string    { return filepath.Join(p.State, "resident.pid") }
+
 // IgnoreFile is the global plain-dir index ignore list (<config>/ignore).
 // Line-based, gitignore-lite (see zoekttext.parseIgnores): "#" comments, a
 // leading "/" pins to a project root, a trailing "/" targets directories,

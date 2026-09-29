@@ -446,37 +446,6 @@ func TestResidentEngineErrorIsAValue(t *testing.T) {
 	}
 }
 
-// TestResidentDropsSilentConnection: a client that connects and never writes
-// must not hold the single serial slot forever. A resident that is alive but
-// wedged is worse than one that is absent, because the client would keep
-// dialing it.
-func TestResidentDropsSilentConnection(t *testing.T) {
-	eng := newStub()
-	dir := t.TempDir()
-	addr := filepath.Join(dir, "resident.sock")
-	srv := &resident.Server{Addr: addr, Start: func() (resident.Engine, error) { return eng, nil }}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = srv.Serve(ctx) }()
-	waitFor(t, addr)
-
-	silent, err := net.DialTimeout("unix", addr, time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The read deadline on the server side is 30s, which is too long to wait
-	// for here. This asserts the slot is not held by checking the next real
-	// call is still served promptly *after* the silent peer is dropped by the
-	// server's own deadline; a shorter assertion is left to the e2e suite.
-	// Close it so the assertion below is about the healthy path.
-	_ = silent.Close()
-
-	client := &resident.Client{Addr: addr, Timeout: 3 * time.Second}
-	if _, err := client.Call(resident.Request{Tool: "ping"}); err != nil {
-		t.Errorf("a closed peer broke the resident: %v", err)
-	}
-}
-
 // A socket path that cannot bind must say so in terms the user can act on. The
 // kernel's own answer is "bind: invalid argument", which names neither the
 // cause nor the fix, and the cause here is a TK_HOME the user chose.
@@ -515,5 +484,45 @@ func TestServeRejectsAnOverlongSocketPath(t *testing.T) {
 	}
 	if _, statErr := os.Stat(srv.PidFile); !os.IsNotExist(statErr) {
 		t.Errorf("a refused listen left a pid file behind: %v", statErr)
+	}
+}
+
+// A silent client must not be able to delay an unrelated request. The resident
+// held one connection at a time, so handling inline made "connect and never
+// write" cost the NEXT caller its entire fallback budget — after which tk
+// quietly answered from a fresh one-shot engine, defeating the warm resident
+// with a peer that said nothing.
+//
+// tk makes these connections itself: CallTimeout abandons a slow request
+// without closing it, because the child has to stay alive. The hostile case is
+// not hypothetical, it is a slow query.
+func TestSilentClientDoesNotDelayAnUnrelatedRequest(t *testing.T) {
+	eng := newStub()
+	addr := startServer(t, func() (resident.Engine, error) { return eng, nil })
+
+	// Connect, and never write a byte on this connection.
+	quiet, err := net.Dial("unix", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer quiet.Close()
+
+	// Give the accept loop time to pick it up and block on it. Inline handling
+	// would still be sitting here, and the next call would queue behind.
+	waitFor(t, addr)
+
+	start := time.Now()
+	reply, err := (&resident.Client{Addr: addr}).Call(resident.Request{Tool: "ping"})
+	if err != nil {
+		t.Fatalf("request behind a silent client failed: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("a silent client delayed an unrelated request by %s", elapsed)
+	}
+	if reply.Error != "" {
+		t.Errorf("reply: %s", reply.Error)
+	}
+	if eng.callCount() != 1 {
+		t.Errorf("the engine saw %d calls, want 1", eng.callCount())
 	}
 }

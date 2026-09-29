@@ -56,6 +56,26 @@ type Server struct {
 	// one serializes requests. The engine is driven one at a time, so a second
 	// caller waits here rather than interleaving bytes on the child's pipes.
 	one sync.Mutex
+
+	// readDeadline bounds how long one connection may sit without sending a
+	// request. Zero means defaultConnReadDeadline. It is a field only so a test
+	// can prove the hangup happens without waiting 30 seconds; nothing outside
+	// this package sets it.
+	readDeadline time.Duration
+}
+
+// defaultConnReadDeadline is how long a connection may sit without sending a
+// request before the resident hangs up on it. Since accepting moved out of the
+// accept loop, a silent connection no longer blocks anyone, so this bounds a
+// goroutine rather than preventing an outage.
+const defaultConnReadDeadline = 30 * time.Second
+
+// connReadDeadline resolves the zero-value default.
+func (s *Server) connReadDeadline() time.Duration {
+	if s.readDeadline > 0 {
+		return s.readDeadline
+	}
+	return defaultConnReadDeadline
 }
 
 // ErrQuiesced is returned to a client that arrives while the resident is
@@ -108,21 +128,36 @@ func (s *Server) Serve(ctx context.Context) error {
 			}
 			return err
 		}
-		// Serial, inline. Handling in the accept loop is what makes "one
-		// request at a time" true by construction rather than by a lock that
-		// could be forgotten on a new path.
-		s.serveConn(conn)
+		// Per-connection, but still one request at a time. The serialization
+		// that matters is the ENGINE's: s.one in serveConn is what keeps the
+		// CBM child driven one call at a time, and it holds for any number of
+		// goroutines.
+		//
+		// Accepting inline instead made the read half of the protocol as
+		// fragile as the write half. Measured: one client that connects and
+		// never writes delayed the NEXT unrelated read by 19.5s — the caller's
+		// whole fallback budget — and tk silently answered from a fresh
+		// one-shot engine, so a warm resident was destroyed by a peer that
+		// said nothing. tk causes this itself: CallTimeout abandons a slow
+		// request without closing the connection, because the child must be
+		// left alive. So "clients are well-behaved" was never true here.
+		//
+		// The read deadline below still bounds a silent connection's goroutine,
+		// so the cost is bounded per connection and not per accept loop.
+		go s.serveConn(conn)
 	}
 }
 
-// serveConn answers exactly one request then closes.
+// serveConn answers exactly one request then closes. It runs in its own
+// goroutine, so it must be safe to call concurrently with itself.
 func (s *Server) serveConn(conn net.Conn) {
 	defer conn.Close()
-	// A read deadline is not optional: a client that connects and never writes
-	// would otherwise hold the single serial slot forever, and the resident
-	// would be alive but useless — the worst state for a thing whose entire
-	// job is to be warm.
-	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	// A read deadline is not optional. A client that connects and never writes
+	// would otherwise hold a goroutine for the life of the resident, and the
+	// process would grow one per silent peer. It no longer blocks anyone, so
+	// this bounds a leak instead of preventing an outage — which is the whole
+	// reason accepting moved out of the loop.
+	_ = conn.SetReadDeadline(time.Now().Add(s.connReadDeadline()))
 	line, err := bufio.NewReader(io.LimitReader(conn, 8<<20)).ReadBytes('\n')
 	if err != nil && len(line) == 0 {
 		return

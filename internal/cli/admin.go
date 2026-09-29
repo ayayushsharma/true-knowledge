@@ -8,11 +8,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/ayayushsharma/true-knowledge/internal/backends"
 	"github.com/ayayushsharma/true-knowledge/internal/config"
 	"github.com/ayayushsharma/true-knowledge/internal/installer"
+	"github.com/ayayushsharma/true-knowledge/internal/resident"
 	"github.com/spf13/cobra"
 )
 
@@ -289,16 +291,40 @@ Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DE
 					// Only a real replacement stops a daemon. --check, --dry-run
 					// and an up-to-date no-op never reach this branch, and a
 					// first install has no daemon to stop.
-					q, qerr := ctx.quiesceDaemon(cmd.Context(), st.InCache)
+					//
+					// The resident is quiesced for the same reason and in the
+					// same branch, because it too holds the old image open. It
+					// is a separate call rather than part of the daemon one:
+					// they are different processes with different failure
+					// modes, and the resident's socket must survive the swap
+					// while the daemon's does not.
+					// Two separate results, deliberately not one. They describe
+					// two different processes with two different recovery paths,
+					// and folding them into a single value loses one of them:
+					// an install with a daemon but no resident would find the
+					// resident's empty result had overwritten the daemon's, and
+					// silently leave the daemon stopped.
+					qd, qerr := ctx.quiesceDaemon(cmd.Context(), st.InCache)
+					var qr Quiesce
+					if qerr == nil {
+						qr, qerr = ctx.quiesceResident()
+					}
 					if qerr != nil {
 						failed = append(failed, name)
 						rows = append(rows, row{name, "failed", qerr.Error()})
 						lines = append(lines, fmt.Sprintf("%-8s FAILED: %v", name, qerr))
 						continue
 					}
-					if q.Was {
-						lines = append(lines, fmt.Sprintf("%-8s %s", name, q.Note()))
+					if qd.Was {
+						lines = append(lines, fmt.Sprintf("%-8s %s", name, qd.Note()))
 					}
+					if qr.Was {
+						lines = append(lines, fmt.Sprintf("%-8s %s", name, qr.Note()))
+					}
+					// The engine is released only for the CBM binary. Quiescing
+					// around an unrelated backend's install would idle a warm
+					// resident for nothing.
+					engineReleased := qr.Was && name == "cbm"
 					plan, err := installer.Install(cmd.Context(), ctx.Paths.Cache, b, pin, backends.HostGOOS(), backends.HostGOARCH())
 					if err != nil {
 						// A backend that did not install is a failed command, not a
@@ -308,6 +334,15 @@ Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DE
 						failed = append(failed, name)
 						rows = append(rows, row{name, "failed", err.Error()})
 						lines = append(lines, fmt.Sprintf("%-8s FAILED: %v", name, err))
+						// The resident is left quiesced here, which is a safe
+						// state but not a running one. Resuming costs a spawn and
+						// returns the machine to serving, so it is done even on
+						// the failure path.
+						if engineReleased {
+							if rerr := ctx.resumeResident(); rerr != nil {
+								lines = append(lines, fmt.Sprintf("%-8s note: resident left quiesced: %v", name, rerr))
+							}
+						}
 						continue
 					}
 					// A daemon that was running is brought back on the new binary.
@@ -316,11 +351,22 @@ Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DE
 					// own. A failure to resume is reported, not fatal: the install
 					// itself succeeded and the binary is on disk.
 					note := ""
-					if q.Was {
+					if qd.Was {
 						if rerr := ctx.resumeDaemon(cmd.Context()); rerr != nil {
 							note = fmt.Sprintf(" (daemon not resumed: %v)", rerr)
 						} else {
 							note = " (daemon restarted)"
+						}
+					}
+					// The resident is resumed on the new binary. Its socket was
+					// never unbound, so this is the only step that makes the
+					// install visible to the reads that were falling back to
+					// spawns while it was quiesced.
+					if engineReleased {
+						if rerr := ctx.resumeResident(); rerr != nil {
+							note += fmt.Sprintf(" (resident not resumed: %v)", rerr)
+						} else {
+							note += " (resident engine replaced)"
 						}
 					}
 					rows = append(rows, row{name, "installed", plan.Dest})
@@ -396,12 +442,23 @@ func (c *Ctx) quiesceDaemon(ctx context.Context, replacing bool) (Quiesce, error
 type Quiesce struct {
 	Was bool
 	Pid string
+	// Resident distinguishes the two things tk stops. The wording matters: a
+	// daemon is retired and replaced by a new process, a resident is asked to
+	// release one child and keeps serving throughout. Printing them the same
+	// way would make an operator think their resident had been stopped.
+	Resident bool
 }
 
 // Note is the line tk prints when it stops something. Announcing the pid is not
 // decoration: a daemon stop is the one action tk takes on a process the user did
 // not name, so it has to be attributable.
 func (q Quiesce) Note() string {
+	if q.Resident {
+		if q.Pid == "" {
+			return "asked the resident to release its engine before replacing its binary"
+		}
+		return fmt.Sprintf("asked the resident (pid %s) to release its engine before replacing its binary", q.Pid)
+	}
 	if q.Pid == "" {
 		return "stopped the tk daemon before replacing its binary"
 	}
@@ -414,6 +471,56 @@ func (q Quiesce) Note() string {
 func (c *Ctx) resumeDaemon(ctx context.Context) error {
 	_, err := c.cbmDaemon(ctx, "daemon", "start")
 	return err
+}
+
+// quiesceResident asks a running resident to release its warm child so the
+// binary underneath it can be replaced, and reports what it found.
+//
+// The resident is NOT killed, and the difference is the whole design. A killed
+// resident takes its socket with it, so every client that redials during an
+// upgrade either blocks on a dead path or silently spawns; and it discards the
+// warm state the user started it for. Quiescing keeps the endpoint bound and
+// answering — with ErrQuiesced, which the read path already treats as "not
+// served, fall back" — for exactly as long as the install takes.
+//
+// Not a failure when there is no resident: the resident is opt-in, so most
+// installs have nothing to quiesce and must not be slowed or broken by it.
+// A refusal from a resident that IS running, though, is fatal to the install.
+// Its child holds the same inode the new binary wants, and continuing would
+// install a file the resident could never pick up.
+func (c *Ctx) quiesceResident() (Quiesce, error) {
+	if c.Run == nil || !c.CBMOK {
+		return Quiesce{}, nil
+	}
+	cli := &resident.Client{Addr: c.Paths.ResidentSocket()}
+	if !cli.Available() {
+		return Quiesce{}, nil
+	}
+	st, err := cli.Control(resident.ActionQuiesce)
+	if err != nil {
+		return Quiesce{}, fmt.Errorf("resident would not release its engine: %w", err)
+	}
+	return Quiesce{Was: true, Pid: strconv.Itoa(st.PID), Resident: true}, nil
+}
+
+// resumeResident starts a fresh engine on the newly installed binary. The
+// resident process is untouched, so the socket never went away and no client
+// ever saw a gap.
+//
+// A failure here is reported, never fatal: the resident is already quiesced and
+// correctly refusing work, which is a safe state to leave a machine in. Failing
+// the install would be wrong, because the binary did land — and refusing to
+// resume would be worse, so a resident that cannot be resumed is still asked
+// once more on the next install.
+func (c *Ctx) resumeResident() error {
+	st, err := (&resident.Client{Addr: c.Paths.ResidentSocket()}).Control(resident.ActionResume)
+	if err != nil {
+		return err
+	}
+	if st.EnginePID == 0 {
+		return fmt.Errorf("resident resumed without an engine")
+	}
+	return nil
 }
 
 // daemonActive reads `daemon status` output. It exits nonzero when nothing is

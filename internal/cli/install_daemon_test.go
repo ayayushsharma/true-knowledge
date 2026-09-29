@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -13,9 +14,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ayayushsharma/true-knowledge/internal/backends"
 	"github.com/ayayushsharma/true-knowledge/internal/config"
+	"github.com/ayayushsharma/true-knowledge/internal/paths"
+	"github.com/ayayushsharma/true-knowledge/internal/resident"
 )
 
 // fakeDaemon is a script standing in for CBM, installed as the managed binary
@@ -361,5 +365,151 @@ func TestQuiesceNoteNamesThePid(t *testing.T) {
 	}
 	if got := (Quiesce{Was: true}).Note(); strings.Contains(got, "pid") {
 		t.Errorf("no pid parsed must not print an empty one: %q", got)
+	}
+}
+
+// A live resident must survive an install with its socket bound throughout.
+// The resident's promise is that reads are served by a warm child on a stable
+// endpoint, so the two things worth proving are that the engine was released
+// before any bytes moved (it holds the old inode) and that the endpoint never
+// went away (every client that redials mid-upgrade depends on it).
+func TestInstallQuiescesAndResumesALiveResident(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake daemon and unix socket are POSIX-only")
+	}
+	home := t.TempDir()
+	d := &fakeDaemon{active: true}
+	d.install(t, home)
+
+	// Every start hands back a distinct engine with a distinct pid. A stub that
+	// reused one object would report the same pid before and after the install,
+	// which is exactly the answer a test for "the engine was replaced" must not
+	// be able to accept.
+	var starts int
+	nextPid := func() int { starts++; return 5000 + starts }
+	p := paths.Resolve(home)
+	if err := p.Ensure(); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	srv := &resident.Server{
+		Addr:    p.ResidentSocket(),
+		PidFile: p.ResidentPid(),
+		LogPath: p.ResidentLog(),
+		Start: func() (resident.Engine, error) {
+			return &routingEngine{reply: `{"content":[{"type":"text","text":"stub"}]}`, pid: nextPid()}, nil
+		},
+	}
+	sctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = srv.Serve(sctx); close(done) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	cli := &resident.Client{Addr: p.ResidentSocket()}
+	if !waitForServing(p.ResidentSocket(), 10*time.Second) {
+		t.Fatal("resident never served on its socket")
+	}
+	if !cli.Running() {
+		t.Fatal("a freshly started resident must report running with an engine")
+	}
+	pidBefore, err := cli.Control(resident.ActionStatus)
+	if err != nil {
+		t.Fatalf("status before install: %v", err)
+	}
+
+	// The socket has to be dialable at every instant of the install, not just
+	// before and after it. Probing in a goroutine turns "never unbound" into
+	// something checked rather than assumed.
+	probes, stopProbing := make(chan int, 1), make(chan struct{})
+	probeErrs := make(chan string, 8)
+	go func() {
+		for {
+			select {
+			case <-stopProbing:
+				probes <- 1
+				close(probeErrs)
+				return
+			default:
+			}
+			// A quiesced resident answers with an error on purpose, so only a
+			// dial failure counts as a break in the endpoint.
+			if _, err := cli.Call(resident.Request{Action: resident.ActionStatus}); err != nil {
+				select {
+				case probeErrs <- err.Error():
+				default:
+				}
+			}
+		}
+	}()
+
+	var quiescedAtFetch bool
+	servingRelease(t, d, func() {
+		st, err := cli.Control(resident.ActionStatus)
+		quiescedAtFetch = err == nil && st.Quiesced && st.EnginePID == 0
+	})
+	out, err := installCmd(t, home, "cbm", "--update")
+	close(stopProbing)
+	<-probes // the prober closes probeErrs on its way out; closing it twice panics
+	var breaks []string
+	for e := range probeErrs {
+		breaks = append(breaks, e)
+	}
+	if err != nil {
+		t.Fatalf("install: %v\n%s", err, out)
+	}
+	if !quiescedAtFetch {
+		t.Error("archive bytes were fetched while the resident still held its engine")
+	}
+	if len(breaks) > 0 {
+		t.Errorf("the resident socket stopped accepting during the install: %v", breaks)
+	}
+	st, err := cli.Control(resident.ActionStatus)
+	if err != nil {
+		t.Fatalf("status after install: %v", err)
+	}
+	if st.Quiesced {
+		t.Error("resident left quiesced after a successful install")
+	}
+	if st.EnginePID == 0 {
+		t.Error("resident resumed without an engine")
+	}
+	if !strings.Contains(out, "resident engine replaced") {
+		t.Errorf("install did not report the resident swap: %s", out)
+	}
+	// The engine really is a new one: the resident must not be reusing the
+	// child it was asked to release, which is the whole point of the swap. The
+	// pid is the proof, because it is the only observable that changes when the
+	// child does.
+	if st.EnginePID == pidBefore.EnginePID {
+		t.Errorf("engine was not replaced: pid %d before and after the install", st.EnginePID)
+	}
+	// And it serves again, from the same endpoint, after the install.
+	if _, err := cli.Call(resident.Request{Tool: "search_graph", Args: map[string]any{}}); err != nil {
+		t.Errorf("resident not serving after install: %v", err)
+	}
+}
+
+// With no resident running, an install must be completely unaffected. The
+// resident is opt-in, and an install that grew a dependency on it would fail
+// for every user who never detached one.
+func TestInstallWithNoResidentIsUnaffected(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake daemon is a sh script")
+	}
+	home := t.TempDir()
+	d := &fakeDaemon{active: true}
+	d.install(t, home)
+	servingRelease(t, d, func() {})
+	out, err := installCmd(t, home, "cbm", "--update")
+	if err != nil {
+		t.Fatalf("install: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "resident") {
+		t.Errorf("an install with no resident must not mention one: %s", out)
+	}
+	if !d.called("daemon stop") || !d.called("daemon start") {
+		t.Errorf("the daemon path must be unaffected by the resident checks: %v", d.invoked())
 	}
 }

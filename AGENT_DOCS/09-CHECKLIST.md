@@ -2,8 +2,8 @@
 id: 09-checklist
 title: Operating rules and the PR gate for agents and humans
 status: authoritative
-date: 2026-09-28
-supersedes: [AGENTS.md, AGENT_DOCS/history/DECISIONS/2026-09-28-failed-install-is-a-failed-command.md, AGENT_DOCS/history/ROADMAP.md §Remaining-work backlog, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
+date: 2026-09-30
+supersedes: [AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md, AGENT_DOCS/history/DECISIONS/2026-09-29-measure-latency-not-daemon-routing.md, AGENTS.md, AGENT_DOCS/history/DECISIONS/2026-09-28-failed-install-is-a-failed-command.md, AGENT_DOCS/history/ROADMAP.md §Remaining-work backlog, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
 superseded-by: null
 ---
 
@@ -12,7 +12,7 @@ superseded-by: null
 
 # 09-CHECKLIST — how to work in this repo
 
-## Eight rules
+## Nine rules
 
 1. **Delegate; never reimplement.** Parsing, full-text search, embeddings, the
    watcher, the install matrix across 45 client surfaces, the UI on port 9749,
@@ -60,6 +60,11 @@ superseded-by: null
 
    It installs the pinned CBM itself, indexes the repo, and checks nine
    properties end to end.
+9. **Measure latency in layers, and never trust `tk.log` for a spawn count.**
+   A perf claim without a per-layer breakdown is an opinion, and `tk.log`
+   under-counts spawns (rule 8's fallback re-spawns untraced). Use
+   `mise run bench` or `mise run bench-real`, and read layer F's logged-vs-
+   observed columns before quoting any figure.
 
 ## Before you commit
 
@@ -87,7 +92,9 @@ superseded-by: null
 
 * Thin shipper over CBM, not a wrapper that grows its own engine.
 * Linux-style `true-knowledge/` directories everywhere, macOS included.
-* No tk supervisor daemon; the CBM coordination daemon is shared per account.
+* No tk supervisor daemon today; the CBM coordination daemon is shared per
+  account. A `tk mcp --detach` resident is decided but unbuilt and will retire
+  this line when it lands. `AGENT_DOCS/08-BACKLOG.md`.
 * `daemon` is CLI-only and never exposed over MCP.
 * Zoekt links as a library; CBM spawns. Zoekt is not a backend.
 * Explicit commands, never magic routing. One command name never silently means

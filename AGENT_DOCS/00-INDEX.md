@@ -2,7 +2,7 @@
 id: 00-index
 title: Docs index, precedence law, and the doc-writing contract
 status: authoritative
-date: 2026-09-27
+date: 2026-09-29
 supersedes: [AGENT_DOCS/history/00-AUTHORITY.md, AGENT_DOCS/history/AGENT-PROFILES.md, AGENT_DOCS/history/CBM-BOUNDARY.md, AGENT_DOCS/history/INDEXING.md, AGENT_DOCS/history/PATHS-CONFIG.md, AGENT_DOCS/history/REMAINING-WORK.md, AGENT_DOCS/history/ROADMAP.md]
 superseded-by: null
 ---
@@ -28,6 +28,7 @@ is answered. `manifest.json` is the machine-readable form of this table.
 | `09-CHECKLIST.md` | operating rules and PR gate for agents (plain English, safety) |
 | `history/DECISIONS/*.md` | 32 dated ADRs, verbatim, immutable |
 | `history/*.md` | 7 pre-consolidation docs, plus the frozen v1 spec, verbatim |
+| `THROWAWAY/*.md` | mutable working notes, **not authoritative**; read `THROWAWAY/INDEX.md` before a long search |
 | `manifest.json` | machine index: ids, titles, status, edges |
 
 `docs/man/tk*.1` is the only thing outside this directory: generated man pages,
@@ -49,6 +50,32 @@ Highest first:
    after a file's `date:` header still wins over that file
 4. `AGENT_DOCS/history/*.md` and the ADRs below the top-level files
 5. `AGENT_DOCS/history/compatible-implementation-spec.md` — frozen history, powerless on conflict
+6. `AGENT_DOCS/THROWAWAY/*.md` — bottom of the order, and not an authority at
+   all. A note that contradicts anything above is wrong and gets deleted.
+
+## Working notes come before the search, not after
+
+`AGENT_DOCS/THROWAWAY/` holds findings, dead ends, and half-verified
+hypotheses. It exists so that a question someone already half-answered is not
+answered again from scratch.
+
+**Read `THROWAWAY/INDEX.md` before any long search** — before grepping the repo
+for background, before reading upstream docs, before web search. This is
+mandatory, and it is not a substitute for verifying: the index tells you what
+was already tried, and you still check whatever you intend to rely on.
+
+`THROWAWAY/` is the one place in this repo where being wrong is cheap. A note
+is expected to start as `inferred`. The lifecycle is short on purpose:
+
+| Event | Action |
+|---|---|
+| Discovery | Write the note while you have the context. |
+| Becomes a decision or a rule | Promote: new dated ADR, then the rule in the affected `NN-*.md`. Delete the note. |
+| Contradicted by a higher doc | Delete it. A stale note costs more than no note. |
+
+Notes are mutable, which is the whole difference from `history/`. They carry no
+front matter and are exempt from the 200-line budget, but not from the
+forbidden-path rule in `Enforcement`.
 
 ## tk is pre-release. Nothing machine-readable is a compatibility promise.
 

@@ -2,8 +2,8 @@
 id: 05-indexing
 title: Indexing — modes, discovery, watcher, Zoekt text index, freshness
 status: authoritative
-date: 2026-09-27
-supersedes: [AGENT_DOCS/history/compatible-implementation-spec.md §7, AGENT_DOCS/history/INDEXING.md, AGENT_DOCS/history/DECISIONS/2026-09-23-explicit-source-search.md, AGENT_DOCS/history/DECISIONS/2026-09-23-zoekt-library-not-backend.md, AGENT_DOCS/history/DECISIONS/2026-09-24-zoekt-staleness.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-25-cross-repo-contract-verified.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
+date: 2026-09-30
+supersedes: [AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md, AGENT_DOCS/history/compatible-implementation-spec.md §7, AGENT_DOCS/history/INDEXING.md, AGENT_DOCS/history/DECISIONS/2026-09-23-explicit-source-search.md, AGENT_DOCS/history/DECISIONS/2026-09-23-zoekt-library-not-backend.md, AGENT_DOCS/history/DECISIONS/2026-09-24-zoekt-staleness.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-25-cross-repo-contract-verified.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
 superseded-by: null
 ---
 
@@ -152,10 +152,13 @@ index is running. Knobs reach CBM through `tk config` then `cbm config`:
 (50000). `watcher_enabled` is read once at daemon start, so flipping it needs
 `tk daemon stop` first.
 
-Artifacts: an explicit index writes `Best (VACUUM INTO + zstd -9)`, the watcher
-writes `Fast (zstd -3)`, both to `.codebase-memory/graph.db.zst`. The default is
-the gitignore artifact. Commit deliberately on a release cadence, never on every
-save.
+Two different files, and this section used to conflate them. **The store queries
+open is `<CBM_CACHE_DIR>/<project>.db`** — for tk, `<cache>/`, which is one root
+per tk home shared by every tk process under it. **`<repo>/.codebase-memory/` is
+a shareable export**, gitignored, that a teammate imports to skip a cold index;
+no query reads it, and tk must not watch or name it. An explicit index exports
+`Best (VACUUM INTO + zstd -9)`, the watcher exports `Fast (zstd -3)`. Commit
+deliberately on a release cadence, never on every save.
 
 ## The tk freshness contract
 
@@ -166,6 +169,14 @@ Zoekt existed is dirty and gets a text-index backfill on the next sync. No
 recorded state is ever reported clean while `source-search` would serve a stale
 index.
 
-Clean is a no-op. Dirty means the watcher handles it. Query responses carry
-`head`, `current`, and `fresh`. Check coverage before any negative claim. tk
-issues no cursors.
+Clean is a no-op. Dirty means the watcher handles it — and that is about
+**zoekt only**. `head`, `current`, and `fresh` are registry-versus-git
+comparisons, so they say nothing about whether the graph store covers a commit.
+The graph is refreshed by `tk index`, by the watcher, or by whoever indexed it,
+and tk verifies none of them; a non-empty answer carries no freshness signal at
+all. Follow `AGENT_DOCS/09-CHECKLIST.md` rule 4 before any negative claim.
+
+One thing that *is* guaranteed, by measurement: a long-lived CBM child
+re-resolves the store per call, so it serves the current graph after another
+process republishes. No tk-side invalidation exists or is needed.
+`AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md`.

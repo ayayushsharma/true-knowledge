@@ -2,8 +2,8 @@
 id: 08-backlog
 title: Backlog — milestones, remaining work, parked and rejected
 status: authoritative
-date: 2026-09-27
-supersedes: [AGENT_DOCS/history/compatible-implementation-spec.md §20, AGENT_DOCS/history/ROADMAP.md, AGENT_DOCS/history/REMAINING-WORK.md, AGENT_DOCS/history/DECISIONS/2026-09-25-fleet-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-fleet-cohort-queries-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-rrf-tuning-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-resource-limit-surfacing-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-trajectory-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-delivery-parked-download-scripts.md, AGENT_DOCS/history/DECISIONS/2026-09-24-evals-harness.md]
+date: 2026-09-30
+supersedes: [AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md, AGENT_DOCS/history/DECISIONS/2026-09-29-measure-latency-not-daemon-routing.md, AGENT_DOCS/history/compatible-implementation-spec.md §20, AGENT_DOCS/history/ROADMAP.md, AGENT_DOCS/history/REMAINING-WORK.md, AGENT_DOCS/history/DECISIONS/2026-09-25-fleet-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-fleet-cohort-queries-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-rrf-tuning-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-resource-limit-surfacing-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-trajectory-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-delivery-parked-download-scripts.md, AGENT_DOCS/history/DECISIONS/2026-09-24-evals-harness.md]
 superseded-by: null
 ---
 
@@ -13,8 +13,8 @@ Merged from the old roadmap and remaining-work files. Milestones first, then the
 detail, then what is parked and what is permanently rejected.
 
 Locked decisions: Go-only thin `tk` over CBM, Linux-style `true-knowledge/`
-dirs everywhere, no supervisor daemon, 27B as the default agent, Cobra-standard
-completion, cross-repo deferred.
+dirs everywhere, 27B as the default agent, Cobra-standard completion, cross-repo
+deferred. A resident daemon is decided but unbuilt; see Open work.
 
 ## Status
 
@@ -39,10 +39,9 @@ searchable, the ledger appends verbatim and trims on retrieval, and everything i
 Done-when for MVP4: a human completes register → index → explain → sync with tab
 completion everywhere and no agent present.
 
-Order logic: cross-repo rode MVP2 because it is one extra CBM pass, not a new
-store. Memory rode MVP3 because it adds stores with review risk. Human polish
-rode last because Cobra-standard is already usable and agent correctness gates
-the rest.
+Order logic: cross-repo rode MVP2 (one extra CBM pass, not a new store), memory
+rode MVP3 (stores with review risk), and human polish rode last (Cobra-standard
+is already usable; agent correctness gates the rest).
 
 ## PARKED INDEFINITELY
 
@@ -121,6 +120,36 @@ package manager, or a first tagged release.
 
 ## Open work
 
+### Spawn overhead — measured, shape decided, not built
+
+A read command takes **~4.9s** on CBM 0.11.0 with TensorFlow indexed, against a
+20-100ms target. Not the query (~110ms), not the store (2.3MB costs the same as
+686MB), not tk (D ≈ C). It is `nanosleep(1ms)` polling on a
+`cbm-version-cohort-*-v1.lock` admission lock that `cli` mode takes on every
+spawn and is documented never to need. A long-lived MCP child answers in
+**74ms**; a live daemon alone only cuts one-shot to ~1.8s. Method and dead ends:
+`AGENT_DOCS/THROWAWAY/2026-09-29-cbm-one-shot-latency.md`.
+
+**Decided: one shape, `tk mcp --detach`.** A resident holds one warm CBM MCP
+child and listens on a local socket; the CLI dials it and falls back to one-shot
+on any failure, so both faces cost the same and a dead resident is not an error.
+Explicit start, no auto-spawn, no idle timeout. The resident is a transport, not
+a query layer — it forwards to the child and returns CBM's `result` verbatim, so
+the two render paths are untouched. Linux and macOS first; Windows is a named
+follow-up touching only the socket and detach files. It needs **no** freshness
+machinery: a warm child re-resolves the store per call, measured, so there is no
+poller, watcher, or generation counter. `tk install cbm` swaps the child
+underneath a live resident and never kills it. This withdraws the no-supervisor
+rule in `AGENTS.md` and the no-PID/endpoint rule in `02-BOUNDARY.md`, so the ADR
+that builds it says so in its first paragraph. The decisions:
+`AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md`.
+
+Worth doing first, and independent: `runEnvelope`'s exit-0-no-envelope fallback
+re-spawns outside every traced call, so a non-conforming engine costs double the
+spawns and `tk.log` records one. Until it is fixed, `tk.log` is a lower bound
+and no spawn-count assertion is evidence. Method:
+`AGENT_DOCS/history/DECISIONS/2026-09-29-measure-latency-not-daemon-routing.md`.
+
 ### Stale-cursor protocol — P3, blocked
 
 tk issues no cursors; every tool is one-shot and bounded by `limit`. A resume
@@ -128,8 +157,8 @@ token plus an index-moved `STALE` verdict has no consumer until pagination
 exists, and the index-moved decision is the blocker: a tk-issued token must
 survive an index generation change, which means deciding what a stale tk token
 means when the engine's own offset has silently become invalid. Until that
-decision exists, treat the engine's `has_more` and `next_offset` as the whole
-pagination story and do not synthesize a tk cursor on top of them.
+exists, treat the engine's `has_more` and `next_offset` as the whole pagination
+story and do not synthesize a tk cursor on top of them.
 
 ### Evals harness — designed, not built
 
@@ -141,8 +170,8 @@ defaults to fake-CBM with `TK_LIVE=1` opting in. Verdicts are rule-based: `PASS`
 correct but coverage-dependent, or the ceiling exceeded; `FAIL` = non-zero exit,
 a missing artifact, or budget truncation. `est_tokens = chars/4` is a proxy and
 must be labeled as one. Journeys for a 27B: who-calls, breakage, orient, grep
-route, retention across processes, secret gate, semantic recall. One for a
-sub-8B filter. `report.json` is committed as evidence, and drift is a `FAIL`. A
+route, retention across processes, secret gate, semantic recall; one for a sub-8B
+filter. `report.json` is committed as evidence, and drift is a `FAIL`. A
 self-judging 27B scorer is a possible phase 2 and must never be the default.
 
 ### Text index ignore parity — P3, standing
@@ -150,9 +179,9 @@ self-judging 27B scorer is a possible phase 2 and must never be the default.
 `source_search` honors neither `.gitignore` nor `.cbmignore`, as documented in
 `05-INDEXING.md`. Closing it means reimplementing the engine's filter chain
 inside tk, which is forbidden; the narrow alternative, honoring
-`.sourcegraph/ignore` only, is still a tk-side filter and needs the same
-argument first. `TestIndexDirDoesNotReadGitignore` pins the behavior, so any
-change is deliberate and test-visible.
+`.sourcegraph/ignore` only, is still a tk-side filter and needs the same argument
+first. `TestIndexDirDoesNotReadGitignore` pins the behavior, so any change is
+deliberate and test-visible.
 
 ## Permanently rejected
 
@@ -166,7 +195,6 @@ Never re-propose these as "what is next".
 * **`tk completion-install`.** `tk completion <shell>` prints the script; tk
   never writes a user's rc.
 * **`status --watch`.** `watch -n2 tk status` plus `tk status --json` suffice.
-* **Generic cross-repo call graphs.** Out of scope permanently; upstream owns
-  them.
+* **Generic cross-repo call graphs.** Out of scope permanently; upstream owns them.
 * **Multi-repo "search the whole registry"** — parked above, and parked for the
   same trigger doctrine as the fleet.

@@ -20,3 +20,28 @@ run = "TK_E2E_REAL=1 TK_E2E_REPO=\"${REPO:?set REPO=/path/to/repo}\" go test -ta
 [tasks.e2e]
 description = "Fake-backend CLI + MCP suite, isolated TK_HOME, no network"
 run = "bash tests/e2e_mvp1.sh"
+
+[tasks.bench]
+description = "Per-layer latency breakdown against a real cbm and a registered project (opt-in)"
+run = "go run ./tests/bench"
+
+[tasks.bench-real]
+description = "Index a real repo, then measure it (opt-in, slow; downloads cbm on first run)"
+run = """
+set -eu
+REPO="${REPO:?set REPO=/path/to/repo}"
+T="$(mktemp -d)"
+trap 'rm -rf "$T"' EXIT
+export TK_HOME="$T/home"
+mise run build
+TK="$PWD/dist/tk"
+"$TK" install cbm
+B="$TK_HOME/cache/bin/codebase-memory-mcp"
+[ -x "$B" ] || { echo "tk install cbm did not produce $B" >&2; exit 1; }
+export TK_CBM_BIN="$B" TK_BIN="$TK" TK_PROJECT="$(basename "$REPO")"
+"$TK" init
+"$TK" config set allowed_root "$(dirname "$REPO")"
+"$TK" register "$REPO" --name "$TK_PROJECT"
+"$TK" index "$TK_PROJECT"
+TK_BENCH_N="${TK_BENCH_N:-15}" go run ./tests/bench
+"""

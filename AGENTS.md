@@ -5,11 +5,14 @@
 > Precedence law, doc-style contract, and the doc-change procedure:
 > `AGENT_DOCS/00-INDEX.md`.
 
-`tk` is a thin Go shipper over `codebase-memory-mcp` (CBM). Linux-first,
-Windows-compatible. tk owns paths, config, one spawn, and render; CBM owns the
-graph, the store, the daemon, and the watcher. `tk` installs every external
-dependency itself — no apt, brew, npm, or toolchain at runtime. There is no `tk`
-supervisor daemon; the CBM coordination daemon is shared per account.
+`tk` is a thin Go shipper over `codebase-memory-mcp` (CBM). Linux and macOS
+first; Windows a follow-up. tk owns paths, config, one spawn, and render; CBM
+owns the graph, the store, the daemon, and the watcher. `tk` installs every
+external dependency itself — no apt, brew, npm, or toolchain at runtime. There is no `tk`
+supervisor daemon; the CBM coordination daemon is shared per account. A resident
+session (`tk mcp --detach`) is **decided but unbuilt**; the line above changes
+when it lands, per
+`AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md`.
 
 ## Read this first
 
@@ -51,6 +54,20 @@ supervisor daemon; the CBM coordination daemon is shared per account.
    `AGENT_DOCS/history/DECISIONS/`, then the rule in the affected `NN-*.md` with
    a bumped header. History is immutable and `go test ./internal/docs` enforces
    it. A file over 200 lines is a bug.
+9. **Scan throwaway docs before any long search.** Read
+   `AGENT_DOCS/THROWAWAY/INDEX.md` before grepping the repo or the web for
+   background. Not instead of verifying — instead of rediscovering. Record a
+   finding there while you have the context; promote it to an ADR when it
+   becomes a decision and delete it here. Notes there are never authoritative.
+10. **Verify load-bearing claims; never generalize from a scoped note.** A
+    documented exception about one tool is not a property of the system —
+    `README.md:697` names `manage_adr`, and reading it as "long processes serve
+    stale data" produced an entire discarded subsystem. "No mechanism exists" is
+    not "no behaviour exists." Before designing around a path, check which file
+    the queries actually open; before trusting a lifetime or cache claim, probe a
+    real engine and record the environment; re-probe after a CBM upgrade. The
+    three wrong assumptions this rule exists for:
+    `AGENT_DOCS/THROWAWAY/2026-09-30-warm-child-store-freshness.md`.
 
 ## Commands
 

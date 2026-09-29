@@ -2,8 +2,8 @@
 id: 01-architecture
 title: Architecture — thin shipper over CBM, managed backends, trace log
 status: authoritative
-date: 2026-09-28
-supersedes: [AGENT_DOCS/history/DECISIONS/2026-09-28-tk-owns-the-binary-and-the-quiesce.md, AGENT_DOCS/history/DECISIONS/2026-09-28-delegate-backend-install-to-vendor.md, AGENT_DOCS/history/DECISIONS/2026-09-22-thin-tk-over-cbm.md, AGENT_DOCS/history/DECISIONS/2026-09-23-tk-managed-backends.md, AGENT_DOCS/history/DECISIONS/2026-09-23-download-at-install-and-setup.md, AGENT_DOCS/history/DECISIONS/2026-09-23-zoekt-library-not-backend.md, AGENT_DOCS/history/DECISIONS/2026-09-23-explicit-source-search.md, AGENT_DOCS/history/ROADMAP.md §MVP1, AGENT_DOCS/history/DECISIONS/2026-09-27-consolidated-agent-docs.md]
+date: 2026-09-30
+supersedes: [AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md, AGENT_DOCS/history/DECISIONS/2026-09-29-measure-latency-not-daemon-routing.md, AGENT_DOCS/history/DECISIONS/2026-09-28-tk-owns-the-binary-and-the-quiesce.md, AGENT_DOCS/history/DECISIONS/2026-09-28-delegate-backend-install-to-vendor.md, AGENT_DOCS/history/DECISIONS/2026-09-22-thin-tk-over-cbm.md, AGENT_DOCS/history/DECISIONS/2026-09-23-tk-managed-backends.md, AGENT_DOCS/history/DECISIONS/2026-09-23-download-at-install-and-setup.md, AGENT_DOCS/history/DECISIONS/2026-09-23-zoekt-library-not-backend.md, AGENT_DOCS/history/DECISIONS/2026-09-23-explicit-source-search.md, AGENT_DOCS/history/ROADMAP.md §MVP1, AGENT_DOCS/history/DECISIONS/2026-09-27-consolidated-agent-docs.md]
 superseded-by: null
 ---
 
@@ -34,8 +34,7 @@ one wrapper. There is no `tk install zoekt`.
 tk runs no daemon of its own. CBM's coordination daemon is shared per account
 (first-starts, last-stops) and is not tk's to manage from MCP. `cbm cli` mode is
 daemon-free: one-shot, a temp worker only for `index_repository`, exits with the
-command. `tk daemon status|stop` exists for humans flipping
-`watcher_enabled`; see `02-BOUNDARY.md`.
+command. `tk daemon status|stop` flips `watcher_enabled`; see `02-BOUNDARY.md`.
 
 Close semantics: stdin EOF = instant exit. No flush, no stop, no shutdown
 deadline. A second Ctrl-C kills, because `main` calls `stop()` as soon as the
@@ -141,6 +140,35 @@ Two read paths over one spawn, deliberately:
 `structuredContent`, so `RunStructured` returns `Data == nil` with legacy text
 and no error. The result is memoized per process. Nothing is ever reported as
 structured that is not.
+
+## Latency is a spawn-count problem
+
+The CBM coordination daemon does not answer tool calls: it owns watchers,
+shared indexing *jobs*, the UI, and session lifecycle, there is no socket or
+client flag, and `02-BOUNDARY.md` bans a tk-side resident worker — a ban the
+2026-09-30 resident ADR retires when it lands. The only warm transport is a
+long-lived MCP stdio child, the daemon-*backed* path.
+
+Every `cli` spawn nonetheless re-runs the engine's version-cohort admission
+handshake, so cost is coordination, not query. On CBM 0.11.0 with TensorFlow
+indexed a read command takes ~4.9s: 4.7ms to spawn, ~110ms to query, ~4.9s in
+a 1ms `nanosleep` poll on a lock `cli` mode is documented never to need. It is
+independent of store size — a 2.3MB project costs the same as a 686MB one. A
+long-lived child answers in 74ms. Measure, don't assume: `mise run bench`.
+No `tk bench` verb; the Unix rule applies. Reasoning and numbers:
+`AGENT_DOCS/history/DECISIONS/2026-09-29-measure-latency-not-daemon-routing.md`.
+Three traps that make such a number wrong rather than imprecise:
+
+* **`tk.log` under-counts spawns.** `runEnvelope`'s exit-0-no-envelope
+  fallback re-runs a tool outside every traced call, so an engine that does
+  not honor `--json` costs two spawns and records one. `tests/bench` layer F
+  reports logged and observed counts side by side for this reason.
+* **Layers are comparable only if they asked the same question.** `tk find`
+  routes a query with regex metacharacters to `search_code` and a bare
+  identifier to `search_graph`, so `live.Demo` measures grep. Pin a bare one.
+* **Spawn the engine with tk's env.** CBM resolves its store from
+  `CBM_CACHE_DIR`, so execing the binary without it measures an empty database
+  and reports "project not indexed".
 
 ## Trace log
 

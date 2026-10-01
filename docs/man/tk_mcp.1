@@ -14,6 +14,10 @@ Run MCP stdio proxy (profile: scout|analysis|minimal|memory), stdin EOF = instan
 
 
 .SH OPTIONS
+\fB--detach\fP[=false]
+	start a background resident holding one warm CBM child, then return; later tk reads use it, and every command still works without it
+
+.PP
 \fB-h\fP, \fB--help\fP[=false]
 	help for mcp
 

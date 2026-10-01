@@ -9,10 +9,13 @@
 first; Windows a follow-up. tk owns paths, config, one spawn, and render; CBM
 owns the graph, the store, the daemon, and the watcher. `tk` installs every
 external dependency itself — no apt, brew, npm, or toolchain at runtime. There is no `tk`
-supervisor daemon; the CBM coordination daemon is shared per account. A resident
-session (`tk mcp --detach`) is **decided but unbuilt**; the line above changes
-when it lands, per
-`AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md`.
+supervisor daemon; the CBM coordination daemon is shared per account. The
+resident (`tk mcp --detach`) is **built**: one warm CBM child behind an owner-only
+socket, opt-in, no idle timeout, reads dial it first and fall back to a spawn.
+That line above still holds — it watches nothing, restarts nothing, and dies on
+SIGTERM — so it needs no change. It owns exactly one socket and one pid file, both
+under `TK_HOME`, both naming its own process; see
+`AGENT_DOCS/history/DECISIONS/2026-09-30-resident-owns-its-endpoint-and-its-swap.md`.
 
 ## Read this first
 

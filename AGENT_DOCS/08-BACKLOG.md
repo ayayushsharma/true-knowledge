@@ -3,7 +3,7 @@ id: 08-backlog
 title: Backlog — milestones, remaining work, parked and rejected
 status: authoritative
 date: 2026-09-30
-supersedes: [AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md, AGENT_DOCS/history/DECISIONS/2026-09-29-measure-latency-not-daemon-routing.md, AGENT_DOCS/history/compatible-implementation-spec.md §20, AGENT_DOCS/history/ROADMAP.md, AGENT_DOCS/history/REMAINING-WORK.md, AGENT_DOCS/history/DECISIONS/2026-09-25-fleet-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-fleet-cohort-queries-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-rrf-tuning-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-resource-limit-surfacing-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-trajectory-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-delivery-parked-download-scripts.md, AGENT_DOCS/history/DECISIONS/2026-09-24-evals-harness.md]
+supersedes: [AGENT_DOCS/history/DECISIONS/2026-09-29-measure-latency-not-daemon-routing.md, AGENT_DOCS/history/compatible-implementation-spec.md §20, AGENT_DOCS/history/ROADMAP.md, AGENT_DOCS/history/REMAINING-WORK.md, AGENT_DOCS/history/DECISIONS/2026-09-25-fleet-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-fleet-cohort-queries-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-rrf-tuning-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-resource-limit-surfacing-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-trajectory-parked-indefinitely.md, AGENT_DOCS/history/DECISIONS/2026-09-25-delivery-parked-download-scripts.md, AGENT_DOCS/history/DECISIONS/2026-09-24-evals-harness.md]
 superseded-by: null
 ---
 
@@ -14,7 +14,7 @@ detail, then what is parked and what is permanently rejected.
 
 Locked decisions: Go-only thin `tk` over CBM, Linux-style `true-knowledge/`
 dirs everywhere, 27B as the default agent, Cobra-standard completion, cross-repo
-deferred. A resident daemon is decided but unbuilt; see Open work.
+deferred. The resident is built; see Open work.
 
 ## Status
 
@@ -130,7 +130,7 @@ spawn and is documented never to need. A long-lived MCP child answers in
 **74ms**; a live daemon alone only cuts one-shot to ~1.8s. Method and dead ends:
 `AGENT_DOCS/THROWAWAY/2026-09-29-cbm-one-shot-latency.md`.
 
-**Decided: one shape, `tk mcp --detach`.** A resident holds one warm CBM MCP
+**Built: one shape, `tk mcp --detach`.** A resident holds one warm CBM MCP
 child and listens on a local socket; the CLI dials it and falls back to one-shot
 on any failure, so both faces cost the same and a dead resident is not an error.
 Explicit start, no auto-spawn, no idle timeout. The resident is a transport, not
@@ -139,10 +139,10 @@ the two render paths are untouched. Linux and macOS first; Windows is a named
 follow-up touching only the socket and detach files. It needs **no** freshness
 machinery: a warm child re-resolves the store per call, measured, so there is no
 poller, watcher, or generation counter. `tk install cbm` swaps the child
-underneath a live resident and never kills it. This withdraws the no-supervisor
-rule in `AGENTS.md` and the no-PID/endpoint rule in `02-BOUNDARY.md`, so the ADR
-that builds it says so in its first paragraph. The decisions:
-`AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md`.
+underneath a live resident and never kills it. `02-BOUNDARY.md`'s no-PID/endpoint
+rule is narrowed to "a process tk started, in a directory tk chose";
+`AGENTS.md`'s no-supervisor rule needs no withdrawal: the resident watches nothing,
+restarts nothing, dies on SIGTERM. `.../DECISIONS/2026-09-30-resident-owns-its-endpoint-and-its-swap.md`.
 
 Worth doing first, and independent: `runEnvelope`'s exit-0-no-envelope fallback
 re-spawns outside every traced call, so a non-conforming engine costs double the

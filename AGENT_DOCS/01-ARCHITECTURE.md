@@ -144,10 +144,10 @@ structured that is not.
 ## Latency is a spawn-count problem
 
 The CBM coordination daemon does not answer tool calls: it owns watchers,
-shared indexing *jobs*, the UI, and session lifecycle, there is no socket or
-client flag, and `02-BOUNDARY.md` bans a tk-side resident worker — a ban the
-2026-09-30 resident ADR retires when it lands. The only warm transport is a
-long-lived MCP stdio child, the daemon-*backed* path.
+shared indexing *jobs*, the UI, and session lifecycle, and there is no socket or
+client flag on it. The warm transport is `tk mcp --detach` — a resident holding
+one long-lived MCP stdio child behind a local socket that reads dial first and
+fall back to a one-shot spawn. Not the daemon-*backed* path.
 
 Every `cli` spawn nonetheless re-runs the engine's version-cohort admission
 handshake, so cost is coordination, not query. On CBM 0.11.0 with TensorFlow

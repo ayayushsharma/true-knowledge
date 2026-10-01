@@ -2,7 +2,7 @@
 id: 03-commands
 title: CLI surface — every verb, flag, alias
 status: authoritative
-date: 2026-09-28
+date: 2026-09-30
 supersedes: [AGENT_DOCS/history/compatible-implementation-spec.md §8, AGENT_DOCS/history/DECISIONS/2026-09-28-failed-install-is-a-failed-command.md, AGENT_DOCS/history/DECISIONS/2026-09-28-delegate-backend-install-to-vendor.md, AGENT_DOCS/history/compatible-implementation-spec.md §8.4, AGENT_DOCS/history/DECISIONS/2026-09-25-flag-only-query-forms.md, AGENT_DOCS/history/DECISIONS/2026-09-26-select-flag-forces-project-picker.md, AGENT_DOCS/history/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
 superseded-by: null
 ---
@@ -28,8 +28,42 @@ purpose.
 | `tk status` | — | projects, HEAD, freshness; `--json` adds `head`, `current`, `zoekt_head`, `zoekt_fresh` |
 | `tk completion <shell>` | — | `bash`, `zsh`, `fish`, `powershell`; prints, never installs |
 | `tk mcp-install` | `--client` (required), `--tool-profile`, `--dry-run` | prints the client snippet; `--client pi\|opencode\|claude\|codex` |
+| `tk mcp` | `--tool-profile`, `--detach` | the stdio proxy an agent client runs; stdin EOF is an instant exit. `--detach` returns immediately and leaves a resident holding one warm CBM child — see below |
 | `tk cbm <tool> [args]` | — | low-level passthrough for admin and debugging; exists so nothing else has to spawn by hand |
 | `tk daemon status` / `tk daemon stop` | — | CLI-only, never exposed over MCP |
+
+### The resident
+
+`tk mcp --detach` is **opt-in and never automatic.** The CLI does not start a
+resident, and an absent or dead one is not an error: reads dial the socket and
+any failure falls back to the one-shot path, which is correct and about 4.9s
+slower. Writes (`tk index`, `tk sync`) always take the one-shot path.
+
+The whole surface is the socket and a pid file under `<state>/`. No `tk session`
+verb, no subcommands, no idle timeout — the resident runs until reboot or a
+signal, and SIGTERM cleans up.
+
+* **What uses it:** the read commands — `find`, `explain`, `trace`, `grep`,
+  `outline`, `impact`, `arch`, `query`, `validate`. `tk index` and `tk sync`
+  stay one-shot by design. **`tk cbm` does not use the resident at all**: it is a
+  raw passthrough, so it always spawns. That is intentional for debugging, and it
+  will not get faster because a resident is running.
+* **Stop:** `pkill -f 'tk.*resident'`, or SIGTERM the pid in
+  `<state>/resident.pid`. tk ships no verb; the pid file is the verb.
+  Use the pid file when you can — the argv is `tk --home <home> resident`, so a
+  pattern like `tk resident` matches only when `TK_HOME` happens to end in
+  `.tk`, and `pkill -f` will otherwise match *your own shell* instead.
+* **Is it up:** `test -S <state>/resident.sock`, or read
+  `<state>/logs/resident.log`, which logs the engine pid at startup. That log is
+  separate from `tk.log` because it outlives the command that spawned it.
+* **`tk install cbm` does not kill it.** The resident is the process you are
+  talking to, so the engine is swapped in place behind the same socket. Reads
+  during the swap are refused, not queued, and fall back to a spawn — a read
+  queued behind an install is slower than the spawn it avoids.
+* One connection carries one request and is closed. The engine is still driven
+  one call at a time; only connection handling is concurrent.
+
+Design: `history/DECISIONS/2026-09-30-resident-owns-its-endpoint-and-its-swap.md`.
 
 ## Indexing
 

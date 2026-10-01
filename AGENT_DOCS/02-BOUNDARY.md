@@ -2,7 +2,7 @@
 id: 02-boundary
 title: The CBM boundary — what tk must never do
 status: authoritative
-date: 2026-09-28
+date: 2026-09-30
 supersedes: [AGENT_DOCS/history/CBM-BOUNDARY.md, AGENT_DOCS/history/DECISIONS/2026-09-24-mcp-inputschema-spec.md, AGENT_DOCS/history/DECISIONS/2026-09-24-log-redaction-profile-gate-cancellation.md, AGENT_DOCS/history/DECISIONS/2026-09-26-structured-cbm-payloads.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
 superseded-by: null
 ---
@@ -78,6 +78,16 @@ control tk performs on its own is stopping and restarting the daemon that holds
 the binary it is replacing, and that is scoped to tk's own `CBM_RUNTIME_DIR`
 namespace, never an account-wide daemon. `01-ARCHITECTURE.md` has the rules.
 
+**The one endpoint tk owns is its own resident's.** A detached resident holds one
+Unix socket and one pid file under its own `TK_HOME`, and `tk install cbm`
+replaces the engine behind that socket. This is the single exception to the
+endpoint rule below, and the test is narrow: **does the thing tk manages name a
+process tk started, in a directory tk chose?** The resident passes on both
+counts, which is why it never reaches the account-wide namespace, never opens a
+database, and never signals CBM's daemon. `tk daemon` stays CLI-only and shared.
+Full reasoning, including why this is not a supervisor daemon:
+`history/DECISIONS/2026-09-30-resident-owns-its-endpoint-and-its-swap.md`.
+
 **Never validate a CBM tool's arguments.** CBM validates them server-side. tk
 gates profiles and wraps errors, nothing else. tk-owned memory tools validate
 their own arguments in-process.
@@ -104,6 +114,10 @@ completion-install`, and `status --watch` — use `jq`, wire your own rc, and
 
 If tk parses source, touches SQLite, manages PIDs or endpoints, or hand-writes
 agent configuration, it is a bug.
+
+The one carve-out is the resident's own socket and pid file, named in the rule
+above; the boundary is that tk never manages an endpoint belonging to anyone
+else. Withdrawals are dated ADRs in `history/DECISIONS/`, never edits here.
 
 Upstream references: CBM `README.md` sections `#session-coordination-daemon`,
 `#cli-mode`, `#auto-index`; CBM `docs/CONFIGURATION.md` §2 and §4; CBM

@@ -70,6 +70,12 @@ Steps: init dirs/config → install all backends at pins → (opt-in) register c
 				return err
 			}
 			sections := []string{}
+			// setup runs the same install pipeline as `tk install` and says so
+			// on the same channel: the steps go to stderr, the section summary
+			// stays the only thing on stdout. The two commands differ only in
+			// what they do about a failure, and hiding the work from one of them
+			// makes the difference look like a difference in cost.
+			prog := ctx.progress()
 			// 1. init (idempotent: only writes missing files).
 			if _, err := os.Stat(ctx.Paths.ConfigFile()); os.IsNotExist(err) {
 				if err := config.Save(ctx.Paths.ConfigFile(), ctx.Cfg); err != nil {
@@ -100,16 +106,21 @@ Steps: init dirs/config → install all backends at pins → (opt-in) register c
 					sections = append(sections, fmt.Sprintf("install %s: up-to-date %s (%s)", b.Name, st.InstalledVersion, st.Path))
 					continue
 				}
+				prog.Phase("install %s %s — currently %s at %s", b.Display, pin, orDash(st.InstalledVersion), displayPath(st))
 				// Same quiesce as `tk install`, but a busy daemon is one
 				// fail-open line here: setup must never block an agent.
 				q, qerr := ctx.quiesceDaemon(cmd.Context(), st.InCache)
 				if qerr != nil {
+					prog.Close()
 					sections = append(sections, fmt.Sprintf(
 						"install %s: FAILED %s (agent continues fail-open; run tk install %s for detail)",
 						b.Name, firstLine(qerr.Error()), b.Name))
 					continue
 				}
-				plan, err := installer.Install(cmd.Context(), ctx.Paths.Cache, b, pin, backends.HostGOOS(), backends.HostGOARCH())
+				if q.Was {
+					prog.Note("%s", q.Note())
+				}
+				plan, err := installer.Install(cmd.Context(), ctx.Paths.Cache, b, pin, backends.HostGOOS(), backends.HostGOARCH(), prog)
 				if err != nil {
 					// Fail-open is the contract: a missing backend is a tk install
 					// away, not a blocked agent. The reason is clipped to one line

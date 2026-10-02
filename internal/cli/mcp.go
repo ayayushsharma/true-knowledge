@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ayayushsharma/true-knowledge/internal/config"
+	"github.com/ayayushsharma/true-knowledge/internal/logx"
 	"github.com/ayayushsharma/true-knowledge/internal/mcp"
 	"github.com/ayayushsharma/true-knowledge/internal/memory"
 	"github.com/spf13/cobra"
@@ -19,10 +20,18 @@ func cmdMCP(g *Globals) *cobra.Command {
 		Use:   "mcp",
 		Short: "Run MCP stdio proxy (profile: scout|analysis|minimal|memory), stdin EOF = instant exit",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// This process outlives the command that started it. stderr on an
+			// MCP stdio server is captured by the client as part of the session
+			// record, so a progress bar there is a foreign object in someone
+			// else's transcript; and the engine is addressed over stdio, so a
+			// live line that never terminates would corrupt it. There is also no
+			// exit to drain the per-invocation record buffer at.
+			g.LongLived = true
 			ctx, err := load(*g)
 			if err != nil {
 				return err
 			}
+			logx.Debugf("mcp serve profile=%s budget=%d cbm=%v detach=%v", profile, ctx.budget(""), ctx.CBMOK, detach)
 			if detach {
 				return runDetach(cmd, ctx)
 			}

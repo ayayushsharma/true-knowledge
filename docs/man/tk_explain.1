@@ -23,7 +23,7 @@ Definition + snippet + callers/callees (one bounded call set)
 
 .PP
 \fB-s\fP, \fB--select\fP[=false]
-	force the interactive project picker open (ignored when --project is set)
+	open the interactive project picker (ignored when --project is set)
 
 .PP
 \fB--symbol\fP=""
@@ -41,6 +41,14 @@ Definition + snippet + callers/callees (one bounded call set)
 .PP
 \fB--json\fP[=false]
 	stable JSON envelope output
+
+.PP
+\fB--quiet\fP[=false]
+	stderr carries errors only; suppress progress (TK_LOG=error)
+
+.PP
+\fB--verbose\fP[=false]
+	debug narration on stderr (TK_LOG=debug)
 
 
 .SH SEE ALSO

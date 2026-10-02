@@ -35,7 +35,7 @@ Deterministic router: regex→grep, NL→semantic, ident→graph
 
 .PP
 \fB-s\fP, \fB--select\fP[=false]
-	force the interactive project picker open (ignored when --project is set)
+	open the interactive project picker (ignored when --project is set)
 
 
 .SH OPTIONS INHERITED FROM PARENT COMMANDS
@@ -49,6 +49,14 @@ Deterministic router: regex→grep, NL→semantic, ident→graph
 .PP
 \fB--json\fP[=false]
 	stable JSON envelope output
+
+.PP
+\fB--quiet\fP[=false]
+	stderr carries errors only; suppress progress (TK_LOG=error)
+
+.PP
+\fB--verbose\fP[=false]
+	debug narration on stderr (TK_LOG=debug)
 
 
 .SH EXAMPLE

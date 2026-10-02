@@ -69,7 +69,7 @@ func cmdValidate(g *Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			proj, err := requireProject(ctx, project, sel)
+			proj, err := requireProject(ctx, cmd.Name(), project, sel)
 			if err != nil {
 				return err
 			}

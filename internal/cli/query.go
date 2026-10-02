@@ -13,61 +13,61 @@ import (
 
 var metaChars = regexp.MustCompile(`[.*()\[\]{}+?^$|\\]`)
 
-// resolveProject returns the effective project: an explicit --project always
-// wins (--select is ignored alongside it); else a single registered project
-// auto-defaults, except under --select which forces the picker; else "".
-func resolveProject(c *Ctx, flag string, sel bool) string {
+// requireProject resolves the project a project-resolving command runs against,
+// or fails naming every route that exists for it.
+//
+// Nothing is inferred. A bare invocation never picks a project, never opens a
+// menu, and never auto-selects the only registered one: a project is either
+// stated (--project) or requested (--select). --project wins when both are
+// passed and --select is then ignored; a --project that is not in the registry
+// is a hard error naming the command that would register it, checked here so a
+// typo cannot reach CBM or degrade into a quiet `fresh: false`.
+//
+// --select is the only path to a menu, and it is gated for humans: under
+// --json, off a TTY, or with ui.picker off it hard-fails naming --project rather
+// than blocking on a pipe or guessing.
+func requireProject(c *Ctx, verb, flag string, sel bool) (string, error) {
 	if flag != "" {
-		return flag
+		if _, ok := c.Reg[flag]; !ok {
+			return "", unknownProject(verb, flag, c)
+		}
+		return flag, nil
 	}
-	if sel {
-		return "" // --select forces the picker; it never auto-defaults
+	if !sel {
+		return "", fail("%s needs a project: pass --project <name> (registered: %s), or --select to pick one; see `tk status`", verb, listNames(c))
 	}
-	if len(c.Reg) == 1 {
-		return c.Reg.Names()[0]
+	if len(c.Reg) == 0 {
+		return "", fail("--select needs at least one registered project — run `tk register <path>`")
 	}
-	return ""
-}
-
-// requireProject resolves or fails with a routing hint.
-// CBM requires project on nearly every tool; tk never sends "".
-// On interactive TTY (+ !--json + ui.picker) the failure becomes a project
-// picker first — agents/scripts never see it (picker is gated off).
-// --select forces that picker open even when a single project is registered;
-// it is gated identically, so off a TTY / under --json / with ui.picker off it
-// hard-fails with the routing hint instead of silently defaulting. --project
-// takes precedence over --select when both are passed.
-func requireProject(c *Ctx, flag string, sel bool) (string, error) {
-	if p := resolveProject(c, flag, sel); p != "" {
+	if !pickerEnabled(c) {
+		return "", fail("--select needs an interactive TTY (+ !--json + ui.picker); pass --project (registered: %s); see `tk status`", listNames(c))
+	}
+	if p, err := pickProject(c); err == nil && p != "" {
 		return p, nil
 	}
-	if sel {
-		if len(c.Reg) == 0 {
-			return "", fail("--select needs at least one registered project — run `tk register <path>`")
-		}
-		if !pickerEnabled(c) {
-			return "", fail("--select needs an interactive TTY (+ !--json + ui.picker); pass --project (registered: %s); see `tk status`", listNames(c))
-		}
-		if p, err := pickProject(c); err == nil && p != "" {
-			return p, nil
-		}
-		return "", fail("picker aborted; pass --project (registered: %s); see `tk status`", listNames(c))
-	}
-	if pickerEnabled(c) {
-		if p, err := pickProject(c); err == nil && p != "" {
-			return p, nil
-		}
-	}
-	return "", fail("pass --project (registered: %s); see `tk status`", listNames(c))
+	return "", fail("picker aborted; pass --project (registered: %s); see `tk status`", listNames(c))
 }
 
-// selectFlag registers -s/--select on a project-resolving command: force the
-// interactive picker open even when a single project is registered. It is
+// unknownProject is the one wording for a name the registry does not hold, so
+// every project-resolving verb fails identically and hands back the command
+// that fixes it. An empty registry gets the shorter form; listing "none" next
+// to a register command twice reads worse than saying it once.
+func unknownProject(verb, name string, c *Ctx) error {
+	if len(c.Reg) == 0 {
+		return fail("%s: project %q is not currently registered; register it with `tk register <path> --name %s`", verb, name, name)
+	}
+	return fail("%s: project %q is not currently registered (registered: %s); register it with `tk register <path> --name %s`", verb, name, listNames(c), name)
+}
+
+// selectFlag registers -s/--select on a project-resolving command: ask for the
+// interactive project picker. It is the only way a menu opens — a bare
+// invocation fails with the routing hint instead — so it exists for the case
+// where the human does not know the name and does not want to look it up. It is
 // per-command rather than a root persistent flag so the flag only shows up
 // (in --help, completions, and man pages) on the commands that honor it.
 // Precedence: an explicit --project wins, --select is then ignored.
 func selectFlag(c *cobra.Command, sel *bool) {
-	c.Flags().BoolVarP(sel, "select", "s", false, "force the interactive project picker open (ignored when --project is set)")
+	c.Flags().BoolVarP(sel, "select", "s", false, "open the interactive project picker (ignored when --project is set)")
 }
 
 func listNames(c *Ctx) string {
@@ -195,7 +195,7 @@ func cmdFind(g *Globals) *cobra.Command {
 				return err
 			}
 			q := query
-			proj, err := requireProject(ctx, project, sel)
+			proj, err := requireProject(ctx, cmd.Name(), project, sel)
 			if err != nil {
 				return err
 			}
@@ -247,7 +247,7 @@ func cmdExplain(g *Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			proj, err := requireProject(ctx, project, sel)
+			proj, err := requireProject(ctx, cmd.Name(), project, sel)
 			if err != nil {
 				return err
 			}
@@ -368,7 +368,7 @@ func cmdTrace(g *Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			proj, err := requireProject(ctx, project, sel)
+			proj, err := requireProject(ctx, cmd.Name(), project, sel)
 			if err != nil {
 				return err
 			}
@@ -425,7 +425,7 @@ func cmdGrep(g *Globals) *cobra.Command {
 					return fail("invalid regex %q: %v (not empty results)", pat, err)
 				}
 			}
-			proj, err := requireProject(ctx, project, sel)
+			proj, err := requireProject(ctx, cmd.Name(), project, sel)
 			if err != nil {
 				return err
 			}
@@ -466,7 +466,7 @@ func cmdOutline(g *Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			proj, err := requireProject(ctx, project, sel)
+			proj, err := requireProject(ctx, cmd.Name(), project, sel)
 			if err != nil {
 				return err
 			}
@@ -526,7 +526,7 @@ func cmdImpact(g *Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			proj, err := requireProject(ctx, project, sel)
+			proj, err := requireProject(ctx, cmd.Name(), project, sel)
 			if err != nil {
 				return err
 			}
@@ -565,7 +565,7 @@ func cmdArch(g *Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			proj, err := requireProject(ctx, project, sel)
+			proj, err := requireProject(ctx, cmd.Name(), project, sel)
 			if err != nil {
 				return err
 			}
@@ -598,7 +598,7 @@ func cmdQuery(g *Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			proj, err := requireProject(ctx, project, sel)
+			proj, err := requireProject(ctx, cmd.Name(), project, sel)
 			if err != nil {
 				return err
 			}

@@ -30,6 +30,7 @@ under `TK_HOME`, both naming its own process; see
 | Facts, notes, ledger, secrets | `AGENT_DOCS/07-MEMORY.md` |
 | What is not built, and why | `AGENT_DOCS/08-BACKLOG.md` |
 | Operating rules and the PR gate | `AGENT_DOCS/09-CHECKLIST.md` |
+| stdout vs stderr, log levels, progress | `AGENT_DOCS/10-OUTPUT.md` |
 | Why a decision was made | `AGENT_DOCS/history/DECISIONS/` |
 
 ## Rules that must never be missed
@@ -71,6 +72,12 @@ under `TK_HOME`, both naming its own process; see
     real engine and record the environment; re-probe after a CBM upgrade. The
     three wrong assumptions this rule exists for:
     `AGENT_DOCS/THROWAWAY/2026-09-30-warm-child-store-freshness.md`.
+11. **stdout is the answer; stderr is the story.** Anything a caller might pipe
+    is the only thing on stdout. Progress, warnings, debug narration, and engine
+    refusals go through `internal/logx` and `internal/progress` — neither may
+    reference `os.Stdout`. A long command reports a step per stage, on every
+    destination, including the failure path. Live frames are terminal-only. See
+    `AGENT_DOCS/10-OUTPUT.md`.
 
 ## Commands
 
@@ -91,14 +98,19 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | TK_HOME=/tmp/tk-test ./t
 ```
 
 The trace log is `<state>/logs/tk.log`, JSONL. Read it with Unix tools; there is
-no `tk log` command.
+no `tk log` command. It records both faces of every call: `output.text` is what
+went to stdout, `output.diag` is the stderr narration.
 
 ```bash
 tail -n 50 tk.log | jq .                                  # recent calls
 jq -c 'select(.exit != 0)' tk.log                         # failures only
 jq -r '[.ts, (.argv|join(" "))] | @tsv' tk.log            # argv history
 jq -r 'select(.mcp.tool=="source_search") | .output.text' tk.log
+jq -r '.output.diag' tk.log                               # what it said while working
 ```
+
+`TK_LOG=off|error|warn|info|debug` (default `warn`) sets the stderr level;
+`--verbose` and `--quiet` override it for one run.
 
 ## Pre-release law
 

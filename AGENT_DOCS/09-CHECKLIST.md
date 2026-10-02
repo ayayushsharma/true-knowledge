@@ -2,8 +2,8 @@
 id: 09-checklist
 title: Operating rules and the PR gate for agents and humans
 status: authoritative
-date: 2026-09-30
-supersedes: [AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md, AGENT_DOCS/history/DECISIONS/2026-09-29-measure-latency-not-daemon-routing.md, AGENTS.md, AGENT_DOCS/history/DECISIONS/2026-09-28-failed-install-is-a-failed-command.md, AGENT_DOCS/history/ROADMAP.md §Remaining-work backlog, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
+date: 2026-10-02
+supersedes: [AGENT_DOCS/history/DECISIONS/2026-10-02-stderr-is-the-diagnostic-channel.md, AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md, AGENT_DOCS/history/DECISIONS/2026-09-29-measure-latency-not-daemon-routing.md, AGENTS.md, AGENT_DOCS/history/DECISIONS/2026-09-28-failed-install-is-a-failed-command.md, AGENT_DOCS/history/ROADMAP.md §Remaining-work backlog, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
 superseded-by: null
 ---
 
@@ -12,7 +12,7 @@ superseded-by: null
 
 # 09-CHECKLIST — how to work in this repo
 
-## Nine rules
+## Ten rules
 
 1. **Delegate; never reimplement.** Parsing, full-text search, embeddings, the
    watcher, the install matrix across 45 client surfaces, the UI on port 9749,
@@ -64,7 +64,15 @@ superseded-by: null
    A perf claim without a per-layer breakdown is an opinion, and `tk.log`
    under-counts spawns (rule 8's fallback re-spawns untraced). Use
    `mise run bench` or `mise run bench-real`, and read layer F's logged-vs-
-   observed columns before quoting any figure.
+   observed columns before quoting any figure. `--verbose` narrates every spawn
+   inside the wrapper, which is why it is the fastest way to see the second one.
+10. **stdout is the answer; stderr is the story.** Anything a caller might pipe is
+    the only thing on stdout. Progress, warnings, debug narration, and engine
+    refusals go through `internal/logx` and `internal/progress`, and neither
+    package may reference `os.Stdout`. A command that takes more than a second
+    reports a step per stage, on every destination, including its failure path.
+    Live frames are terminal-only; redirected, steps must still be one readable
+    line each. `10-OUTPUT.md`.
 
 ## Before you commit
 
@@ -76,8 +84,10 @@ superseded-by: null
       failure paths fail open.
 * [ ] Completion, `--json`, and `--help` were updated together with the
       behavior, and `tk __complete` still works.
-* [ ] No secret reached `tk.log`. If a command can emit something
+* [ ] No secret reached `tk.log` or stderr. If a command can emit something
       secret-shaped, the redaction patterns cover it, and there is a test.
+* [ ] Anything new written for a human to read went to stdout or stderr
+      deliberately, not by default. A pipeable command still pipes.
 * [ ] If behavior changed, there is a new dated ADR in
       `AGENT_DOCS/history/DECISIONS/` and the affected `NN-*.md` file has a
       bumped header and the new rule in its body.
@@ -117,5 +127,7 @@ superseded-by: null
 | Paths, config keys, env vars | `06-PATHS-CONFIG.md` |
 | Facts, notes, ledger, secrets | `07-MEMORY.md` |
 | What is not built, and why | `08-BACKLOG.md` |
+| Operating rules and the PR gate | `09-CHECKLIST.md` |
+| stdout vs stderr, log levels, progress | `10-OUTPUT.md` |
 | Why a decision was made | `history/DECISIONS/` |
 | The trace log, for real calls | `<state>/logs/tk.log` with jq |

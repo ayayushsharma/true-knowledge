@@ -26,6 +26,7 @@ is answered. `manifest.json` is the machine-readable form of this table.
 | `07-MEMORY.md` | facts, notes, ledger, embeddings, secret gate |
 | `08-BACKLOG.md` | milestones, remaining work, parked and rejected items |
 | `09-CHECKLIST.md` | operating rules and PR gate for agents (plain English, safety) |
+| `10-OUTPUT.md` | stdout vs stderr, `TK_LOG` levels, progress rules, what the record holds |
 | `history/DECISIONS/*.md` | 32 dated ADRs, verbatim, immutable |
 | `history/*.md` | 7 pre-consolidation docs, plus the frozen v1 spec, verbatim |
 | `THROWAWAY/*.md` | mutable working notes, **not authoritative**; read `THROWAWAY/INDEX.md` before a long search |

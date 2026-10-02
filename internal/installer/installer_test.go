@@ -101,7 +101,7 @@ func TestInstallFetchesVerifiesAndPublishes(t *testing.T) {
 	s := releaseServer(t, "0.11.0")
 	withReleaseBase(t, s)
 	cache := t.TempDir()
-	plan, err := Install(context.Background(), cache, cbmBackend(), "0.11.0", "linux", "amd64")
+	plan, err := Install(context.Background(), cache, cbmBackend(), "0.11.0", "linux", "amd64", nil)
 	if err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -120,11 +120,11 @@ func TestInstallIsIdempotent(t *testing.T) {
 	s := releaseServer(t, "0.11.0")
 	withReleaseBase(t, s)
 	cache := t.TempDir()
-	first, err := Install(context.Background(), cache, cbmBackend(), "0.11.0", "linux", "amd64")
+	first, err := Install(context.Background(), cache, cbmBackend(), "0.11.0", "linux", "amd64", nil)
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	second, err := Install(context.Background(), cache, cbmBackend(), "0.11.0", "linux", "amd64")
+	second, err := Install(context.Background(), cache, cbmBackend(), "0.11.0", "linux", "amd64", nil)
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestInstallWritesNothingOnChecksumMismatch(t *testing.T) {
 	withReleaseBase(t, s)
 
 	cache := t.TempDir()
-	_, err := Install(context.Background(), cache, cbmBackend(), "0.11.0", "linux", "amd64")
+	_, err := Install(context.Background(), cache, cbmBackend(), "0.11.0", "linux", "amd64", nil)
 	if err == nil {
 		t.Fatal("a checksum mismatch must fail the install")
 	}
@@ -171,7 +171,7 @@ func TestInstallRejectsACandidateThatIsNotThePin(t *testing.T) {
 	s := releaseServer(t, "0.10.0")
 	withReleaseBase(t, s)
 	cache := t.TempDir()
-	_, err := Install(context.Background(), cache, cbmBackend(), "0.11.0", "linux", "amd64")
+	_, err := Install(context.Background(), cache, cbmBackend(), "0.11.0", "linux", "amd64", nil)
 	if err == nil {
 		t.Fatal("a binary that does not report the pin must fail the install")
 	}

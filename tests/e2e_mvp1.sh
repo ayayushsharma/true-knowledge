@@ -363,15 +363,48 @@ check kg-explain-alias 0 $TK_BIN kg_explain --symbol Demo --project demo
 check kg-grep-alias 0 $TK_BIN kg_grep --pattern Demo --project demo
 check kg-trace-alias 0 $TK_BIN kg_trace --symbol Demo --project demo
 
-# --- --select forces the picker (e2e is non-TTY, so it must hard-fail) ---
-# --select is a request to interact: never auto-default to the single project,
-# never silently reach CBM with an empty project, and always point at --project.
+# --- routing is always explicit: a bare query fails, it never guesses ---
+# Nothing is inferred any more. One registered project used to auto-default, so
+# `tk arch` with no flags used to succeed here; it must now fail naming both
+# routes. `demo` is the only project registered at this point, which is exactly
+# the case the inference covered.
+check no-project-no-select 1 $TK_BIN arch
+if out=$($TK_BIN arch 2>&1); then
+  fail=$((fail+1)); printf 'FAIL arch-no-project-must-fail\n';
+else
+  case "$out" in
+    *arch*--project*--select*) pass=$((pass+1)); printf 'ok   arch-no-project-names-routes\n';;
+    *) fail=$((fail+1)); printf 'FAIL arch-no-project-names-routes\n  %s\n' "$out";;
+  esac
+fi
+# Same contract on a payload verb, and the message names the verb.
+if out=$($TK_BIN find --query Demo 2>&1); then
+  fail=$((fail+1)); printf 'FAIL find-no-project-must-fail\n';
+else
+  case "$out" in
+    *find*--project*--select*) pass=$((pass+1)); printf 'ok   find-no-project-names-routes\n';;
+    *) fail=$((fail+1)); printf 'FAIL find-no-project-names-routes\n  %s\n' "$out";;
+  esac
+fi
+# An unregistered --project fails here, before any spawn, and hands back the
+# command that would fix it.
+check project-unknown 1 $TK_BIN arch --project knolwedge
+if $TK_BIN arch --project knolwedge 2>&1 | grep -q 'not currently registered'; then
+  pass=$((pass+1)); printf 'ok   project-unknown-wording\n';
+else fail=$((fail+1)); printf 'FAIL project-unknown-wording\n'; fi
+if $TK_BIN arch --project knolwedge 2>&1 | grep -q 'tk register <path> --name knolwedge'; then
+  pass=$((pass+1)); printf 'ok   project-unknown-register-hint\n';
+else fail=$((fail+1)); printf 'FAIL project-unknown-register-hint\n'; fi
+
+# --- --select opens the picker (e2e is non-TTY, so it must hard-fail) ---
+# --select is the only way a menu opens, and it is a request to interact: never
+# silently reach CBM with an empty project, and always point at --project.
 check select-no-tty 1 $TK_BIN find --query Demo --select
 if $TK_BIN find --query Demo --select 2>&1 | grep -q 'pass --project'; then
   pass=$((pass+1)); printf 'ok   select-no-tty-hint\n';
 else fail=$((fail+1)); printf 'FAIL select-no-tty-hint (no --project routing hint)\n'; fi
 check select-project-only-no-tty 1 $TK_BIN arch --select
-# --select on trace: same forced-picker contract as every project-resolving verb
+# --select on trace: same picker contract as every project-resolving verb
 check select-trace-no-tty 1 $TK_BIN trace --symbol Demo --select
 if $TK_BIN trace --symbol Demo --select 2>&1 | grep -q 'pass --project'; then
   pass=$((pass+1)); printf 'ok   select-trace-hint\n';

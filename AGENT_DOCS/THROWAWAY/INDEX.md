@@ -14,6 +14,7 @@ must verify, `dead-end` do not walk again.
 | Can tk build for Windows at all, or is a `Setsid` platform split wasted work? | `2026-09-30-windows-build-blocked-upstream-by-zoekt.md` | **measured: no, blocked by zoekt** |
 | Which lock is the 1ms poll actually on, and is it contention or a fixed retry budget? | — | **unanswered**, see the latency note |
 | Is 74ms the floor for a warm query, or does a warm store do better? | — | **unanswered**, see the latency note |
+| Does the resident pid-file test flake under `-race`? | `2026-10-02-resident-pid-file-test-race.md` | **measured: yes**, ~1 in 8, pre-existing |
 
 ## The one-line version
 

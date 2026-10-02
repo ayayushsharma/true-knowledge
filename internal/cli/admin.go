@@ -14,9 +14,20 @@ import (
 	"github.com/ayayushsharma/true-knowledge/internal/backends"
 	"github.com/ayayushsharma/true-knowledge/internal/config"
 	"github.com/ayayushsharma/true-knowledge/internal/installer"
+	"github.com/ayayushsharma/true-knowledge/internal/logx"
 	"github.com/ayayushsharma/true-knowledge/internal/resident"
 	"github.com/spf13/cobra"
 )
+
+// orDash renders an empty string as "-", so a diagnostic line never has a hole
+// where a value should be. A log line with a missing field reads as a bug in the
+// log; a log line with "-" reads as an unknown, which is what it means.
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
 
 func cmdConfig(g *Globals) *cobra.Command {
 	c := &cobra.Command{Use: "config", Short: "Inspect/change tk config (tk owns, CBM follows via env)"}
@@ -244,6 +255,11 @@ Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DE
 					names = append(names, b.Name)
 				}
 			}
+			// The install package declares the size of its own pipeline (it is
+			// always the same eight stages), so this command only adds an
+			// unnumbered header and unnumbered notes around it. Anything else
+			// would move a fixed denominator and print [10/9].
+			prog := ctx.progress()
 			type row struct {
 				Backend string `json:"backend"`
 				Status  string `json:"status"`
@@ -268,6 +284,8 @@ Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DE
 					return fail("--version only works with a single backend")
 				}
 				st := installer.Inspect(cmd.Context(), ctx.Paths.Cache, b, pin, backends.HostGOOS())
+				logx.Debugf("install %s: pin=%s path=%s in_cache=%v installed=%s up_to_date=%v needs_install=%v",
+					name, pin, displayPath(st), st.InCache, orDash(st.InstalledVersion), st.UpToDate, st.NeedsInstall)
 				switch {
 				case check || dry:
 					plan, perr := installer.ResolvePlan(ctx.Paths.Cache, b, pin, backends.HostGOOS(), backends.HostGOARCH())
@@ -291,6 +309,7 @@ Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DE
 					// Only a real replacement stops a daemon. --check, --dry-run
 					// and an up-to-date no-op never reach this branch, and a
 					// first install has no daemon to stop.
+					prog.Phase("replace %s %s — currently %s at %s", b.Display, pin, orDash(st.InstalledVersion), displayPath(st))
 					//
 					// The resident is quiesced for the same reason and in the
 					// same branch, because it too holds the old image open. It
@@ -310,27 +329,36 @@ Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DE
 						qr, qerr = ctx.quiesceResident()
 					}
 					if qerr != nil {
+						prog.Close()
+						logx.Errorf("install %s: quiesce failed: %v", name, qerr)
 						failed = append(failed, name)
 						rows = append(rows, row{name, "failed", qerr.Error()})
 						lines = append(lines, fmt.Sprintf("%-8s FAILED: %v", name, qerr))
 						continue
 					}
 					if qd.Was {
+						prog.Note("%s", qd.Note())
 						lines = append(lines, fmt.Sprintf("%-8s %s", name, qd.Note()))
 					}
 					if qr.Was {
+						prog.Note("%s", qr.Note())
 						lines = append(lines, fmt.Sprintf("%-8s %s", name, qr.Note()))
+					}
+					if !qd.Was && !qr.Was {
+						prog.Note("nothing holding the old image — no quiesce needed")
 					}
 					// The engine is released only for the CBM binary. Quiescing
 					// around an unrelated backend's install would idle a warm
 					// resident for nothing.
 					engineReleased := qr.Was && name == "cbm"
-					plan, err := installer.Install(cmd.Context(), ctx.Paths.Cache, b, pin, backends.HostGOOS(), backends.HostGOARCH())
+					plan, err := installer.Install(cmd.Context(), ctx.Paths.Cache, b, pin, backends.HostGOOS(), backends.HostGOARCH(), prog)
 					if err != nil {
 						// A backend that did not install is a failed command, not a
 						// warning. This used to print FAILED and continue, so
 						// `tk install` exited 0 with nothing at the target and the
 						// caller went looking for the problem somewhere else.
+						prog.Close()
+						logx.Errorf("install %s: %v", name, err)
 						failed = append(failed, name)
 						rows = append(rows, row{name, "failed", err.Error()})
 						lines = append(lines, fmt.Sprintf("%-8s FAILED: %v", name, err))
@@ -340,6 +368,7 @@ Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DE
 						// the failure path.
 						if engineReleased {
 							if rerr := ctx.resumeResident(); rerr != nil {
+								logx.Warnf("install %s: resident left quiesced: %v", name, rerr)
 								lines = append(lines, fmt.Sprintf("%-8s note: resident left quiesced: %v", name, rerr))
 							}
 						}
@@ -354,8 +383,10 @@ Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DE
 					if qd.Was {
 						if rerr := ctx.resumeDaemon(cmd.Context()); rerr != nil {
 							note = fmt.Sprintf(" (daemon not resumed: %v)", rerr)
+							logx.Warnf("install %s: %s", name, rerr)
 						} else {
 							note = " (daemon restarted)"
+							prog.Note("daemon restarted on the new binary")
 						}
 					}
 					// The resident is resumed on the new binary. Its socket was
@@ -365,8 +396,10 @@ Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DE
 					if engineReleased {
 						if rerr := ctx.resumeResident(); rerr != nil {
 							note += fmt.Sprintf(" (resident not resumed: %v)", rerr)
+							logx.Warnf("install %s: %v", name, rerr)
 						} else {
 							note += " (resident engine replaced)"
+							prog.Note("resident engine replaced")
 						}
 					}
 					rows = append(rows, row{name, "installed", plan.Dest})

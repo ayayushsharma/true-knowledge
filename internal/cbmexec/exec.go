@@ -21,8 +21,12 @@ import (
 
 	"github.com/ayayushsharma/true-knowledge/internal/cbmresolve"
 	"github.com/ayayushsharma/true-knowledge/internal/config"
+	"github.com/ayayushsharma/true-knowledge/internal/logx"
 	"github.com/ayayushsharma/true-knowledge/internal/paths"
+	"github.com/ayayushsharma/true-knowledge/internal/progress"
 )
+
+var log = logx.Scope("cbmexec")
 
 // ErrNotFound is returned when the CBM binary is missing (fail-open upstream).
 var ErrNotFound = errors.New("cbm not installed")
@@ -74,6 +78,7 @@ func New(p paths.Paths, cfg config.Config) (*Runner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrNotFound, err)
 	}
+	log.Debugf("resolved %s (cache %s, runtime %s)", bin, p.CBMCacheDir(), p.CBMRuntimeDir())
 	return &Runner{Bin: bin, Paths: p, Cfg: cfg}, nil
 }
 
@@ -95,11 +100,9 @@ func (r *Runner) Run(ctx context.Context, tool string, payload map[string]any) (
 	}
 	defer cleanup()
 	cmd := r.commandContext(ctx, "cli", tool, "--args-file", argsPath)
-	var out, errb bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &errb
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(errb.String())
+	stdout, stderr, err := r.spawn(cmd, "cli "+tool)
+	if err != nil {
+		msg := strings.TrimSpace(stderr)
 		if msg == "" {
 			msg = err.Error()
 		}
@@ -108,7 +111,7 @@ func (r *Runner) Run(ctx context.Context, tool string, payload map[string]any) (
 		// instead of dumping the raw payload at the caller.
 		return "", fmt.Errorf("cbm %s failed: %s", tool, firstLine(diagnosis(msg)))
 	}
-	return out.String(), nil
+	return stdout, nil
 }
 
 // RunJSON invokes `cbm cli --json <tool> --args-file <json>` and unwraps
@@ -190,20 +193,20 @@ func (r *Runner) runEnvelope(ctx context.Context, tool string, payload map[strin
 	}
 	defer cleanup()
 	cmd := r.commandContext(ctx, "cli", "--json", tool, "--args-file", argsPath)
-	var out, errb bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &errb
-	if err := cmd.Run(); err != nil {
+	stdout, _, err := r.spawn(cmd, "cli --json "+tool)
+	if err != nil {
+		log.Debugf("cli --json %s: envelope spawn failed, retrying without --json", tool)
 		res, lerr := r.legacy(ctx, tool, payload)
 		res.Spawns = 2
 		return res, lerr
 	}
-	env := parseEnvelope(out.String())
+	env := parseEnvelope(stdout)
 	if env.IsErr {
 		return Result{Spawns: 1}, fmt.Errorf("cbm %s failed: %s", tool, env.Msg)
 	}
 	if structured && !r.formatProbed {
 		r.formatProbed, r.formatOK = true, env.Data != nil
+		log.Debugf("format probe: binary honours format:%q = %v", formatJSON, r.formatOK)
 	}
 	if env.Data != nil {
 		return Result{Text: env.Text, Data: env.Data, Spawns: 1}, nil
@@ -216,7 +219,7 @@ func (r *Runner) runEnvelope(ctx context.Context, tool string, payload map[strin
 	if legacy, lerr := r.Run(ctx, tool, withoutFormat(payload)); lerr == nil && legacy != "" {
 		return Result{Text: legacy, Spawns: 2}, nil
 	}
-	return Result{Text: out.String(), Spawns: 1}, nil
+	return Result{Text: stdout, Spawns: 1}, nil
 }
 
 // legacy re-runs a tool with format stripped, for a binary that rejected
@@ -419,7 +422,52 @@ func (r *Runner) commandContext(ctx context.Context, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, r.Bin, args...)
 	cmd.Env = r.env()
 	applyStackLimit(cmd)
+	log.Debugf("spawn %s %s", r.Bin, argvForLog(args))
 	return cmd
+}
+
+// spawn runs one engine child and narrates it: argv, wall time, exit verdict,
+// and how much each stream produced.
+//
+// Every spawn in this package goes through here, and that is the point. The two
+// format fallbacks below re-run a tool behind the caller's back, so a reader
+// with only the caller's trace event sees one spawn where two happened — and
+// "the call took 9s" has no explanation anywhere. Saying it here means the
+// second engine process shows up in the narration the operator is already
+// reading, without a code change at each call site.
+func (r *Runner) spawn(cmd *exec.Cmd, label string) (string, string, error) {
+	t0 := time.Now()
+	var out, errb bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errb
+	err := cmd.Run()
+	took := progress.Dur(time.Since(t0))
+	if err != nil {
+		log.Debugf("%s: failed in %s: %v | stderr %s", label, took, err, oneLine(errb.String()))
+		return out.String(), errb.String(), err
+	}
+	log.Debugf("%s: ok in %s | stdout %s | stderr %s", label, took,
+		progress.Bytes(int64(out.Len())), progress.Bytes(int64(errb.Len())))
+	return out.String(), errb.String(), nil
+}
+
+// argvForLog renders an argument list with the args-file path kept but the
+// payload itself not inlined. The payload is the interesting half, and it is
+// already in tk.log under `argv` plus the args file; repeating a few hundred
+// bytes of it on stderr for every call would bury the lines that are new.
+func argvForLog(args []string) string {
+	return strings.Join(args, " ")
+}
+
+// oneLine clips a stream to its first line for a log field. A multi-line engine
+// refusal pasted into a diagnostic line destroys the whole log's alignment, and
+// the full text is already preserved in the error and in tk.log.
+func oneLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // env builds the spawn environment (shared by all Run variants).
@@ -441,17 +489,15 @@ func (r *Runner) RunRaw(ctx context.Context, argv ...string) (string, error) {
 	}
 	args := append([]string{"cli"}, argv...)
 	cmd := r.commandContext(ctx, args...)
-	var out, errb bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &errb
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(errb.String())
+	stdout, stderr, err := r.spawn(cmd, "cli raw")
+	if err != nil {
+		msg := strings.TrimSpace(stderr)
 		if msg == "" {
 			msg = err.Error()
 		}
 		return "", fmt.Errorf("cbm cli failed: %s", firstLine(msg))
 	}
-	return out.String(), nil
+	return stdout, nil
 }
 
 // RunDaemon invokes a top-level (non-cli) cbm subcommand such as
@@ -467,24 +513,22 @@ func (r *Runner) RunDaemon(ctx context.Context, argv ...string) (string, error) 
 		defer cancel()
 	}
 	cmd := r.commandContext(ctx, argv...)
-	var out, errb bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &errb
-	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(errb.String())
+	stdout, stderr, err := r.spawn(cmd, "daemon "+strings.Join(argv, " "))
+	if err != nil {
+		msg := strings.TrimSpace(stderr)
 		if msg == "" {
-			msg = strings.TrimSpace(out.String())
+			msg = strings.TrimSpace(stdout)
 		}
 		if msg == "" {
 			msg = err.Error()
 		}
 		// Preserve any daemon output for the caller to interpret.
-		if text := strings.TrimSpace(out.String()); text != "" {
+		if text := strings.TrimSpace(stdout); text != "" {
 			return text + "\n", fmt.Errorf("cbm daemon failed: %s", firstLine(msg))
 		}
 		return "", fmt.Errorf("cbm daemon failed: %s", firstLine(msg))
 	}
-	return out.String(), nil
+	return stdout, nil
 }
 
 func firstLine(s string) string {

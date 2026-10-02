@@ -72,7 +72,7 @@ func TestFinalizeMasksEventSecrets(t *testing.T) {
 
 	var buf bytes.Buffer
 	buf.WriteString("clean output\n")
-	finalize(&buf, time.Now(), nil)
+	finalize(&sinks{out: &buf}, time.Now(), nil)
 
 	data, err := os.ReadFile(c.Paths.LogFile())
 	if err != nil {

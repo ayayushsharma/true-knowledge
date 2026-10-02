@@ -6,7 +6,12 @@ import (
 	"fmt"
 	"net"
 	"time"
+
+	"github.com/ayayushsharma/true-knowledge/internal/logx"
+	"github.com/ayayushsharma/true-knowledge/internal/progress"
 )
+
+var log = logx.Scope("resident")
 
 // dialTimeout bounds the connect. It is short on purpose: the resident either
 // answers a warm child in tens of milliseconds or it is not there, and a
@@ -56,8 +61,15 @@ func (c *Client) Available() bool {
 // the measured win is already banked by not spawning. Simplicity here is what
 // keeps the failure mode "dial failed", which the caller already handles.
 func (c *Client) Call(req Request) (Reply, error) {
+	t0 := time.Now()
 	conn, err := net.DialTimeout("unix", c.Addr, dialTimeout)
 	if err != nil {
+		// The single most common event in the whole design: the resident is
+		// opt-in, so most calls dial and find nothing. Logged at debug because
+		// a reader chasing "why was this call slow" needs to know whether the
+		// dial failed instantly (no resident) or after the full timeout (one
+		// wedged on the other end) — the two look identical from the outside.
+		log.Debugf("dial %s: no resident (%v) in %s", c.Addr, err, progress.Dur(time.Since(t0)))
 		return Reply{}, ErrNoResident
 	}
 	defer conn.Close()
@@ -97,13 +109,33 @@ func (c *Client) Call(req Request) (Reply, error) {
 	}
 	var reply Reply
 	if err := Decode(line, &reply); err != nil {
+		log.Warnf("%s %s: malformed reply: %v", req.Tool, req.Action, err)
 		return Reply{}, err
 	}
 	// An engine refusal comes back in Reply.Error, not as a Go error: the
 	// call did complete, and the caller has to be able to tell "the engine
 	// said no" from "no resident answered" because only the second one means
 	// it should spawn.
+	log.Debugf("%s %s: answered in %s (error=%v)",
+		orNone(req.Tool), orNone(req.Action), progress.Dur(time.Since(t0)), orFalse(reply.Error == ""))
 	return reply, nil
+}
+
+// orNone renders an empty field as "-" and orFalse a boolean, so a diagnostic
+// line always has the same shape and a reader is never left guessing which of
+// two adjacent fields was the empty one.
+func orNone(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+func orFalse(ok bool) string {
+	if ok {
+		return "ok"
+	}
+	return "refused"
 }
 
 // Control sends an action and returns the status the resident reports.

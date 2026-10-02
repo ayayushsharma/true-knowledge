@@ -2,8 +2,8 @@
 id: 06-paths-config
 title: Paths and config — XDG everywhere, one key registry
 status: authoritative
-date: 2026-09-28
-supersedes: [AGENT_DOCS/history/compatible-implementation-spec.md §6, AGENT_DOCS/history/PATHS-CONFIG.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp3-memory-layer.md, AGENT_DOCS/history/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md, AGENT_DOCS/history/DECISIONS/2026-09-24-mvp4-human-ux-picker-manpages.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
+date: 2026-10-02
+supersedes: [AGENT_DOCS/history/DECISIONS/2026-10-02-stderr-is-the-diagnostic-channel.md, AGENT_DOCS/history/DECISIONS/2026-10-02-picker-search-is-fuzzy-and-case-insensitive.md, AGENT_DOCS/history/DECISIONS/2026-10-02-project-routing-is-always-explicit.md, AGENT_DOCS/history/compatible-implementation-spec.md §6, AGENT_DOCS/history/PATHS-CONFIG.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp3-memory-layer.md, AGENT_DOCS/history/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md, AGENT_DOCS/history/DECISIONS/2026-09-24-mvp4-human-ux-picker-manpages.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
 superseded-by: null
 ---
 
@@ -92,7 +92,7 @@ round out the surface.
 | `embedding.timeout_ms` | `3000` | |
 | `ledger.enabled` | `true` | write-only gate; reads stay open |
 | `mcp.profile` | — | `scout`, `analysis`, `minimal`, `memory`, or empty |
-| `ui.picker` | `true` | fuzzy picker needs a TTY, no `--json`, and this key |
+| `ui.picker` | `true` | gates `--select`, the only flag that opens the fuzzy picker; off, or without a TTY or without `--json`, `--select` fails naming `--project` |
 
 Shape rules:
 
@@ -117,6 +117,7 @@ Shape rules:
 | `TK_CBM_BIN` | wins the backend resolver |
 | `TK_RELEASE_BASE_URL` | release-asset mirror base; also how the install tests serve a fake release |
 | `TK_RELEASE_BASE_URL_CBM` | per-backend mirror, wins over the global one |
+| `TK_LOG` | stderr diagnostic level `off\|error\|warn\|info\|debug`, default `warn`; `--verbose`/`--quiet` override it — see `10-OUTPUT.md` |
 
 ## Migration
 

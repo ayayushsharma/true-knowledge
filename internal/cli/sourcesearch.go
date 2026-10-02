@@ -133,19 +133,17 @@ func zoektStaleNote(p store.Project, countWorktree bool) (note string, modified,
 // resolveSourceScope resolves what a source-search invocation covers: one
 // project by name, the interactive picker, or the whole fleet.
 //
-// It does not use requireProject. That helper resolves by inference — a single
-// registered project auto-selects, otherwise a picker may open — and source-search
-// never infers a scope. This is the one project-resolving command whose absence
-// of --project is an error naming every route, because "search everything" must
-// be asked for rather than inferred from an argument the caller left out.
-// resolveProject keeps its auto-select for the other ten commands.
+// It does not use requireProject because --all-projects is a third route that
+// only this verb has. Both helpers are explicit by construction — nothing is
+// inferred from an argument the caller left out — so a query never means "the
+// whole registry" or "whichever project happens to be registered".
 func resolveSourceScope(ctx *Ctx, project string, sel, all bool) (string, error) {
 	switch {
 	case project != "" && all:
 		return "", fail("--project and --all-projects are mutually exclusive; pass one")
 	case project != "":
 		if _, ok := ctx.Reg[project]; !ok {
-			return "", fail("unknown project %q (registered: %s); see `tk status`", project, listNames(ctx))
+			return "", unknownProject("source-search", project, ctx)
 		}
 		return project, nil
 	case sel:

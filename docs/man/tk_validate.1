@@ -27,7 +27,7 @@ Symbol existence + near-miss candidates, coverage-annotated (analysis profile)
 
 .PP
 \fB-s\fP, \fB--select\fP[=false]
-	force the interactive project picker open (ignored when --project is set)
+	open the interactive project picker (ignored when --project is set)
 
 .PP
 \fB--symbol\fP=""
@@ -45,6 +45,14 @@ Symbol existence + near-miss candidates, coverage-annotated (analysis profile)
 .PP
 \fB--json\fP[=false]
 	stable JSON envelope output
+
+.PP
+\fB--quiet\fP[=false]
+	stderr carries errors only; suppress progress (TK_LOG=error)
+
+.PP
+\fB--verbose\fP[=false]
+	debug narration on stderr (TK_LOG=debug)
 
 
 .SH EXAMPLE

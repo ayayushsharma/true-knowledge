@@ -12,7 +12,9 @@ import (
 	"github.com/ayayushsharma/true-knowledge/internal/cbmexec"
 	"github.com/ayayushsharma/true-knowledge/internal/config"
 	"github.com/ayayushsharma/true-knowledge/internal/gitx"
+	"github.com/ayayushsharma/true-knowledge/internal/logx"
 	"github.com/ayayushsharma/true-knowledge/internal/paths"
+	"github.com/ayayushsharma/true-knowledge/internal/progress"
 	"github.com/ayayushsharma/true-knowledge/internal/resident"
 	"github.com/ayayushsharma/true-knowledge/internal/store"
 	"github.com/ayayushsharma/true-knowledge/internal/trace"
@@ -23,11 +25,32 @@ import (
 // Single-threaded CLI path only; MCP records are built inline in handle().
 var currentCtx *Ctx
 
+// currentSinks is the invocation's record buffers, read by finalize. Set
+// alongside currentCtx by NewRoot.
+var currentSinks *sinks
+
 // Globals are bound to persistent flags.
 type Globals struct {
 	Home   string
 	JSON   bool
 	Budget int
+	// Verbose raises the stderr diagnostic level to debug; Quiet drops it to
+	// error and suppresses progress. Both are about the diagnostic channel
+	// only: neither touches what lands on stdout, so `tk install --json
+	// --verbose | jq` still yields an envelope and no log lines in it.
+	Verbose bool
+	Quiet   bool
+	// LongLived marks a process that serves many requests in one run rather than
+	// one command and exiting — `tk mcp` and nothing else.
+	//
+	// It has two consequences, and both follow from the same fact: there is no
+	// single invocation to close. Progress is silenced, because the process's
+	// stderr belongs to the client that connected to it rather than to a person
+	// watching a terminal. And the diagnostic tee is not installed, because the
+	// tee buffer is drained by finalize at exit — which never comes, so the
+	// buffer would grow for as long as the session did. tk.log is still written
+	// here, one record per tool call, by the MCP server's own recorder.
+	LongLived bool
 }
 
 // Ctx carries resolved state for one invocation.
@@ -39,6 +62,18 @@ type Ctx struct {
 	Run    *cbmexec.Runner // nil when CBM binary missing (fail-open)
 	CBMOK  bool
 	Events []trace.Event // backend operations, recorded into tk.log
+	// Prog is the stderr progress channel. Never nil after load: an inert
+	// reporter is the disabled state, so no call site has to nil-check a
+	// cosmetic feature.
+	Prog *progress.Reporter
+}
+
+// progress returns the step reporter, inert when the command has none.
+func (c *Ctx) progress() *progress.Reporter {
+	if c == nil || c.Prog == nil {
+		return progress.Disabled()
+	}
+	return c.Prog
 }
 
 // out renders human text or stable JSON envelope.
@@ -88,6 +123,8 @@ func firstLine(s string) string {
 // load resolves paths + config + registry + optional runner.
 func load(g Globals) (*Ctx, error) {
 	p := paths.Resolve(g.Home)
+	logx.Debugf("paths home=%s config=%s data=%s cache=%s state=%s",
+		displayHome(g.Home), p.Config, p.Data, p.Cache, p.State)
 	if err := p.Ensure(); err != nil {
 		return nil, fail("cannot create state dirs: %v", err)
 	}
@@ -100,12 +137,36 @@ func load(g Globals) (*Ctx, error) {
 		return nil, fail("%v", err)
 	}
 	c := &Ctx{G: g, Paths: p, Cfg: cfg, Reg: reg}
+	// The step reporter tees into the invocation's diag buffer, so a progress
+	// trace shown on a terminal is also in tk.log. Without this the two
+	// channels disagree about what happened, which is the one thing a record
+	// cannot afford. A long-lived process is excluded: finalize drains that
+	// buffer at exit, and exit never comes.
+	rec := currentSinks.diagOrNil()
+	if g.LongLived {
+		rec = nil
+	}
+	logx.SetRecord(rec)
+	c.Prog = progress.NewStderr(!g.LongLived && !g.Quiet).SetRecord(rec)
 	if r, err := cbmexec.New(p, cfg); err == nil {
 		c.Run = r
 		c.CBMOK = true
+		logx.Debugf("cbm resolved %s", r.Bin)
+	} else {
+		logx.Warnf("cbm unavailable (%v); graph and facts are unavailable, install hint: tk install", err)
 	}
+	logx.Debugf("registry %d project(s)", len(reg))
 	currentCtx = c
 	return c, nil
+}
+
+// displayHome names the base home for the log without leaking a home
+// directory into a line nobody needs.
+func displayHome(home string) string {
+	if home == "" {
+		return "(resolved)"
+	}
+	return home
 }
 
 func (c *Ctx) saveReg() error {

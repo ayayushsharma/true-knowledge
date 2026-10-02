@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/ayayushsharma/true-knowledge/internal/logx"
 	"github.com/ayayushsharma/true-knowledge/internal/memory"
 	"github.com/ayayushsharma/true-knowledge/internal/trace"
 	"github.com/spf13/cobra"
@@ -21,9 +22,18 @@ All graph work = codebase-memory-mcp cli <tool> --json via one wrapper.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	// The diagnostic channel is configured before any RunE can emit into it,
+	// including the ones that fail inside load() and never reach a command body.
+	// A level resolved after the first log line is a level that missed one.
+	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		logx.Configure(g.Verbose, g.Quiet)
+		return nil
+	}
 	root.PersistentFlags().StringVar(&g.Home, "home", "", "override base home (TK_HOME equivalent: config+data+cache+state under it)")
 	root.PersistentFlags().BoolVar(&g.JSON, "json", false, "stable JSON envelope output")
 	root.PersistentFlags().IntVar(&g.Budget, "budget", 0, "char budget override (0 = config defaults)")
+	root.PersistentFlags().BoolVar(&g.Verbose, "verbose", false, "debug narration on stderr (TK_LOG=debug)")
+	root.PersistentFlags().BoolVar(&g.Quiet, "quiet", false, "stderr carries errors only; suppress progress (TK_LOG=error)")
 
 	root.AddCommand(
 		cmdInit(g),
@@ -58,31 +68,54 @@ All graph work = codebase-memory-mcp cli <tool> --json via one wrapper.`,
 	// Central trace capture: all rendered output flows through root's
 	// writers, so one tee sees every command. Per-command RunE wrappers
 	// finalize the record (timing, exit, events) on return.
-	buf := &bytes.Buffer{}
-	root.SetOut(io.MultiWriter(os.Stdout, buf))
-	wrapAll(root, buf)
+	//
+	// Two buffers, two channels. out is the answer — the bytes a caller pipes.
+	// diag is the narration — progress steps and any stderr-level logging. They
+	// are captured separately and recorded separately, because "what did it
+	// print" and "what did it say while working" are different questions and
+	// merging them makes the first one unanswerable.
+	inv := &sinks{out: &bytes.Buffer{}, diag: &bytes.Buffer{}}
+	currentSinks = inv
+	root.SetOut(io.MultiWriter(os.Stdout, inv.out))
+	wrapAll(root, inv)
 	return root
 }
 
-func wrapAll(cmd *cobra.Command, buf *bytes.Buffer) {
+// sinks holds the per-invocation record buffers for one root command tree.
+type sinks struct {
+	out  *bytes.Buffer
+	diag *bytes.Buffer
+}
+
+// diagOrNil is the record sink for the stderr channel, or nil when no tree has
+// been built (a bare Ctx in a test). nil is the honest "no record" value: both
+// logx and progress treat it as one write branch rather than an error.
+func (s *sinks) diagOrNil() io.Writer {
+	if s == nil || s.diag == nil {
+		return nil
+	}
+	return s.diag
+}
+
+func wrapAll(cmd *cobra.Command, inv *sinks) {
 	if cmd.RunE != nil {
 		orig := cmd.RunE
 		start := time.Now()
 		cmd.RunE = func(c *cobra.Command, args []string) (err error) {
 			defer func() {
-				finalize(buf, start, err)
+				finalize(inv, start, err)
 			}()
 			return orig(c, args)
 		}
 	}
 	for _, sub := range cmd.Commands() {
-		wrapAll(sub, buf)
+		wrapAll(sub, inv)
 	}
 }
 
 // finalize writes the unified trace record. Best-effort by construction:
 // trace.Append swallows all errors, and a missing Ctx just skips.
-func finalize(buf *bytes.Buffer, start time.Time, err error) {
+func finalize(inv *sinks, start time.Time, err error) {
 	c := currentCtx
 	if c == nil {
 		return
@@ -99,7 +132,8 @@ func finalize(buf *bytes.Buffer, start time.Time, err error) {
 			argv[i] = "[REDACTED]"
 		}
 	}
-	text := maskedText(buf.String())
+	text := maskedText(inv.out.String())
+	diag := maskedText(inv.diag.String())
 	evs := make([]trace.Event, 0, len(c.Events))
 	for _, ev := range c.Events {
 		ev.Detail = maskedText(ev.Detail)
@@ -114,7 +148,7 @@ func finalize(buf *bytes.Buffer, start time.Time, err error) {
 		"cwd":    cwd(),
 		"exit":   code,
 		"events": evs,
-		"output": map[string]any{"chars": len(text), "text": text},
+		"output": map[string]any{"chars": len(text), "text": text, "diag": diag},
 	}
 	if errText != "" {
 		rec["error"] = maskedText(errText)

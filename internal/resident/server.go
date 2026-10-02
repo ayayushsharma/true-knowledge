@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ayayushsharma/true-knowledge/internal/cbmexec"
+	"github.com/ayayushsharma/true-knowledge/internal/progress"
 )
 
 // Engine is the part of the child the server needs. It is an interface so the
@@ -214,14 +215,30 @@ func (s *Server) serveConn(conn net.Conn) {
 	}
 
 	s.one.Lock()
+	t0 := time.Now()
 	res, err := eng.CallTimeout(req.Tool, args, timeout)
 	s.one.Unlock()
 
+	// The resident outlives every command that talks to it, so its own log is
+	// the only place a call can be recorded after the fact. The client records
+	// its half in tk.log when it returns; nobody does that here, and a resident
+	// that is quietly wedged shows up nowhere.
+	s.log(fmt.Sprintf("resident %s %s", req.Tool, verdict(err, time.Since(t0))))
 	if err != nil {
 		_ = writeReply(conn, Reply{Error: err.Error()})
 		return
 	}
 	_ = writeReply(conn, Reply{Result: res})
+}
+
+// verdict is one fixed shape for a call outcome: the elapsed time and whether
+// the engine answered. Two formats for the same fact is how a log ends up with
+// half its records unparseable.
+func verdict(err error, d time.Duration) string {
+	if err != nil {
+		return fmt.Sprintf("failed in %s: %s", progress.Dur(d), oneLine(err.Error()))
+	}
+	return fmt.Sprintf("ok in %s", progress.Dur(d))
 }
 
 // serveAction runs a control request. It bypasses the quiesce check on

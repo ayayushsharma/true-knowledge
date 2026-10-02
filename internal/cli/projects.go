@@ -5,10 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ayayushsharma/true-knowledge/internal/cbmexec"
 	"github.com/ayayushsharma/true-knowledge/internal/config"
 	"github.com/ayayushsharma/true-knowledge/internal/gitx"
+	"github.com/ayayushsharma/true-knowledge/internal/logx"
+	"github.com/ayayushsharma/true-knowledge/internal/progress"
 	"github.com/ayayushsharma/true-knowledge/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -106,6 +109,7 @@ func cmdIndex(g *Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			prog := ctx.progress()
 			mode := ctx.Cfg.IndexMode
 			if modeFlag != "" {
 				mode = modeFlag
@@ -131,24 +135,37 @@ func cmdIndex(g *Globals) *cobra.Command {
 			if len(names) == 0 {
 				return fail("no projects registered; run `tk register <path>`")
 			}
+			// One numbered step per pass — graph then text, per project — so the
+			// denominator is exact. No header line: the project name is in each
+			// step, which keeps the count honest instead of spending a number on
+			// a label.
+			prog.Total(len(names) * 2)
 			for _, n := range names {
 				p, ok := ctx.Reg[n]
 				if !ok {
 					return fail("unknown project %q; see `tk status`", n)
 				}
+				logx.Debugf("index %s: repo=%s mode=%s", n, p.Path, mode)
+				t0 := time.Now()
 				out, err := ctx.cbmCall(cmd.Context(), "index_repository", map[string]any{"repo_path": p.Path, "mode": mode, "name": n})
 				if err != nil {
+					prog.Close()
 					return fail("index %q: %v", n, err)
 				}
+				prog.Step("indexed %s — graph pass in %s", n, progress.Dur(time.Since(t0)))
 				// Zoekt pass: in-process trigram index, auto-refresh + registry.
+				tz := time.Now()
 				if _, zerr := ctx.ensureZoektAndTouch(cmd.Context(), n, p.Path, mode); zerr != nil {
+					prog.Close()
 					return fail("index %q: %v", n, zerr)
 				}
+				prog.Step("indexed %s — text pass in %s", n, progress.Dur(time.Since(tz)))
 				_ = out
 			}
 			if err := ctx.saveReg(); err != nil {
 				return fail("save registry: %v", err)
 			}
+			logx.Debugf("index complete: %d project(s) mode=%s", len(names), mode)
 			msg := fmt.Sprintf("indexed %d project(s) [%s]", len(names), mode)
 			return ctx.out(cmd, msg, map[string]any{"projects": names, "mode": mode})
 		},
@@ -193,9 +210,12 @@ func cmdSync(g *Globals) *cobra.Command {
 				}
 				if syncFresh(p) {
 					clean++
+					logx.Debugf("sync %s: fresh (head %s, zoekt %s)", n, orDash(shortHead(p.Head)), orDash(p.ZoektHead))
 					continue
 				}
 				dirty = append(dirty, n)
+				logx.Debugf("sync %s: stale (recorded head %s, live %s, zoekt %s)",
+					n, orDash(shortHead(p.Head)), orDash(shortHead(gitx.Head(p.Path))), orDash(p.ZoektHead))
 			}
 			if len(dirty) == 0 {
 				return ctx.out(cmd, fmt.Sprintf("clean: %d project(s), no-op (watcher owns freshness)", clean),
@@ -206,14 +226,27 @@ func cmdSync(g *Globals) *cobra.Command {
 				return ctx.out(cmd, fmt.Sprintf("%d clean, %d dirty but CBM unavailable — watcher will catch up", clean, len(dirty)),
 					map[string]any{"clean": clean, "dirty": dirty})
 			}
+			// Progress is declared after the clean/dirty split, because the split
+			// is the part a reader wants before anything starts: it is the answer
+			// to "is this going to take a minute" on a no-op sync, and it is
+			// already the stdout text.
+			prog := ctx.progress()
+			prog.Total(len(dirty) * 2)
 			for _, n := range dirty {
 				p := ctx.Reg[n]
+				logx.Debugf("sync %s: indexing %s [%s]", n, p.Path, ctx.Cfg.IndexMode)
+				t0 := time.Now()
 				if _, err := ctx.cbmCall(cmd.Context(), "index_repository", map[string]any{"repo_path": p.Path, "mode": ctx.Cfg.IndexMode, "name": n}); err != nil {
+					prog.Close()
 					return fail("sync %q: %v", n, err)
 				}
+				prog.Step("synced %s — graph pass in %s", n, progress.Dur(time.Since(t0)))
+				tz := time.Now()
 				if _, zerr := ctx.ensureZoektAndTouch(cmd.Context(), n, p.Path, ctx.Cfg.IndexMode); zerr != nil {
+					prog.Close()
 					return fail("sync %q: %v", n, zerr)
 				}
+				prog.Step("synced %s — text pass in %s", n, progress.Dur(time.Since(tz)))
 			}
 			_ = ctx.saveReg()
 			return ctx.out(cmd, fmt.Sprintf("synced %d dirty, %d clean", len(dirty), clean),

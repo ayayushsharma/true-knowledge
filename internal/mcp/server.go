@@ -22,7 +22,9 @@ import (
 	"time"
 
 	"github.com/ayayushsharma/true-knowledge/internal/cbmexec"
+	"github.com/ayayushsharma/true-knowledge/internal/logx"
 	"github.com/ayayushsharma/true-knowledge/internal/memory"
+	"github.com/ayayushsharma/true-knowledge/internal/progress"
 	"github.com/ayayushsharma/true-knowledge/internal/trace"
 )
 
@@ -43,6 +45,17 @@ type rpcResp struct {
 type rpcErr struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+}
+
+// oneLine clips a diagnostic to its first line. A live-channel line carrying a
+// wrapped multi-line engine refusal would break the terminal's line discipline
+// and make every line after it unreadable; the full text is in the tk.log
+// record for the same call.
+func oneLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 type toolDef struct {
@@ -528,6 +541,16 @@ func (s *Server) handle(ctx context.Context, req rpcReq) (rpcResp, bool) {
 		t0 := time.Now()
 		resp := s.callTool(ctx, id, p.Name, p.Arguments)
 		s.logCall(req.Method, p.Name, p.Arguments, t0, resp)
+		// The record goes to tk.log; this line goes to the live channel, and it
+		// is the one an operator watching `tk mcp --verbose` can actually see go
+		// past. `tk mcp` is silent by default because a stdio server's stderr
+		// belongs to the client — which is exactly why an operator debugging a
+		// slow tool has to ask for this explicitly.
+		if resp.Error != nil {
+			logx.Debugf("mcp %s %s failed in %s: %s", req.Method, p.Name, progress.Dur(time.Since(t0)), oneLine(resp.Error.Message))
+		} else {
+			logx.Debugf("mcp %s %s ok in %s", req.Method, p.Name, progress.Dur(time.Since(t0)))
+		}
 		return resp, true
 	case "ping":
 		return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{}}, true

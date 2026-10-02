@@ -63,31 +63,52 @@ func TestIndexRepoAndSearch(t *testing.T) {
 		t.Fatal("second index should report updated=false (incremental no-op)")
 	}
 
-	matches, err := zoekttext.Search(context.Background(), shards, "ProcessOrder", "", 20)
+	res, err := zoekttext.Search(context.Background(), shards, "ProcessOrder", "", 20)
 	if err != nil {
 		t.Fatal(err)
 	}
+	matches := res.Matches
 	if len(matches) == 0 {
 		t.Fatal("expected at least one match")
 	}
-	if matches[0].File != "orders.go" || matches[0].Line != 3 {
+	if res.Matches[0].File != "orders.go" || res.Matches[0].Line != 3 {
 		t.Fatalf("match = %+v", matches[0])
 	}
 
-	// Limit bounds output.
-	matches, err = zoekttext.Search(context.Background(), shards, "return", "", 1)
+	// Limit bounds output, and the bounded Result still reports the true total.
+	// "o" appears many times in the fixture, so limit=1 genuinely truncates.
+	lim, err := zoekttext.Search(context.Background(), shards, "o", "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(matches) != 1 {
-		t.Fatalf("limit=1 gave %d matches", len(matches))
+	if len(lim.Matches) != 1 {
+		t.Fatalf("limit=1 gave %d matches", len(lim.Matches))
+	}
+	if !lim.HasMore {
+		t.Fatal("limit=1 over a multi-hit file must report HasMore")
+	}
+	if lim.Total <= len(lim.Matches) {
+		t.Fatalf("Total=%d must exceed the %d returned matches", lim.Total, len(lim.Matches))
+	}
+	if lim.Files < 1 {
+		t.Fatalf("Files=%d must count the file holding the hits", lim.Files)
+	}
+
+	// Unbounded: HasMore stays false and Total equals what was returned.
+	all, err := zoekttext.Search(context.Background(), shards, "o", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all.HasMore {
+		t.Fatal("limit=0 must not report truncation")
 	}
 
 	// No matches is empty, not an error.
-	matches, err = zoekttext.Search(context.Background(), shards, "nomatch_xyz_123", "", 20)
+	res, err = zoekttext.Search(context.Background(), shards, "nomatch_xyz_123", "", 20)
 	if err != nil {
 		t.Fatal(err)
 	}
+	matches = res.Matches
 	if len(matches) != 0 {
 		t.Fatalf("expected zero matches, got %d", len(matches))
 	}
@@ -102,10 +123,11 @@ func TestIndexDirPlain(t *testing.T) {
 	if err := zoekttext.IndexDir(context.Background(), shards, dir, "plain", nil); err != nil {
 		t.Fatal(err)
 	}
-	matches, err := zoekttext.Search(context.Background(), shards, "hello", "", 20)
+	res, err := zoekttext.Search(context.Background(), shards, "hello", "", 20)
 	if err != nil {
 		t.Fatal(err)
 	}
+	matches := res.Matches
 	if len(matches) == 0 {
 		t.Fatal("expected a match in plain dir index")
 	}
@@ -137,12 +159,12 @@ func TestIndexDirSkipsCoreAndIgnore(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, term := range []string{"keepme", "needsLockfileTesting"} {
-		if m, _ := zoekttext.Search(context.Background(), shards, term, "", 20); len(m) == 0 {
+		if mr, _ := zoekttext.Search(context.Background(), shards, term, "", 20); len(mr.Matches) == 0 {
 			t.Fatalf("term %q must be indexed without ignores", term)
 		}
 	}
-	if m, _ := zoekttext.Search(context.Background(), shards, "dropme", "", 20); len(m) != 0 {
-		t.Fatalf("core dependency dirs must be skipped, got %d hits", len(m))
+	if mr, _ := zoekttext.Search(context.Background(), shards, "dropme", "", 20); len(mr.Matches) != 0 {
+		t.Fatalf("core dependency dirs must be skipped, got %d hits", len(mr.Matches))
 	}
 
 	// Ignore "used.txt": the file is pruned, others unaffected.
@@ -150,10 +172,10 @@ func TestIndexDirSkipsCoreAndIgnore(t *testing.T) {
 	if err := zoekttext.IndexDir(context.Background(), shards2, dir, "plain", []string{"used.txt"}); err != nil {
 		t.Fatal(err)
 	}
-	if m, _ := zoekttext.Search(context.Background(), shards2, "keepme", "", 20); len(m) != 0 {
-		t.Fatalf("ignored file must be pruned, got %d hits", len(m))
+	if mr, _ := zoekttext.Search(context.Background(), shards2, "keepme", "", 20); len(mr.Matches) != 0 {
+		t.Fatalf("ignored file must be pruned, got %d hits", len(mr.Matches))
 	}
-	if m, _ := zoekttext.Search(context.Background(), shards2, "needsLockfileTesting", "", 20); len(m) == 0 {
+	if mr, _ := zoekttext.Search(context.Background(), shards2, "needsLockfileTesting", "", 20); len(mr.Matches) == 0 {
 		t.Fatal("go.mod must stay after ignore (lockfiles are useful)")
 	}
 }
@@ -197,14 +219,14 @@ func TestIndexDirSkipsNonRegularAndOversize(t *testing.T) {
 		t.Fatal("IndexDir hung: a non-regular file was read (FIFO blocks forever)")
 	}
 
-	if m, _ := zoekttext.Search(context.Background(), shards, "keepme", "", 20); len(m) == 0 {
+	if mr, _ := zoekttext.Search(context.Background(), shards, "keepme", "", 20); len(mr.Matches) == 0 {
 		t.Error("the regular file must still be indexed")
 	}
-	if m, _ := zoekttext.Search(context.Background(), shards, "pipe", "", 20); len(m) != 0 {
-		t.Errorf("the FIFO must not be indexed, got %d hits", len(m))
+	if mr, _ := zoekttext.Search(context.Background(), shards, "pipe", "", 20); len(mr.Matches) != 0 {
+		t.Errorf("the FIFO must not be indexed, got %d hits", len(mr.Matches))
 	}
-	if m, _ := zoekttext.Search(context.Background(), shards, "oversizemarker", "", 20); len(m) != 0 {
-		t.Errorf("an oversized file must be skipped, got %d hits", len(m))
+	if mr, _ := zoekttext.Search(context.Background(), shards, "oversizemarker", "", 20); len(mr.Matches) != 0 {
+		t.Errorf("an oversized file must be skipped, got %d hits", len(mr.Matches))
 	}
 }
 
@@ -225,7 +247,7 @@ func TestIndexDirDoesNotReadGitignore(t *testing.T) {
 	if err := zoekttext.IndexDir(context.Background(), shards, dir, "plain", nil); err != nil {
 		t.Fatal(err)
 	}
-	if m, _ := zoekttext.Search(context.Background(), shards, "ignoreme", "", 20); len(m) == 0 {
+	if mr, _ := zoekttext.Search(context.Background(), shards, "ignoreme", "", 20); len(mr.Matches) == 0 {
 		t.Error("plain-dir indexing must not start honoring .gitignore; use <config>/ignore")
 	}
 }
@@ -278,18 +300,19 @@ func TestSearchLive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	shard, err := zoekttext.Search(context.Background(), shards, "hello", "", 20)
+	shardRes, err := zoekttext.Search(context.Background(), shards, "hello", "", 20)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(shard) == 0 || shard[0].Text != "line1 hello" {
-		t.Fatalf("shard bytes should stay old, got %+v", shard)
+	if len(shardRes.Matches) == 0 || shardRes.Matches[0].Text != "line1 hello" {
+		t.Fatalf("shard bytes should stay old, got %+v", shardRes.Matches)
 	}
 
-	live, err := zoekttext.SearchLive(context.Background(), shards, repo, "hello", "", 20)
+	liveRes, err := zoekttext.SearchLive(context.Background(), shards, repo, "hello", "", 20)
 	if err != nil {
 		t.Fatal(err)
 	}
+	live := liveRes.Matches
 	if len(live) == 0 || live[0].Text != "line1 hello EDITED" {
 		t.Fatalf("live text = %+v", live)
 	}
@@ -301,10 +324,11 @@ func TestSearchLive(t *testing.T) {
 	if err := os.Remove(liveFile); err != nil {
 		t.Fatal(err)
 	}
-	gone, err := zoekttext.SearchLive(context.Background(), shards, repo, "hello", "", 20)
+	goneRes, err := zoekttext.SearchLive(context.Background(), shards, repo, "hello", "", 20)
 	if err != nil {
 		t.Fatal(err)
 	}
+	gone := goneRes.Matches
 	if len(gone) == 0 || gone[0].Text[:len("(worktree-missing)")] != "(worktree-missing)" {
 		t.Fatalf("missing file should be tagged, got %+v", gone)
 	}

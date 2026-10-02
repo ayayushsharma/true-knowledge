@@ -37,6 +37,10 @@ func cmdMCP(g *Globals) *cobra.Command {
 			}
 			paths := ctx.Paths
 			s.ShardsFor = paths.ZoektShards
+			// Fleet scope for all_projects source_search, in walk order.
+			// Registry.Names() is sorted, which is what makes the
+			// (project, rank) result order deterministic.
+			s.Projects = func() []string { return ctx.Reg.Names() }
 			// source_search freshness contract: refresh before searching,
 			// live-slice results, and annotate any remaining staleness.
 			s.EnsureIndex = func(rctx context.Context, project string) error {
@@ -49,12 +53,12 @@ func cmdMCP(g *Globals) *cobra.Command {
 				}
 				return ctx.saveReg()
 			}
-			s.Staleness = func(project string) string {
+			s.Staleness = func(project string, fleet bool) string {
 				p, ok := ctx.Reg[project]
 				if !ok {
 					return ""
 				}
-				note, _, _ := zoektStaleNote(p)
+				note, _, _ := zoektStaleNote(p, !fleet)
 				return note
 			}
 			s.ProjectRoot = func(project string) string {

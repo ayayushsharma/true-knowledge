@@ -87,6 +87,14 @@ func projectProp() map[string]any {
 	return strProp("Registered project name (see list_projects / `tk status`)")
 }
 
+// projectOptionalProp is projectProp for the one tool whose scope can be wider
+// than a project. The scope is always explicit: this argument names the project,
+// all_projects names the fleet, and giving both or neither is an error — so
+// omission never silently widens a search.
+func projectOptionalProp() map[string]any {
+	return strProp("Registered project name. Omit it only when all_projects is true — omitting both is an error, not a fleet search")
+}
+
 // auditProp describes the shared list|approve|reject review action + id pair.
 func auditProps() map[string]any {
 	return map[string]any{
@@ -182,11 +190,12 @@ func tools(profile string) []toolDef {
 			"limit":        intProp("Max results (default 20)"),
 			"regex":        boolProp("Treat pattern as a regex"),
 		})},
-		{"source_search", "Trigram text search via zoekt (pattern, project, files?, limit?)", obj([]string{"project", "pattern"}, map[string]any{
-			"project": projectProp(),
-			"pattern": strProp("Trigram search pattern"),
-			"files":   strProp("Optional file glob filter"),
-			"limit":   intProp("Max results (default 20)"),
+		{"source_search", "Trigram text search via zoekt (pattern, project|all_projects, files?, limit?)", obj([]string{"pattern"}, map[string]any{
+			"project":      projectOptionalProp(),
+			"all_projects": boolProp("Search every registered project (omit project; mutually exclusive with it)"),
+			"pattern":      strProp("Trigram search pattern"),
+			"files":        strProp("Optional file glob filter"),
+			"limit":        intProp("Max results across the whole scope (default 20)"),
 		})},
 		{"get_file_outline", "Declarations in one file, in source order (cheap read alternative)", obj([]string{"project", "file_path"}, map[string]any{
 			"project":   projectProp(),
@@ -345,10 +354,19 @@ type Server struct {
 	// cover the live tree (committed or worktree drift); "" = fresh. The
 	// note is prepended verbatim to source_search text; agents can gate
 	// absence claims on it. Nil = no annotation.
-	Staleness func(project string) string
+	//
+	// fleet is true when the note is being collected for an all_projects walk.
+	// It asks for committed drift only: worktree counts need a `git status` per
+	// project (measured ~68ms at 37k files, scaling with repo size), and a fleet
+	// already reports per-project scope instead of per-project edit counts.
+	Staleness func(project string, fleet bool) string
 	// ProjectRoot maps project -> repo root for live snippet re-slicing of
 	// source_search hits (nil = return shard bytes as-is).
 	ProjectRoot func(project string) string
+	// Projects lists every registered project name for an all_projects
+	// source_search, in walk order (nil = the fleet scope is unavailable, and
+	// the tool says so rather than answering for one project instead).
+	Projects func() []string
 	// proto is the negotiated protocol revision, set by initialize. It is
 	// owned by the request loop, which handles one message at a time, so it
 	// needs no lock; it is empty until a client initializes, and an
@@ -846,12 +864,31 @@ func (s *Server) callSourceSearch(ctx context.Context, id any, args map[string]a
 		limit = int(v)
 	}
 	pattern, project := str("pattern"), str("project")
-	if pattern == "" || project == "" {
-		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32602, "source_search needs pattern + project"}}
+	allProjects, _ := args["all_projects"].(bool)
+	if pattern == "" {
+		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32602, "source_search needs pattern"}}
+	}
+	// Scope is always explicit. Omission must not widen the search by default:
+	// an agent that forgets the project gets an error naming both routes, not a
+	// fleet result it did not ask for.
+	if project == "" && !allProjects {
+		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32602, "source_search needs project, or all_projects:true to search every registered project"}}
+	}
+	if project != "" && allProjects {
+		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32602, "source_search takes project or all_projects, not both"}}
 	}
 	if s.ShardsFor == nil {
 		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, "text index not configured in this server"}}
 	}
+	if allProjects {
+		return s.sourceSearchFleet(ctx, id, pattern, str("files"), limit)
+	}
+	return s.sourceSearchOne(ctx, id, project, pattern, str("files"), limit)
+}
+
+// sourceSearchOne is the single-project face, byte-identical to what the tool
+// answered before the fleet existed.
+func (s *Server) sourceSearchOne(ctx context.Context, id any, project, pattern, files string, limit int) rpcResp {
 	notes := []string{}
 	if s.EnsureIndex != nil {
 		if err := s.EnsureIndex(ctx, project); err != nil {
@@ -866,18 +903,70 @@ func (s *Server) callSourceSearch(ctx context.Context, id any, args map[string]a
 		root = s.ProjectRoot(project)
 	}
 	if root != "" {
-		text, err = QueryZoektLive(ctx, s.ShardsFor(project), root, pattern, str("files"), limit)
+		text, err = QueryZoektLive(ctx, s.ShardsFor(project), root, pattern, files, limit)
 	} else {
-		text, err = QueryZoekt(ctx, s.ShardsFor(project), pattern, str("files"), limit)
+		text, err = QueryZoekt(ctx, s.ShardsFor(project), pattern, files, limit)
 	}
 	if err != nil {
 		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, err.Error() + " (shards missing? run `tk index`)"}}
 	}
 	if s.Staleness != nil {
-		if n := s.Staleness(project); n != "" {
+		if n := s.Staleness(project, false); n != "" {
 			notes = append(notes, n)
 		}
 	}
+	for i := len(notes) - 1; i >= 0; i-- {
+		text = notes[i] + text
+	}
+	return rpcResp{JSONRPC: "2.0", ID: id, Result: map[string]any{
+		"content": []map[string]any{{"type": "text", "text": cbmexec.Truncate(text, s.Budget)}},
+	}}
+}
+
+// sourceSearchFleet is the explicit multi-project face. Every project is
+// refreshed before it is searched, failures annotate instead of failing the
+// walk, and the completeness line is prepended so a caller can tell a searched
+// project from a skipped one from one the limit never reached.
+func (s *Server) sourceSearchFleet(ctx context.Context, id any, pattern, files string, limit int) rpcResp {
+	if s.Projects == nil {
+		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, "project registry not configured in this server"}}
+	}
+	names := s.Projects()
+	if len(names) == 0 {
+		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32602, "all_projects was requested but no project is registered (run `tk register <path>`)"}}
+	}
+	members := make([]FleetMember, 0, len(names))
+	notes := []string{}
+	for _, name := range names {
+		if s.EnsureIndex != nil {
+			if err := s.EnsureIndex(ctx, name); err != nil {
+				// Fail-open, and the note names the project: a refresh that
+				// failed must not read as a project with no matches.
+				notes = append(notes, "[source-search: "+name+": index refresh failed: "+err.Error()+"]\n")
+				continue
+			}
+		}
+		m := FleetMember{Name: name, Shards: s.ShardsFor(name)}
+		if s.ProjectRoot != nil {
+			if root := s.ProjectRoot(name); root != "" {
+				m.Root, m.Live = root, true
+			}
+		}
+		if s.Staleness != nil {
+			if n := s.Staleness(name, true); n != "" {
+				notes = append(notes, n)
+			}
+		}
+		members = append(members, m)
+	}
+	fleet, err := QueryZoektFleet(ctx, members, pattern, files, limit)
+	if err != nil {
+		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, err.Error()}}
+	}
+	// The budget marker reports whether Truncate will actually cut this text,
+	// so the line never claims a cut that did not happen.
+	budgetCut := s.Budget > 0 && len(fleet.Completeness(false)+fleet.Text) > s.Budget
+	text := fleet.Completeness(budgetCut) + fleet.Text
 	for i := len(notes) - 1; i >= 0; i-- {
 		text = notes[i] + text
 	}

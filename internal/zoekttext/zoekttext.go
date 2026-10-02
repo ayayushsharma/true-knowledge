@@ -29,11 +29,34 @@ import (
 	"github.com/sourcegraph/zoekt/search"
 )
 
-// Match is one rendered hit: file, 1-based line, decoded text.
+// Match is one rendered hit: file, 1-based line, decoded text. Repo is the
+// indexed repository name, empty when the searcher was not told one (a plain
+// query against shards built without a name). A caller rendering more than one
+// project at a time prefixes hits with it rather than assuming the shard dir
+// it opened was the only one.
 type Match struct {
 	File string
 	Line int
 	Text string
+	Repo string
+}
+
+// Result is one search's bounded hits plus what the shards found in total.
+// Total and Files come from zoekt's Stats (MatchCount, FileCount), which are
+// filled per shard during the search and are therefore unaffected by the
+// display caps — so a truncated search still reports the real numbers.
+// HasMore is zoekt's own truncation signal, preferred over len(Matches) ==
+// limit because it is exact when display caps are set and removes the guess
+// when they are not.
+//
+// Total counts line *fragments*, not lines: a line matching twice contributes
+// two to MatchCount while rendering one hit. That is zoekt's counter, reported
+// as zoekt reports it.
+type Result struct {
+	Matches []Match
+	Total   int
+	Files   int
+	HasMore bool
 }
 
 // IndexRepo indexes a git repo into shardsDir (created if missing).
@@ -254,18 +277,25 @@ func IndexDir(ctx context.Context, shardsDir, dir, name string, ignores []string
 // to limit matches (<=0 = unbounded). files appends a zoekt `file:` filter.
 // Shards open per call (mmap, tens of ms): no daemon. The internal 60s cap
 // derives from ctx, so a caller deadline or disconnect cancels immediately.
-func Search(ctx context.Context, shardsDir, rawQuery, files string, limit int) ([]Match, error) {
+//
+// limit>0 sets TotalMaxMatchCount plus both display caps. TotalMaxMatchCount
+// alone does not bound the result set — measured, 20 returned 10000 matches —
+// and a caller that only truncates afterwards pays heap for every match in the
+// corpus. MaxDocDisplayCount bounds files, MaxMatchDisplayCount bounds matches
+// within them; both are needed because one file can hold every hit. No cap
+// changes Stats.MatchCount, so a truncated Result still reports the true Total.
+func Search(ctx context.Context, shardsDir, rawQuery, files string, limit int) (Result, error) {
 	q := rawQuery
 	if files != "" {
 		q += " file:" + files
 	}
 	parsed, err := query.Parse(q)
 	if err != nil {
-		return nil, fmt.Errorf("zoekt parse %q: %w", rawQuery, err)
+		return Result{}, fmt.Errorf("zoekt parse %q: %w", rawQuery, err)
 	}
 	searcher, err := search.NewDirectorySearcher(shardsDir)
 	if err != nil {
-		return nil, fmt.Errorf("zoekt open %q: %w (run `tk index`)", shardsDir, err)
+		return Result{}, fmt.Errorf("zoekt open %q: %w (run `tk index`)", shardsDir, err)
 	}
 	defer searcher.Close()
 	// WithTimeout over the caller ctx: whichever bound is sooner fires first.
@@ -274,24 +304,41 @@ func Search(ctx context.Context, shardsDir, rawQuery, files string, limit int) (
 	opts := &zoekt.SearchOptions{MaxWallTime: 55 * time.Second}
 	if limit > 0 {
 		opts.TotalMaxMatchCount = limit
+		opts.MaxDocDisplayCount = limit
+		opts.MaxMatchDisplayCount = limit
 	}
 	res, err := searcher.Search(ctx, parsed, opts)
 	if err != nil {
-		return nil, fmt.Errorf("zoekt search: %w", err)
+		return Result{}, fmt.Errorf("zoekt search: %w", err)
 	}
-	var out []Match
+	truncator, hasLimits := index.NewDisplayTruncator(opts)
+	hasMore := false
+	out := Result{Total: res.MatchCount, Files: res.FileCount}
 	for _, f := range res.Files {
-		for _, lm := range f.LineMatches {
-			if limit > 0 && len(out) >= limit {
-				return out, nil
+		files := []zoekt.FileMatch{f}
+		if hasLimits {
+			var still bool
+			files, still = truncator(files)
+			hasMore = hasMore || !still
+			if len(files) == 0 {
+				continue
 			}
-			out = append(out, Match{
-				File: f.FileName,
-				Line: lm.LineNumber,
-				Text: strings.TrimRight(string(lm.Line), "\n"),
-			})
+		}
+		for _, fm := range files {
+			for _, lm := range fm.LineMatches {
+				out.Matches = append(out.Matches, Match{
+					File: fm.FileName,
+					Line: lm.LineNumber,
+					Text: strings.TrimRight(string(lm.Line), "\n"),
+					Repo: fm.Repository,
+				})
+			}
 		}
 	}
+	if !hasLimits {
+		hasMore = limit > 0 && len(out.Matches) >= limit
+	}
+	out.HasMore = hasMore
 	return out, nil
 }
 
@@ -301,13 +348,17 @@ func Search(ctx context.Context, shardsDir, rawQuery, files string, limit int) (
 // match the working tree, not the shard; hits whose file vanished on disk
 // stay but are tagged "(worktree-missing)". Bounded by the same limit, so
 // at most `limit` reads. Never a reindex — pure render-time correction.
-func SearchLive(ctx context.Context, shardsDir, root, rawQuery, files string, limit int) ([]Match, error) {
-	matches, err := Search(ctx, shardsDir, rawQuery, files, limit)
+//
+// The reconcile is per shard dir, so the fleet walks projects and passes each
+// its own root; that is why this still takes a single root string rather than
+// a name->root map.
+func SearchLive(ctx context.Context, shardsDir, root, rawQuery, files string, limit int) (Result, error) {
+	res, err := Search(ctx, shardsDir, rawQuery, files, limit)
 	if err != nil {
-		return nil, err
+		return Result{}, err
 	}
-	for i := range matches {
-		m := &matches[i]
+	for i := range res.Matches {
+		m := &res.Matches[i]
 		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(m.File)))
 		if err != nil {
 			m.Text = "(worktree-missing) " + m.Text
@@ -318,5 +369,5 @@ func SearchLive(ctx context.Context, shardsDir, root, rawQuery, files string, li
 			m.Text = strings.TrimRight(lines[m.Line-1], "\r")
 		}
 	}
-	return matches, nil
+	return res, nil
 }

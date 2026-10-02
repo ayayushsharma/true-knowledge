@@ -326,6 +326,25 @@ check query 0 $TK_BIN query --cypher "MATCH (f:Function) RETURN f.name LIMIT 5" 
 check outline 0 $TK_BIN outline --file main.go --project demo
 check impact 0 $TK_BIN impact --project demo
 check source-search 0 $TK_BIN source-search --pattern Demo --project demo
+# source-search never infers a scope: no --project is an error naming the
+# routes, and --all-projects is the only way to widen past one project.
+# A command substitution under `set -eu` aborts the script when the command
+# exits non-zero, so the failing call is made in an `if` and the message is
+# captured with `|| true`.
+if out=$($TK_BIN source-search --pattern Demo 2>&1); then
+  fail=$((fail+1)); printf 'FAIL source-search-no-scope-must-fail\n';
+else
+  case "$out" in
+    *--project*--select*--all-projects*) pass=$((pass+1)); printf 'ok   source-search-no-scope-names-routes\n';;
+    *) fail=$((fail+1)); printf 'FAIL source-search-no-scope-routes\n  %s\n' "$out";;
+  esac
+fi
+check source-search-all-projects 0 $TK_BIN source-search --pattern Demo --all-projects
+out=$($TK_BIN source-search --pattern Demo --all-projects 2>&1)
+case "$out" in
+  *'[source-search:'*'match'*'in demo'*'demo:main.go'*) pass=$((pass+1)); printf 'ok   source-search-fleet-scope-line\n';;
+  *) fail=$((fail+1)); printf 'FAIL source-search-fleet-scope-line\n  %s\n' "$out";;
+esac
 check config-get 0 $TK_BIN config get index_mode
 check config-validate 0 $TK_BIN config validate
 check config-picker-get 0 $TK_BIN config get ui.picker
@@ -715,6 +734,19 @@ out=$(printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"na
 case "$out" in
   *'main.go'*Demo*) pass=$((pass+1)); printf 'ok   mcp-source-search-hit\n';;
   *) fail=$((fail+1)); printf 'FAIL mcp-source-search\n  %s\n' "$out";;
+esac
+# all_projects is the explicit fleet scope and returns the same hit, prefixed
+# and annotated with the scope it searched.
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"source_search","arguments":{"pattern":"Demo","all_projects":true}}}' | $TK_BIN mcp 2>/dev/null)
+case "$out" in
+  *'[source-search:'*'demo:main.go'*Demo*) pass=$((pass+1)); printf 'ok   mcp-source-search-all-projects\n';;
+  *) fail=$((fail+1)); printf 'FAIL mcp-source-search-all-projects\n  %s\n' "$out";;
+esac
+# Giving both is a schema-level error, not a silent precedence rule.
+out=$(printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"source_search","arguments":{"pattern":"Demo","project":"demo","all_projects":true}}}' | $TK_BIN mcp 2>/dev/null)
+case "$out" in
+  *'not both'*) pass=$((pass+1)); printf 'ok   mcp-source-search-scope-exclusive\n';;
+  *) fail=$((fail+1)); printf 'FAIL mcp-source-search-scope-exclusive\n  %s\n' "$out";;
 esac
 # coverage-before-absence: an empty search_graph must carry the coverage
 # verdict (scout-only profiles standardized), and a hit stays bare.

@@ -472,7 +472,7 @@ func TestSourceSearchHooks(t *testing.T) {
 		Budget:      6000,
 		ShardsFor:   func(string) string { return shards },
 		EnsureIndex: func(context.Context, string) error { indexed++; return nil },
-		Staleness:   func(string) string { return "[source-search: 1 modified, 0 untracked in worktree not indexed]\n" },
+		Staleness:   func(string, bool) string { return "[source-search: 1 modified, 0 untracked in worktree not indexed]\n" },
 		ProjectRoot: func(string) string { return dir },
 	}
 	resp := serveOne(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"source_search","arguments":{"pattern":"Widget","project":"p"}}}`)
@@ -1059,4 +1059,282 @@ func TestRequestContextReachesHooks(t *testing.T) {
 	if !hasDeadline {
 		t.Error("hook context has no deadline; a wedged index refresh would hold the loop open")
 	}
+}
+
+// indexPlain indexes a one-file plain dir under <root>/<name> and returns its
+// shard dir. Mirrors tk's real layout: <cache>/zoekt/<project>/, one level
+// below the cache root, NOT flat inside it.
+func indexPlain(t *testing.T, root, name, body string) (dir, shards string) {
+	t.Helper()
+	dir, shards = t.TempDir(), filepath.Join(root, name)
+	if err := os.WriteFile(filepath.Join(dir, "w.go"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := zoekttext.IndexDir(context.Background(), shards, dir, name, nil); err != nil {
+		t.Fatal(err)
+	}
+	return dir, shards
+}
+
+// TestSourceSearchFleetSpansProjects is the test the layout makes necessary.
+// tk keeps shards at <cache>/zoekt/<project>/, while a zoekt directory
+// searcher globs <dir>/*.zoekt — flat, non-recursive. So a searcher opened on
+// the cache root loads zero shards and answers empty with no error at all. An
+// implementation that searched the parent directory would pass every
+// single-project test and return "(no matches)" for every fleet query, forever.
+func TestSourceSearchFleetSpansProjects(t *testing.T) {
+	zoektRoot := t.TempDir()
+	dirA, shardsA := indexPlain(t, zoektRoot, "alpha", "func ProcessOrder() {}\n")
+	_, shardsB := indexPlain(t, zoektRoot, "beta", "func ProcessOrderLater() {}\n")
+
+	// Precondition: the cache root itself is NOT a searchable directory.
+	if res, err := zoekttext.Search(context.Background(), zoektRoot, "ProcessOrder", "", 20); err == nil {
+		if len(res.Matches) != 0 {
+			t.Fatalf("precondition broke: parent dir returned %d matches; the layout under test requires 0", len(res.Matches))
+		}
+	} else {
+		t.Logf("parent dir errors outright (also acceptable for the layout): %v", err)
+	}
+
+	s := &Server{
+		Budget:      6000,
+		ShardsFor:   func(p string) string { return map[string]string{"alpha": shardsA, "beta": shardsB}[p] },
+		Projects:    func() []string { return []string{"alpha", "beta"} },
+		ProjectRoot: func(p string) string { return map[string]string{"alpha": dirA}[p] },
+	}
+	resp := serveOne(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"source_search","arguments":{"pattern":"ProcessOrder","all_projects":true}}}`)
+	if resp["error"] != nil {
+		t.Fatalf("fleet search failed: %v", resp)
+	}
+	text := responseText(t, resp)
+	if !strings.Contains(text, "alpha:w.go") {
+		t.Fatalf("hit from alpha missing — a parent-directory searcher returns nothing at all: %q", text)
+	}
+	if !strings.Contains(text, "beta:w.go") {
+		t.Fatalf("hit from beta missing: %q", text)
+	}
+	if !strings.Contains(text, "2 matches") || !strings.Contains(text, "across 2 projects (alpha, beta)") {
+		t.Fatalf("completeness line missing or wrong: %q", text)
+	}
+	// Hits are repo-prefixed under a fleet so the shape reveals the scope.
+	if strings.Contains(text, "\nw.go:1:") {
+		t.Fatalf("fleet hits must be repo-prefixed: %q", text)
+	}
+}
+
+// TestSourceSearchFleetRefreshFailOpen: one project's refresh failure is
+// annotated and named; the rest of the fleet still answers.
+func TestSourceSearchFleetRefreshFailOpen(t *testing.T) {
+	zoektRoot := t.TempDir()
+	_, shardsA := indexPlain(t, zoektRoot, "alpha", "func ProcessOrder() {}\n")
+	_, shardsB := indexPlain(t, zoektRoot, "beta", "func ProcessOrderLater() {}\n")
+	s := &Server{
+		Budget:    6000,
+		ShardsFor: func(p string) string { return map[string]string{"alpha": shardsA, "beta": shardsB}[p] },
+		Projects:  func() []string { return []string{"alpha", "beta"} },
+		EnsureIndex: func(_ context.Context, p string) error {
+			if p == "alpha" {
+				return errors.New("reindex boom")
+			}
+			return nil
+		},
+	}
+	resp := serveOne(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"source_search","arguments":{"pattern":"ProcessOrder","all_projects":true}}}`)
+	text := responseText(t, resp)
+	if !strings.Contains(text, "alpha: index refresh failed: reindex boom") {
+		t.Fatalf("failed refresh must name its project: %q", text)
+	}
+	if !strings.Contains(text, "beta:w.go") {
+		t.Fatalf("fleet must still answer from the projects that refreshed: %q", text)
+	}
+	if strings.Contains(text, "alpha:w.go") {
+		t.Fatalf("a project that failed to refresh must not be reported as searched: %q", text)
+	}
+}
+
+// TestSourceSearchFleetReportsNotSearched: when the limit runs out mid-walk,
+// the untouched tail is named. A project never opened says nothing about its
+// content, and "truncated" alone would read as "nothing else matched".
+func TestSourceSearchFleetReportsNotSearched(t *testing.T) {
+	zoektRoot := t.TempDir()
+	_, a := indexPlain(t, zoektRoot, "alpha", "package main\nfunc ProcessOrder() {}\nfunc ProcessOrder2() {}\nfunc ProcessOrder3() {}\n")
+	_, b := indexPlain(t, zoektRoot, "beta", "package main\nfunc ProcessOrder() {}\nfunc ProcessOrder2() {}\n")
+	_, c := indexPlain(t, zoektRoot, "gamma", "package main\nfunc ProcessOrder() {}\n")
+	s := &Server{
+		Budget:    6000,
+		ShardsFor: func(p string) string { return map[string]string{"alpha": a, "beta": b, "gamma": c}[p] },
+		Projects:  func() []string { return []string{"alpha", "beta", "gamma"} },
+	}
+	resp := serveOne(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"source_search","arguments":{"pattern":"ProcessOrder","all_projects":true,"limit":1}}}`)
+	text := responseText(t, resp)
+	if !strings.Contains(text, "truncated") {
+		t.Fatalf("truncation must be stated: %q", text)
+	}
+	// alpha alone filled the limit, so beta and gamma were both never opened.
+	if !strings.Contains(text, "not searched: beta, gamma (limit)") {
+		t.Fatalf("the whole unsearched tail must be named: %q", text)
+	}
+	// Totals cover searched projects only: nothing is claimed about content
+	// tk never looked at.
+	if !strings.Contains(text, "in 1 file in alpha") {
+		t.Fatalf("counts must cover the searched project alone: %q", text)
+	}
+}
+
+// TestSourceSearchScopeIsExplicit: neither route, or both, is an error. Omission
+// must never widen the search by default.
+func TestSourceSearchScopeIsExplicit(t *testing.T) {
+	dir, shards := t.TempDir(), t.TempDir()
+	if err := zoekttext.IndexDir(context.Background(), shards, dir, "p", nil); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Budget: 6000, ShardsFor: func(string) string { return shards }, Projects: func() []string { return []string{"p"} }}
+
+	resp := serveOne(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"source_search","arguments":{"pattern":"x"}}}`)
+	if resp["error"] == nil {
+		t.Fatal("omitting both project and all_projects must be an error, not a fleet search")
+	}
+	if msg, _ := resp["error"].(map[string]any)["message"].(string); !strings.Contains(msg, "all_projects") {
+		t.Fatalf("the error must name the fleet route: %q", msg)
+	}
+
+	resp = serveOne(t, s, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"source_search","arguments":{"pattern":"x","project":"p","all_projects":true}}}`)
+	if resp["error"] == nil {
+		t.Fatal("project and all_projects together must be an error")
+	}
+}
+
+// TestSourceSearchFleetEmptyRegistry: an empty registry is a scope error naming
+// the fix, never an empty result that reads as an absence.
+func TestSourceSearchFleetEmptyRegistry(t *testing.T) {
+	s := &Server{Budget: 6000, ShardsFor: func(string) string { return t.TempDir() }, Projects: func() []string { return nil }}
+	resp := serveOne(t, s, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"source_search","arguments":{"pattern":"x","all_projects":true}}}`)
+	if resp["error"] == nil {
+		t.Fatal("an empty registry must be an error")
+	}
+	if msg, _ := resp["error"].(map[string]any)["message"].(string); !strings.Contains(msg, "tk register") {
+		t.Fatalf("the error must name the fix: %q", msg)
+	}
+}
+
+// TestRenderMatchesGrouped: the fleet face groups by file with a per-file count
+// and prefixes the repo; the single-project face stays byte-identical.
+func TestRenderMatchesGrouped(t *testing.T) {
+	mk := func() []zoekttext.Match {
+		return []zoekttext.Match{
+			{File: "a.go", Line: 1, Text: "one", Repo: "alpha"},
+			{File: "a.go", Line: 9, Text: "two", Repo: "alpha"},
+			{File: "b.go", Line: 3, Text: "three", Repo: "beta"},
+		}
+	}
+	flat := RenderMatches(mk(), false)
+	want := "a.go:1: one\na.go:9: two\nb.go:3: three"
+	if flat != want {
+		t.Fatalf("single-project face changed:\n got %q\nwant %q", flat, want)
+	}
+	grouped := RenderMatches(mk(), true)
+	for _, w := range []string{"a.go (2 matches)", "b.go (1 match)", "alpha:a.go:1: one", "beta:b.go:3: three"} {
+		if !strings.Contains(grouped, w) {
+			t.Fatalf("grouped face missing %q:\n%s", w, grouped)
+		}
+	}
+	if RenderMatches(nil, true) != "(no matches)" {
+		t.Fatal("empty result must keep the (no matches) sentinel")
+	}
+}
+
+// TestQueryZoektFleetOrderAndAccounting: walk order is the given order, the
+// limit is fleet-wide rather than per project, and the untouched tail is named.
+func TestQueryZoektFleetOrderAndAccounting(t *testing.T) {
+	root := t.TempDir()
+	_, a := indexPlain(t, root, "alpha", "package main\nfunc Needle() {}\nfunc Needle2() {}\n")
+	_, b := indexPlain(t, root, "beta", "package main\nfunc Needle() {}\n")
+	members := []FleetMember{{Name: "alpha", Shards: a}, {Name: "beta", Shards: b}}
+
+	got, err := QueryZoektFleet(context.Background(), members, "Needle", "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MatchesShown != 1 {
+		t.Fatalf("limit is fleet-wide: shown=%d want 1", got.MatchesShown)
+	}
+	if len(got.NotSearched) != 1 || got.NotSearched[0] != "beta" {
+		t.Fatalf("unsearched tail wrong: %v", got.NotSearched)
+	}
+	if got.MatchesTotal <= got.MatchesShown {
+		t.Fatalf("total must exceed shown even when truncated: total=%d shown=%d", got.MatchesTotal, got.MatchesShown)
+	}
+	if !strings.Contains(got.Text, "alpha:") {
+		t.Fatalf("first member must own the returned hit: %q", got.Text)
+	}
+
+	// Members must be joined with a newline. RenderMatches trims its own
+	// trailing newline, so plain concatenation runs the last hit of one
+	// project into the first header of the next — which looks like one file
+	// with a garbled line and passes any assertion that only counts prefixes.
+	if i := strings.Index(full0Text(t, members), "alpha:"); i >= 0 {
+		body := full0Text(t, members)[i:]
+		if strings.Contains(body, "file(svc.go (") || strings.Contains(body, "second svc.go") {
+			t.Fatalf("members were concatenated without a newline: %q", body)
+		}
+	}
+
+	full, err := QueryZoektFleet(context.Background(), members, "Needle", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(full.NotSearched) != 0 {
+		t.Fatalf("limit=0 must search everything: %v", full.NotSearched)
+	}
+	if full.Truncated {
+		t.Fatal("limit=0 over a small fleet is not truncated")
+	}
+	ai := strings.Index(full.Text, "alpha:")
+	bi := strings.Index(full.Text, "beta:")
+	if ai < 0 || bi < 0 || ai > bi {
+		t.Fatalf("walk order must follow the member list, got alpha@%d beta@%d", ai, bi)
+	}
+}
+
+// TestCompletenessLineShapes pins the wording a small model has to act on.
+func TestCompletenessLineShapes(t *testing.T) {
+	full := FleetResult{Searched: []string{"demo"}, MatchesTotal: 20, FilesTotal: 1, MatchesShown: 20, FilesShown: 1}
+	if got := full.Completeness(false); got != "[source-search: 20 matches in 1 file in demo]\n" {
+		t.Fatalf("complete single-project line = %q", got)
+	}
+	trunc := FleetResult{Searched: []string{"demo"}, MatchesTotal: 214, FilesTotal: 12, MatchesShown: 20, FilesShown: 1, Truncated: true}
+	want := "[source-search: 214 matches in 12 files in demo; returned 20 matches from 1 file; truncated — raise --limit or narrow --files]\n"
+	if got := trunc.Completeness(false); got != want {
+		t.Fatalf("truncated line =\n got %q\nwant %q", got, want)
+	}
+	fleet := FleetResult{
+		Searched: []string{"alpha", "beta"}, Skipped: []string{"delta (no text index)"}, NotSearched: []string{"gamma"},
+		MatchesTotal: 214, FilesTotal: 87, MatchesShown: 20, FilesShown: 12, Truncated: true,
+	}
+	line := fleet.Completeness(false)
+	for _, w := range []string{"214 matches in 87 files", "across 2 projects (alpha, beta)", "truncated",
+		"skipped: delta (no text index)", "not searched: gamma (limit)"} {
+		if !strings.Contains(line, w) {
+			t.Fatalf("fleet line missing %q: %s", w, line)
+		}
+	}
+	empty := FleetResult{Searched: []string{"demo"}}
+	if got := empty.Completeness(false); got != "[source-search: no matches in demo]\n" {
+		t.Fatalf("empty line = %q", got)
+	}
+	// The budget marker must only appear when the budget actually cut.
+	if got := full.Completeness(true); !strings.Contains(got, "budget-truncated") {
+		t.Fatalf("budget cut must be stated: %q", got)
+	}
+}
+
+// full0Text renders an unbounded fleet search and fails the test on error, for
+// the join assertion above.
+func full0Text(t *testing.T, members []FleetMember) string {
+	t.Helper()
+	r, err := QueryZoektFleet(context.Background(), members, "Needle", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r.Text
 }

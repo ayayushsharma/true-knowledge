@@ -96,6 +96,11 @@ their own arguments in-process.
 the watcher handles the rest. Forcing a full index on every edit is what the
 doctrine forbids.
 
+**Never withhold without saying so.** A search that covered less than it was
+asked about says which part, and names each reason separately: truncated by a
+limit, skipped because a project failed, never reached. "Truncated" alone reads
+as "nothing else matched", which is a different and wrong claim.
+
 **Never claim absence without evidence.** An empty result is only absence when
 an engine counter says zero, and an absence from a gated read must carry
 `check_index_coverage`'s verdict. A failed probe is a hard error, never a

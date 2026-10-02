@@ -2,8 +2,8 @@
 id: 05-indexing
 title: Indexing — modes, discovery, watcher, Zoekt text index, freshness
 status: authoritative
-date: 2026-09-30
-supersedes: [AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md, AGENT_DOCS/history/compatible-implementation-spec.md §7, AGENT_DOCS/history/INDEXING.md, AGENT_DOCS/history/DECISIONS/2026-09-23-explicit-source-search.md, AGENT_DOCS/history/DECISIONS/2026-09-23-zoekt-library-not-backend.md, AGENT_DOCS/history/DECISIONS/2026-09-24-zoekt-staleness.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-25-cross-repo-contract-verified.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
+date: 2026-10-02
+supersedes: [AGENT_DOCS/history/DECISIONS/2026-10-02-cross-repo-fleet-text-search.md, AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md, AGENT_DOCS/history/compatible-implementation-spec.md §7, AGENT_DOCS/history/INDEXING.md, AGENT_DOCS/history/DECISIONS/2026-09-23-explicit-source-search.md, AGENT_DOCS/history/DECISIONS/2026-09-23-zoekt-library-not-backend.md, AGENT_DOCS/history/DECISIONS/2026-09-24-zoekt-staleness.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-25-cross-repo-contract-verified.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
 superseded-by: null
 ---
 
@@ -123,6 +123,24 @@ This is a standing, documented divergence, not an oversight.
 Closing this divergence would mean reimplementing the engine's filter chain
 inside tk, which `02-BOUNDARY.md` forbids. `TestIndexDirDoesNotReadGitignore`
 pins the current behavior, so a change here is deliberate and test-visible.
+
+## Fleet text search
+
+`tk source-search --all-projects` (MCP: `all_projects`) searches every
+registered project in name order, one zoekt searcher at a time. Scope is always
+explicit: this is the one project-resolving command that never auto-selects, so
+omitting `--project` is an error naming all three routes.
+A zoekt directory searcher globs `<dir>/*.zoekt` — flat, non-recursive — while tk
+keeps shards at `<cache>/zoekt/<project>/`. A searcher opened on the cache root
+loads zero shards and answers empty with **no error**, which is why the fleet
+walks per-project directories instead.
+
+`--limit` is fleet-wide, not per project, and the untouched tail is named. Every
+result opens with a scope line: matches and files found, matches and files
+returned, and each withheld state named separately — truncated, skipped, not
+searched. Counts come from zoekt's per-shard `Stats`, so a truncated search still
+reports true totals. Fleet hits are repo-prefixed and grouped per file.
+`AGENT_DOCS/history/DECISIONS/2026-10-02-cross-repo-fleet-text-search.md`.
 
 ## Cross-repo mode
 

@@ -43,7 +43,7 @@ because the failure is silent, not because the numbers mattered:
   symbol name next to a correct query, which is how a passing result got
   re-read as a failure once.
 
-## Three ways to get a wrong design
+## Four ways to get a wrong design
 
 All three were confident, evidence-backed, and wrong. The general shape: a real
 quoted fact, read past its scope, and a mechanism invented to defend against it.
@@ -58,4 +58,14 @@ quoted fact, read past its scope, and a mechanism invented to defend against it.
 * **The wrong file treated as the store.** `05-INDEXING.md:155-156` describes the
   shareable export, which reads exactly like the query store. The queries open
   `<CBM_CACHE_DIR>/<project>.db`.
+* **A constructor's doc comment read as a directory walk.** A throwaway note
+  claimed `NewDirectorySearcher` loads every shard *below* a directory, so one
+  searcher already spanned repos and the fleet was one hook. It globs
+  `<dir>/*.zoekt` — flat. Against tk's `<cache>/zoekt/<project>/` layout a
+  parent-dir searcher returned 0 matches and **no error**, so the design would
+  have shipped a fleet search permanently answering `(no matches)`. A `repo:`
+  filter cannot rescue it: there is no loaded query to attach one to. The tell
+  was citing `shards.go:251`, the constructor line, instead of the glob in
+  `watcher.go:141` that the constructor calls. Landed as
+  `history/DECISIONS/2026-10-02-cross-repo-fleet-text-search.md`.
 

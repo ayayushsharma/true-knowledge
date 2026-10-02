@@ -2,8 +2,8 @@
 id: 03-commands
 title: CLI surface — every verb, flag, alias
 status: authoritative
-date: 2026-09-30
-supersedes: [AGENT_DOCS/history/compatible-implementation-spec.md §8, AGENT_DOCS/history/DECISIONS/2026-09-28-failed-install-is-a-failed-command.md, AGENT_DOCS/history/DECISIONS/2026-09-28-delegate-backend-install-to-vendor.md, AGENT_DOCS/history/compatible-implementation-spec.md §8.4, AGENT_DOCS/history/DECISIONS/2026-09-25-flag-only-query-forms.md, AGENT_DOCS/history/DECISIONS/2026-09-26-select-flag-forces-project-picker.md, AGENT_DOCS/history/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
+date: 2026-10-02
+supersedes: [AGENT_DOCS/history/DECISIONS/2026-10-02-cross-repo-fleet-text-search.md, AGENT_DOCS/history/compatible-implementation-spec.md §8, AGENT_DOCS/history/DECISIONS/2026-09-28-failed-install-is-a-failed-command.md, AGENT_DOCS/history/DECISIONS/2026-09-28-delegate-backend-install-to-vendor.md, AGENT_DOCS/history/compatible-implementation-spec.md §8.4, AGENT_DOCS/history/DECISIONS/2026-09-25-flag-only-query-forms.md, AGENT_DOCS/history/DECISIONS/2026-09-26-select-flag-forces-project-picker.md, AGENT_DOCS/history/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
 superseded-by: null
 ---
 
@@ -78,13 +78,15 @@ Ten commands resolve a project. Each takes `--project`, `-s/--select`, and
 rejects positionals. `--project` wins; `--select` beside it is ignored. Without
 `--project`, one registered project is auto-selected, otherwise the fuzzy picker
 opens when a TTY is present, `ui.picker` is true, and `--json` is absent.
+`source-search` is the exception: it never infers a scope, so omitting `--project`
+is an error naming `--project`, `--select`, and `--all-projects`.
 
 | Command | Alias | Payload flag | Other flags |
 |---|---|---|---|
 | `tk find` | `kg_find` | `--query` (required) | `--label`, `--limit` (20) |
 | `tk explain` | `kg_explain` | `--symbol` (required) | — |
 | `tk grep` | `kg_grep` | `--pattern` (required) | `--regex`, `--files`, `--limit` (20) |
-| `tk source-search` | — | `--pattern` (required) | `--files` (zoekt `file:`), `--limit` (20) |
+| `tk source-search` | — | `--pattern` (required) | `--files` (zoekt `file:`), `--limit` (20, 0 = no limit), `--all-projects` |
 | `tk trace` | `kg_trace` | `--symbol` (required) | `--direction inbound\|outbound\|both` (inbound), `--depth` 1–5 (1) |
 | `tk outline` | — | `--file` (required) | `--label`, `--limit` (100) |
 | `tk impact` | — | none (project only) | `--direction` (inbound), `--depth` (2), `--limit` (50) |

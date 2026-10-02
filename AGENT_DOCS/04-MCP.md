@@ -2,8 +2,8 @@
 id: 04-mcp
 title: MCP — profiles, tool surface, result shape, absence rules
 status: authoritative
-date: 2026-09-27
-supersedes: [AGENT_DOCS/history/compatible-implementation-spec.md §15, AGENT_DOCS/history/AGENT-PROFILES.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp3-memory-layer.md, AGENT_DOCS/history/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md, AGENT_DOCS/history/DECISIONS/2026-09-24-mcp-inputschema-spec.md, AGENT_DOCS/history/DECISIONS/2026-09-25-ledger-append-only-history-prune.md, AGENT_DOCS/history/DECISIONS/2026-09-25-scout-coverage-before-absence.md, AGENT_DOCS/history/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md, AGENT_DOCS/history/DECISIONS/2026-09-26-structured-cbm-payloads.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
+date: 2026-10-02
+supersedes: [AGENT_DOCS/history/DECISIONS/2026-10-02-cross-repo-fleet-text-search.md, AGENT_DOCS/history/compatible-implementation-spec.md §15, AGENT_DOCS/history/AGENT-PROFILES.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp3-memory-layer.md, AGENT_DOCS/history/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md, AGENT_DOCS/history/DECISIONS/2026-09-24-mcp-inputschema-spec.md, AGENT_DOCS/history/DECISIONS/2026-09-25-ledger-append-only-history-prune.md, AGENT_DOCS/history/DECISIONS/2026-09-25-scout-coverage-before-absence.md, AGENT_DOCS/history/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md, AGENT_DOCS/history/DECISIONS/2026-09-26-structured-cbm-payloads.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
 superseded-by: null
 ---
 
@@ -105,10 +105,13 @@ unknown is never "empty".
   `*_relation`) are never evidence.
 * An unresolvable name is an error, not an empty result. The engine returns
   `isError: true` with a hint, and tk renders the hint.
-* `list_projects`, `index_status`, `check_index_coverage`, `detect_changes`, and
-  `source_search` never annotate. There is no "nothing exists" claim to prove.
-* `source_search` carries its own freshness contract instead — see
-  `05-INDEXING.md`.
+* `list_projects`, `index_status`, `check_index_coverage`, and `detect_changes`
+  never annotate. There is no "nothing exists" claim to prove.
+* `source_search` never annotates *coverage* either; it carries its own
+  freshness and completeness contract instead — see `05-INDEXING.md`. Its scope
+  line states matches and files found, matches and files returned, and each
+  withheld state by name: truncated, skipped, not searched. Those are scope
+  facts from zoekt's own counters, not proof that an empty result is an absence.
 * A hit costs 1 call, a miss 2. That is the price of a claim you can defend.
 
 ## Budgets

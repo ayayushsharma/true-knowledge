@@ -12,8 +12,8 @@ superseded-by: null
 Merged from the old roadmap and remaining-work files. Milestones first, then the
 detail, then what is parked and what is permanently rejected.
 
-Locked decisions: Go-only thin `tk` over CBM, Linux-style `true-knowledge/`
-dirs everywhere, 27B as the default agent, Cobra-standard completion, cross-repo
+Locked decisions: Go-only thin `tk` over CBM, Linux-style `true-knowledge/` dirs
+everywhere, 27B as the default agent, Cobra-standard completion, cross-repo
 deferred. The resident is built; see Open work.
 
 ## Status
@@ -27,49 +27,51 @@ deferred. The resident is built; see Open work.
 
 Done-when for MVP1 holds: with `TK_HOME=/tmp/x`, `setup → register → index →
 sync no-op → status --json → mcp tools/list` (11 tools) passes with zero
-`~/.tk` or `Library` writes.
-
-Done-when for MVP2: a 27B answers "who calls X", "what breaks if Y changes", and
-"outline Z" in at most 3 calls, single-repo. Fleet-wide edges are parked.
-
-Done-when for MVP3: facts survive sessions, notes need approval before they are
-searchable, the ledger appends verbatim and trims on retrieval, and everything is
-`0600` under the data root.
-
-Done-when for MVP4: a human completes register → index → explain → sync with tab
-completion everywhere and no agent present.
-
-Order logic: cross-repo rode MVP2 (one extra CBM pass, not a new store), memory
-rode MVP3 (stores with review risk), and human polish rode last (Cobra-standard
-is already usable; agent correctness gates the rest).
+`~/.tk` or `Library` writes. MVP2: a 27B answers "who calls X", "what breaks if Y
+changes", "outline Z" in at most 3 calls, single-repo. MVP3: facts survive
+sessions, notes need approval before they are searchable, the ledger appends
+verbatim and trims on retrieval, everything `0600` under the data root. MVP4: a
+human completes register → index → explain → sync with tab completion and no
+agent present. Order logic: cross-repo rode MVP2 (one extra CBM pass, not a new
+store), memory rode MVP3 (stores with review risk), human polish last
+(agent correctness gates the rest).
 
 ## PARKED INDEFINITELY
 
-Each item needs a new ADR to un-park, and the trigger is a revisit condition,
-not a promise.
+Each item needs a new ADR to un-park; the trigger is a revisit condition, not a
+promise.
 
 ### Cross-repo fleet
 
 Parked: cohort model, the N-source link pass, the generation record, `--cross`
-and `--targets` flags, and `CROSS_*` surfacing in `arch`, `impact`, or `explain`
-envelopes. Triggers, any one: upstream ships a stable generic cross-repo edge
-class usable by a thin client (#56, #398); a concrete user workload demands
-fleet-wide protocol edges; or the pass becomes effectively free.
+and `--targets`, and `CROSS_*` surfacing in `arch`, `impact`, or `explain`.
+Triggers, any one: upstream ships a stable generic cross-repo edge class usable by
+a thin client (#56, #398); a workload demands fleet-wide protocol edges; or the
+pass becomes effectively free.
 
 Why: N runs per clique after fresh bases, generic cross-repo call graphs blocked
 upstream, and flaky matching wherever `Route.path` is empty (FastAPI #678, Go
-Fiber #686). Generic multi-repo call graphs are permanently out of tk scope —
-they live or die upstream. The verified per-source contract is recorded in
-`05-INDEXING.md` so a re-open is mechanical.
+Fiber #686). Generic multi-repo call graphs are permanently out of tk scope. The
+verified per-source contract is in `05-INDEXING.md`, so a re-open is mechanical.
 
 ### Fleet-cohort queries
 
-Parked with the fleet: running existing `find`, `grep`, and `explain` across the
-registered cohort, each answer coverage-annotated, with no CBM cross-repo
-primitive. No envelope shape, `--all`, or `--cohort` surface was designed. Cost
-multiplies spawns by N, up to 3N with absence probes. Triggers: a real
-multi-repo "search the whole registry" workload, a registered-project count where
-sequential queries visibly hurt, or measured agent demand.
+Still parked, narrowed to the CBM-backed verbs: `find`, `grep`, `explain` across
+the cohort, each answer coverage-annotated, no CBM cross-repo primitive.
+`source-search` answers this for zoekt text today — in-process, spawns nothing —
+while these three multiply spawns by N, up to 3N with absence probes. No envelope
+shape, `--all`, or `--cohort` surface designed. Triggers: sequential queries
+visibly hurting at a given project count, or measured agent demand.
+
+### Result cursor for fleet text search
+
+Parked on reasoning, not evidence. A page token needs a stable total order plus a
+per-project `zoekt_head` stamp, refusing rather than serving shifted ranks after a
+reindex. It helps a caller that follows protocol — a script, a CI check — not a
+model that misreads a long answer, which the scope line addresses. Before
+building: run open-ended queries with known answers on an 8B model, scope line on
+versus off, and count wrong answers.
+`AGENT_DOCS/history/DECISIONS/2026-10-02-cross-repo-fleet-text-search.md`.
 
 ### RRF tuning
 
@@ -196,5 +198,3 @@ Never re-propose these as "what is next".
   never writes a user's rc.
 * **`status --watch`.** `watch -n2 tk status` plus `tk status --json` suffice.
 * **Generic cross-repo call graphs.** Out of scope permanently; upstream owns them.
-* **Multi-repo "search the whole registry"** — parked above, and parked for the
-  same trigger doctrine as the fleet.

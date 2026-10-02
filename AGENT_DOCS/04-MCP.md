@@ -2,8 +2,8 @@
 id: 04-mcp
 title: MCP — profiles, tool surface, result shape, absence rules
 status: authoritative
-date: 2026-10-02
-supersedes: [AGENT_DOCS/history/DECISIONS/2026-10-02-cross-repo-fleet-text-search.md, AGENT_DOCS/history/compatible-implementation-spec.md §15, AGENT_DOCS/history/AGENT-PROFILES.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp3-memory-layer.md, AGENT_DOCS/history/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md, AGENT_DOCS/history/DECISIONS/2026-09-24-mcp-inputschema-spec.md, AGENT_DOCS/history/DECISIONS/2026-09-25-ledger-append-only-history-prune.md, AGENT_DOCS/history/DECISIONS/2026-09-25-scout-coverage-before-absence.md, AGENT_DOCS/history/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md, AGENT_DOCS/history/DECISIONS/2026-09-26-structured-cbm-payloads.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
+date: 2026-10-03
+supersedes: [AGENT_DOCS/history/DECISIONS/2026-10-03-publish-get-graph-schema.md, AGENT_DOCS/history/DECISIONS/2026-10-02-cross-repo-fleet-text-search.md, AGENT_DOCS/history/compatible-implementation-spec.md §15, AGENT_DOCS/history/AGENT-PROFILES.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp3-memory-layer.md, AGENT_DOCS/history/DECISIONS/2026-09-24-dynamic-mcp-profile-env.md, AGENT_DOCS/history/DECISIONS/2026-09-24-mcp-inputschema-spec.md, AGENT_DOCS/history/DECISIONS/2026-09-25-ledger-append-only-history-prune.md, AGENT_DOCS/history/DECISIONS/2026-09-25-scout-coverage-before-absence.md, AGENT_DOCS/history/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md, AGENT_DOCS/history/DECISIONS/2026-09-26-structured-cbm-payloads.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
 superseded-by: null
 ---
 
@@ -20,14 +20,34 @@ models are fast filters, never finalizers.
 | Profile | Tools | Budgets | Use |
 |---|---|---|---|
 | `scout` (default) | 11: `list_projects`, `check_index_coverage`, `index_status`, `search_graph`, `trace_path`, `search_code`, `source_search`, `get_file_outline`, `detect_changes`, `get_architecture`, `get_code_snippet` | `default 6000`, `arch 2200`, `toc 700` | autonomous dev |
-| `analysis` | `scout` + `query_graph` (Cypher) + `validate` + `manage_adr` passthrough = 14 | same | deep debug, explicit opt-in |
-| `minimal` | 3: `check_index_coverage`, `search_graph`, `get_code_snippet` | `default 2000` | sub-8B filters, IDE inline |
+| `analysis` | `scout` + `query_graph` (Cypher) + `get_graph_schema` + `validate` + `manage_adr` passthrough = 15 | same | deep debug, explicit opt-in |
+| `minimal` | 3: `check_index_coverage`, `search_graph`, `get_code_snippet` | same | sub-8B filters, IDE inline |
 | `memory` | `scout` (11) + 11 tk-owned memory tools = 22 | + `ledger 1500` | agents that persist knowledge; runs with CBM down |
 
 The 11 memory tools: `mem_save`, `mem_recall`, `mem_review`, `note_save`,
 `note_search`, `note_toc`, `note_reindex`, `note_review`, `ledger_update`,
 `ledger_get`, `ledger_history`. `ledger_update` takes a `key` and appends.
 `ledger_prune` does not exist as a tool.
+
+`get_graph_schema` is the other half of `query_graph`: it reports the node labels
+and edge types actually present in an index (`node_labels[]{label,count}`,
+`edge_types[]{type,count}`, `total`, `returned`, `has_more`, `adr_present`), so a
+Cypher query is written against labels that exist rather than guessed. `project`
+is the only required argument; `limit` and `offset` paginate. Measured against
+CBM 0.11.0, and the engine **silently ignores** arguments it does not know, so
+the schema declares that minimum and nothing more. Design:
+`history/DECISIONS/2026-10-03-publish-get-graph-schema.md`.
+
+**Budgets are global, not per profile.** `default 6000` above is what every
+profile gets; a profile selects *tools*, never a budget. `ctx.budget("")` takes
+a kind (`arch`, `notes_toc`, `ledger`) and otherwise returns
+`budgets.default_chars`, so `--tool-profile minimal` answers at the same ceiling
+as `scout`. To shrink a reply, pass `--budget N` or set `budgets.default_chars` —
+the table's Budgets column names the config keys, not the profile.
+
+This corrects a claim that stood here earlier: `minimal` was documented at
+`default 2000` and no such value existed anywhere in the source. The profile
+built for small models had the largest per-call reply ceiling of the four.
 
 `index_repository` is gated behind explicit user approval in every profile.
 

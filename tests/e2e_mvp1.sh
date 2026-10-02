@@ -691,11 +691,11 @@ check ledger-reenable 0 $TK_BIN config set ledger.enabled true
 check ledger-budget-reset 0 $TK_BIN config set budgets.ledger_chars 1500
 
 toolcount mcp-tools-11 11 $TK_BIN mcp
-toolcount mcp-tools-analysis-14 14 $TK_BIN mcp --tool-profile analysis
+toolcount mcp-tools-analysis-15 15 $TK_BIN mcp --tool-profile analysis
 toolcount mcp-tools-minimal-3 3 $TK_BIN mcp --tool-profile minimal
 toolcount mcp-tools-memory-22 22 $TK_BIN mcp --tool-profile memory
 # profile is a runtime knob: TK_MCP_PROFILE env drives it, flag beats env, invalid env fails loudly
-toolcount mcp-env-analysis-14 14 env TK_MCP_PROFILE=analysis $TK_BIN mcp
+toolcount mcp-env-analysis-15 15 env TK_MCP_PROFILE=analysis $TK_BIN mcp
 toolcount mcp-flag-beats-env-22 22 env TK_MCP_PROFILE=minimal $TK_BIN mcp --tool-profile memory
 if TK_MCP_PROFILE=bogus sh -c "printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}' | $TK_BIN mcp" 2>&1 | grep -q 'scout|analysis|minimal|memory'; then
   pass=$((pass+1)); printf 'ok   mcp-env-invalid-rejected\n'
@@ -708,7 +708,7 @@ if $TK_BIN config get mcp.profile | grep -q '^analysis$'; then
 else
   fail=$((fail+1)); printf 'FAIL mcp-config-get\n'
 fi
-toolcount mcp-config-profile-14 14 $TK_BIN mcp
+toolcount mcp-config-profile-15 15 $TK_BIN mcp
 check mcp-config-unset 0 $TK_BIN config set mcp.profile ""
 toolcount mcp-config-unset-back-to-11 11 $TK_BIN mcp
 # memory profile: in-process tools work even though CBM was killed in live mode

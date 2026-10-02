@@ -289,12 +289,21 @@ func cmdStatus(g *Globals) *cobra.Command {
 			rows := []map[string]any{}
 			for _, n := range names {
 				p := ctx.Reg[n]
+				// One resolution of the working-tree side, shared by the state
+				// verdict, the human row and the freshness fields: a fingerprint
+				// is a full stat walk, and tk status must not pay for two.
 				head := gitx.Head(p.Path)
+				live := liveState{head: head}
+				if head == "" {
+					if fp, ferr := store.Fingerprint(p.Path); ferr == nil {
+						live = liveState{fp: fp}
+					}
+				}
 				state := "clean"
 				zstate := "z:-"
 				if head == "" {
 					// Non-git: fingerprint decides; zoekt tracks "files".
-					if fp, ferr := store.Fingerprint(p.Path); ferr != nil || p.Fingerprint == "" || fp != p.Fingerprint {
+					if live.fp == "" || p.Fingerprint == "" || live.fp != p.Fingerprint {
 						state = "dirty"
 					}
 					if p.ZoektHead == "files" && state == "clean" {
@@ -314,7 +323,18 @@ func cmdStatus(g *Globals) *cobra.Command {
 					}
 				}
 				fmt.Fprintf(&b, "%-20s %-6s %-7s %s  %s\n", n, state, zstate, shortHead(head), p.Path)
-				rows = append(rows, map[string]any{"project": n, "state": state, "head": head, "path": p.Path, "mode": p.Mode, "zoekt_head": p.ZoektHead, "fingerprint": p.Fingerprint})
+				// Freshness comes from the one function every other command uses,
+				// so `head` means the recorded commit here too. It used to carry
+				// the live one, which made the same key name mean two things across
+				// the surface and left a machine unable to compute staleness.
+				row := map[string]any{
+					"project": n, "state": state, "path": p.Path,
+					"mode": p.Mode, "fingerprint": p.Fingerprint,
+				}
+				for k, v := range ctx.freshnessFrom(n, live) {
+					row[k] = v
+				}
+				rows = append(rows, row)
 			}
 			_ = cbmexec.Truncate
 			return ctx.out(cmd, strings.TrimRight(b.String(), "\n"), map[string]any{"projects": rows})

@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -52,7 +54,7 @@ func TestToolsListCount(t *testing.T) {
 	}{
 		{"", 11, []string{"search_graph", "source_search", "get_file_outline", "detect_changes", "check_index_coverage"}, []string{"validate", "query_graph", "manage_adr"}},
 		{"scout", 11, nil, nil},
-		{"analysis", 14, []string{"validate", "query_graph", "manage_adr"}, nil},
+		{"analysis", 15, []string{"validate", "query_graph", "manage_adr", "get_graph_schema"}, nil},
 		{"minimal", 3, []string{"check_index_coverage", "search_graph", "get_code_snippet"}, []string{"source_search", "detect_changes"}},
 		{"memory", 22, []string{"mem_save", "mem_recall", "mem_review", "note_save", "note_search", "note_toc", "note_reindex", "note_review", "ledger_update", "ledger_get", "ledger_history"}, []string{"validate"}},
 	}
@@ -117,7 +119,7 @@ func TestToolsListSchemas(t *testing.T) {
 		want    int
 	}{
 		{"", 11},
-		{"analysis", 14},
+		{"analysis", 15},
 		{"minimal", 3},
 		{"memory", 22},
 	} {
@@ -1337,4 +1339,62 @@ func full0Text(t *testing.T, members []FleetMember) string {
 		t.Fatal(err)
 	}
 	return r.Text
+}
+
+// get_graph_schema's arguments were measured against CBM 0.11.0, not guessed,
+// and the measurement is the only thing standing between the schema and the
+// manage_adr defect: an enum that advertised modes the engine rejects. The
+// engine ignores arguments it does not know rather than erroring, so an
+// overstated schema would not fail at the boundary — it would quietly do
+// nothing and read as a broken tool. Pin the exact surface.
+func TestGetGraphSchemaArgumentSurface(t *testing.T) {
+	tools := serveOne(t, &Server{Profile: ProfileAnalysis},
+		`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`)["result"].(map[string]any)["tools"].([]any)
+
+	var schema map[string]any
+	for _, tl := range tools {
+		td := tl.(map[string]any)
+		if td["name"] == "get_graph_schema" {
+			schema = td["inputSchema"].(map[string]any)
+		}
+	}
+	if schema == nil {
+		t.Fatal("analysis does not expose get_graph_schema")
+	}
+
+	props := schema["properties"].(map[string]any)
+	got := make([]string, 0, len(props))
+	for k := range props {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+	if want := []string{"limit", "offset", "project"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("properties = %v, want exactly %v — an argument CBM ignores must not be advertised", got, want)
+	}
+
+	req := schema["required"].([]any)
+	if len(req) != 1 || req[0] != "project" {
+		t.Errorf("required = %v, want [project] — the only argument CBM 0.11.0 rejects when missing", req)
+	}
+}
+
+// It reaches the engine under its own name, like query_graph: no toolToCBM
+// entry, so the name passes through.
+func TestGetGraphSchemaPassthrough(t *testing.T) {
+	run := &spyRunner{}
+	resp := serveOne(t, &Server{
+		Profile: ProfileAnalysis,
+		Run:     run,
+	}, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_graph_schema","arguments":{"project":"p","limit":3}}}`)
+	if resp["error"] != nil {
+		t.Fatalf("get_graph_schema failed: %v", resp)
+	}
+	if run.tool != "get_graph_schema" {
+		t.Errorf("spawned %q, want get_graph_schema", run.tool)
+	}
+	// format:"json" is added by the cbmexec runner, not here, so what this
+	// layer owes the engine is the caller's arguments untouched.
+	if run.payload["project"] != "p" || run.payload["limit"] != float64(3) {
+		t.Errorf("arguments did not reach the engine intact: %v", run.payload)
+	}
 }

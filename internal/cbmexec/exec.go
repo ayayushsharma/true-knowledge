@@ -515,6 +515,12 @@ func (r *Runner) RunDaemon(ctx context.Context, argv ...string) (string, error) 
 	cmd := r.commandContext(ctx, argv...)
 	stdout, stderr, err := r.spawn(cmd, "daemon "+strings.Join(argv, " "))
 	if err != nil {
+		// Preserve any daemon output for the caller to interpret, on whichever
+		// stream the engine chose and in full. A refusal names the committed
+		// client pids across as many lines as it has clients, so handing back
+		// only the first line drops exactly the part the operator needs in
+		// order to act. Callers that only need the verdict still get one: err
+		// is unchanged.
 		msg := strings.TrimSpace(stderr)
 		if msg == "" {
 			msg = strings.TrimSpace(stdout)
@@ -522,11 +528,10 @@ func (r *Runner) RunDaemon(ctx context.Context, argv ...string) (string, error) 
 		if msg == "" {
 			msg = err.Error()
 		}
-		// Preserve any daemon output for the caller to interpret.
 		if text := strings.TrimSpace(stdout); text != "" {
 			return text + "\n", fmt.Errorf("cbm daemon failed: %s", firstLine(msg))
 		}
-		return "", fmt.Errorf("cbm daemon failed: %s", firstLine(msg))
+		return msg + "\n", fmt.Errorf("cbm daemon failed: %s", firstLine(msg))
 	}
 	return stdout, nil
 }

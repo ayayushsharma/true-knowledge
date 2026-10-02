@@ -604,3 +604,114 @@ func TestCBMReadLegacyEngine(t *testing.T) {
 		t.Errorf("structured = %v, want false", env["structured"])
 	}
 }
+
+// `tk status --json` used to build its own row and put the LIVE head in `head`,
+// while every other command routes through freshness() and puts the RECORDED
+// one there. Same key, two meanings, and a machine could not compute staleness
+// because the other half of the pair was never emitted. These run the command,
+// not the helper, so the envelope is what gets checked.
+func statusRow(t *testing.T, home string, reg store.Registry) map[string]any {
+	t.Helper()
+	p := paths.Resolve(home)
+	if err := p.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(p.RegistryFile(), reg); err != nil {
+		t.Fatal(err)
+	}
+	out := &bytes.Buffer{}
+	cmd := cmdStatus(&Globals{Home: home, JSON: true})
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	cmd.SetOut(out)
+	cmd.SetErr(out)
+	cmd.SetArgs(nil)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("status: %v\n%s", err, out)
+	}
+	var env struct {
+		Projects []map[string]any `json:"projects"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
+		t.Fatalf("status --json: %v\n%s", err, out)
+	}
+	if len(env.Projects) != 1 {
+		t.Fatalf("want exactly 1 row, got %d:\n%s", len(env.Projects), out)
+	}
+	return env.Projects[0]
+}
+
+func TestStatusJSONCarriesFreshnessKeys(t *testing.T) {
+	home := t.TempDir()
+	git := t.TempDir()
+	head := initRepo(t, git)
+
+	reg := store.Registry{"demo": {Path: git, Head: head, ZoektHead: head}}
+	row := statusRow(t, home, reg)
+
+	// The documented key set, and nothing missing from it.
+	for _, k := range []string{"head", "current", "fresh", "zoekt_head", "zoekt_fresh"} {
+		if _, ok := row[k]; !ok {
+			t.Errorf("status --json is missing %q; keys: %v", k, row)
+		}
+	}
+	if row["head"] != head {
+		t.Errorf("head = %v, want the RECORDED commit %q", row["head"], head)
+	}
+	if row["current"] != head {
+		t.Errorf("current = %v, want the live commit %q", row["current"], head)
+	}
+	if row["fresh"] != true {
+		t.Errorf("fresh = %v, want true on a clean tree", row["fresh"])
+	}
+	if row["state"] != "clean" {
+		t.Errorf("state = %v, want clean", row["state"])
+	}
+}
+
+// A machine must be able to compute staleness itself. That is the whole point of
+// carrying both heads, and it was impossible while only the live one was sent.
+func TestStatusJSONDistinguishesRecordedFromLive(t *testing.T) {
+	home := t.TempDir()
+	git := t.TempDir()
+	initRepo(t, git)
+
+	reg := store.Registry{"demo": {Path: git, Head: "0" + strings.Repeat("a", 39)}}
+	row := statusRow(t, home, reg)
+
+	if row["head"] == row["current"] {
+		t.Fatalf("head and current must differ when the registry is behind: %v", row)
+	}
+	if row["fresh"] != false {
+		t.Errorf("fresh = %v, want false when the index is behind HEAD", row["fresh"])
+	}
+	if row["current"] != gitx.Head(git) {
+		t.Errorf("current = %v, want the live commit %q", row["current"], gitx.Head(git))
+	}
+	if row["zoekt_fresh"] != false {
+		t.Errorf("zoekt_fresh = %v, want false when the text index is behind", row["zoekt_fresh"])
+	}
+}
+
+// A plain directory is measured against a fingerprint, and `head` carries it
+// there too — the same asymmetry that made the git case unreadable applies to
+// both, so both are pinned.
+func TestStatusJSONPlainDirUsesFingerprint(t *testing.T) {
+	home := t.TempDir()
+	plain := t.TempDir()
+	if err := os.WriteFile(filepath.Join(plain, "a.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fp, err := store.Fingerprint(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	row := statusRow(t, home, store.Registry{"plain": {Path: plain, Fingerprint: fp, ZoektHead: "files"}})
+	if row["head"] != fp || row["current"] != fp {
+		t.Errorf("head/current = %v/%v, want the fingerprint %q on both sides", row["head"], row["current"], fp)
+	}
+	if row["fresh"] != true || row["zoekt_fresh"] != true {
+		t.Errorf("fresh = %v, zoekt_fresh = %v, want both true", row["fresh"], row["zoekt_fresh"])
+	}
+}

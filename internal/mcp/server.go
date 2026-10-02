@@ -1,7 +1,7 @@
 // Package mcp serves a minimal MCP stdio proxy over the CBM CLI.
 //
 // The tool surface is a profile, not a fixed list: scout (11) is the default,
-// analysis (14) adds the demo and graph-query tools, minimal (3) is the
+// analysis (15) adds the demo and graph-query tools, minimal (3) is the
 // smallest graph set, and memory (22) swaps the graph tools for tk's
 // in-process memory tools. `tk mcp --tool-profile` and tools() are the source
 // of truth; the counts are pinned by TestToolProfileCounts.
@@ -246,6 +246,20 @@ func tools(profile string) []toolDef {
 				"query":    strProp("Cypher query (read-only; must carry LIMIT for safety)"),
 				"max_rows": intProp("Row limit guardrail"),
 			})},
+			// query_graph is the reason this tool exists: Cypher needs to know
+			// which labels and edge types are actually present before it can
+			// MATCH anything, and a guess costs a round trip per label.
+			//
+			// project is the only required argument and limit/offset are the
+			// only others the engine acts on — measured against CBM 0.11.0, not
+			// assumed. Unknown keys are silently ignored there, so a schema that
+			// overstates the surface would fail quietly rather than loudly;
+			// see history/DECISIONS/2026-10-03-publish-get-graph-schema.md.
+			toolDef{"get_graph_schema", "Node labels and edge types present in a project index", obj([]string{"project"}, map[string]any{
+				"project": projectProp(),
+				"limit":   intProp("Max labels/edge types per category"),
+				"offset":  intProp("Rows to skip; pair with limit to paginate"),
+			})},
 			toolDef{"manage_adr", "Persist architectural decisions alongside the graph (passthrough)", obj(nil, map[string]any{
 				"project": projectProp(),
 				// The engine's own vocabulary, in its order. `list` and `delete`
@@ -331,6 +345,13 @@ func structuredFor(negotiated string) bool {
 // CBM 0.11.0 and then fills the reply's structuredContent with real typed
 // data: cols/rows tables, integer counters, hint strings.
 //
+// Membership is not exposure. callTool gates on the profile before it consults
+// this map, so a name here that no profile lists would be unreachable however it
+// is spelled. Every entry is currently published — get_graph_schema in
+// analysis, the other twelve across scout — and that is a property worth
+// keeping true: an entry with no profile is either a capability nobody can reach
+// or a typo, and both read the same until someone counts.
+//
 // manage_adr is deliberately absent. It also writes, and a write is reported
 // in prose — a caller needs to read "updated" or the new revision id, not
 // parse a payload that may or may not exist depending on the mode.
@@ -353,7 +374,7 @@ var structuredCBMTools = map[string]bool{
 type Server struct {
 	Run    cbmRunner
 	Budget int
-	// Profile selects the tool surface: scout (11) | analysis (14) | minimal (3) | memory (22).
+	// Profile selects the tool surface: scout (11) | analysis (15) | minimal (3) | memory (22).
 	Profile string
 	// ShardsFor maps project -> zoekt shard dir.
 	ShardsFor func(project string) string

@@ -2,8 +2,8 @@
 id: 10-output
 title: Output channels — stdout is the answer, stderr is the story
 status: authoritative
-date: 2026-10-02
-supersedes: [AGENT_DOCS/history/DECISIONS/2026-10-02-stderr-is-the-diagnostic-channel.md]
+date: 2026-10-03
+supersedes: [AGENT_DOCS/history/DECISIONS/2026-10-03-a-refused-daemon-is-a-failed-command.md, AGENT_DOCS/history/DECISIONS/2026-10-02-stderr-is-the-diagnostic-channel.md]
 superseded-by: null
 ---
 
@@ -18,6 +18,15 @@ markdown. No flag changes this — not `--json`, not `--verbose`, not `--quiet`.
 
 **stderr carries everything else:** progress steps, warnings, debug narration, and
 the engine's own refusals.
+
+**The exit code is the verdict; never the shape of the output.** CBM exits nonzero
+both to answer (`daemon: not running`) and to refuse (clients are committed), so
+"did stdout have anything in it" cannot classify a forwarded call. tk reads the
+exit code and matches prose only against a shape it has pinned, failing closed on
+anything else. A refusal renders in full through `ctx.outFailed` — the committed
+pids *are* the diagnosis, so they are never budget-truncated — and both faces
+agree: `ok:false` in the envelope, nonzero from the shell. Design:
+`history/DECISIONS/2026-10-03-a-refused-daemon-is-a-failed-command.md`.
 
 This is structural, not conventional. `internal/logx` and `internal/progress` hold
 no reference to `os.Stdout`, and `TestNeverWritesStdout` proves it by capturing

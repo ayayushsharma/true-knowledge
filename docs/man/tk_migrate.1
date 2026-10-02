@@ -18,6 +18,10 @@ Move legacy ~/.tk / $TK_HOME / Library tree into XDG true-knowledge dirs
 	print without writing
 
 .PP
+\fB--force\fP[=false]
+	overwrite an existing config.json / tk.json
+
+.PP
 \fB--from\fP=""
 	legacy dir (default: auto-detect ~/.tk, $TK_HOME, Library)
 
@@ -51,6 +55,7 @@ Move legacy ~/.tk / $TK_HOME / Library tree into XDG true-knowledge dirs
 .EX
   tk migrate --dry-run
   tk migrate --from ~/.tk
+  tk migrate --force
 .EE
 
 

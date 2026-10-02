@@ -33,8 +33,14 @@ const detachTimeout = 15 * time.Second
 
 // cmdResident builds the hidden background half. It is not a documented verb:
 // the surface is `tk mcp --detach`, and this exists only so that verb has
-// something to exec. Hidden rather than refused, because a user who finds it
-// in `tk __complete` should get working behaviour rather than an error.
+// something to exec.
+//
+// Hidden rather than refused, because it does real work and refusing it would
+// be a lie about what the binary can do. Hiding keeps it out of `tk --help` and
+// out of `tk __complete` alike — Cobra omits a Hidden command from completion
+// candidates, which is the whole effect and the reason not to expect a
+// discoverable path to it here. The pid file is the documented way to reach a
+// resident; this verb is how tk starts one.
 func cmdResident(g *Globals) *cobra.Command {
 	return &cobra.Command{
 		Use:    "resident",

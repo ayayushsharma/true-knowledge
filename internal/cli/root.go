@@ -470,29 +470,62 @@ func (c *Ctx) emptyResult(res cbmexec.Result) bool {
 // (registry reads only — worktree drift counts live in source-search).
 // Fields merge into --json envelopes so agents can gate absence claims.
 func (c *Ctx) freshness(proj string) map[string]any {
+	return c.freshnessFrom(proj, c.liveState(proj))
+}
+
+// liveState is the working-tree side of a freshness comparison, kept in the two
+// forms it takes rather than flattened into one string: a git project is
+// measured against a commit and a plain directory against a fingerprint, and
+// which one applies is not something a caller should re-derive by guessing at
+// the shape of a value.
+type liveState struct {
+	head string // commit, for a git project
+	fp   string // fingerprint, for a plain directory
+}
+
+// liveState resolves what the tree looks like right now. Head is deliberately
+// resolved live and uncached, so commit visibility is immediate.
+func (c *Ctx) liveState(proj string) liveState {
+	p, ok := c.Reg[proj]
+	if !ok {
+		return liveState{}
+	}
+	if head := gitx.Head(p.Path); head != "" {
+		return liveState{head: head}
+	}
+	fp, err := store.Fingerprint(p.Path)
+	if err != nil {
+		return liveState{}
+	}
+	return liveState{fp: fp}
+}
+
+// freshnessFrom is freshness() for a caller that already resolved the
+// working-tree side. Split out because `tk status` needs the same answer for
+// every project and must not stat-walk a plain directory twice to get it.
+func (c *Ctx) freshnessFrom(proj string, live liveState) map[string]any {
 	p, ok := c.Reg[proj]
 	if !ok {
 		return map[string]any{"fresh": false}
 	}
-	if head := gitx.Head(p.Path); head != "" {
+	if live.head != "" {
 		return map[string]any{
 			"head":        p.Head,
-			"current":     head,
-			"fresh":       head == p.Head,
+			"current":     live.head,
+			"fresh":       live.head == p.Head,
 			"zoekt_head":  p.ZoektHead,
-			"zoekt_fresh": p.ZoektHead == head,
+			"zoekt_fresh": p.ZoektHead == live.head,
 		}
 	}
-	live, err := store.Fingerprint(p.Path)
-	if err != nil {
+	if live.fp == "" {
 		return map[string]any{"head": p.Fingerprint, "fresh": false, "zoekt_head": p.ZoektHead, "zoekt_fresh": false}
 	}
 	return map[string]any{
 		"head":        p.Fingerprint,
-		"current":     live,
-		"fresh":       live == p.Fingerprint,
+		"current":     live.fp,
+		"fresh":       live.fp == p.Fingerprint,
 		"zoekt_head":  p.ZoektHead,
-		"zoekt_fresh": p.ZoektHead == "files" && live == p.Fingerprint,
+		"zoekt_fresh": p.ZoektHead == "files" && live.fp == p.Fingerprint,
 	}
 }
 

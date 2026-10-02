@@ -136,19 +136,19 @@ func cmdConfig(g *Globals) *cobra.Command {
 }
 
 func cmdMigrate(g *Globals) *cobra.Command {
-	var from, dryRun string
-	var isDry bool
+	var from string
+	var isDry, force bool
 	c := &cobra.Command{
 		Use:   "migrate",
 		Short: "Move legacy ~/.tk / $TK_HOME / Library tree into XDG true-knowledge dirs",
 		Example: `  tk migrate --dry-run
-  tk migrate --from ~/.tk`,
+  tk migrate --from ~/.tk
+  tk migrate --force`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, err := load(*g)
 			if err != nil {
 				return err
 			}
-			_ = dryRun
 			cands := []string{from}
 			if from == "" {
 				home, _ := os.UserHomeDir()
@@ -192,6 +192,7 @@ func cmdMigrate(g *Globals) *cobra.Command {
 			}
 			// Marker-only MVP: copy config.json + tk.json if present, stamp MIGRATED.
 			moved := []string{}
+			skipped := []string{}
 			for _, d := range found {
 				for _, f := range []string{"config.json", "tk.json"} {
 					src := filepath.Join(d, f)
@@ -206,19 +207,41 @@ func cmdMigrate(g *Globals) *cobra.Command {
 					if f == "tk.json" {
 						dst = ctx.Paths.RegistryFile()
 					}
-					if _, err := os.Stat(dst); os.IsNotExist(err) {
-						_ = os.WriteFile(dst, raw, 0o600)
-						moved = append(moved, f+" from "+d)
+					if _, err := os.Stat(dst); err == nil && !force {
+						// The destination already holds a file tk wrote. Leaving
+						// it alone is the safe default, but reporting success
+						// while having migrated nothing is the lie this command
+						// must not tell: a re-run is a re-run only if it says so.
+						skipped = append(skipped, f+" (exists at "+dst+")")
+						continue
 					}
+					if err := os.WriteFile(dst, raw, 0o600); err != nil {
+						return ctx.outFailed(cmd, "migrate could not write "+dst, map[string]any{"from": found, "moved": moved}, err)
+					}
+					moved = append(moved, f+" from "+d)
 				}
 			}
+			// A re-run that changed nothing is a failed migration, not a quiet
+			// one. `03-COMMANDS.md` promised a refusal and the promise had no
+			// flag behind it, so the second run exited 0 having moved nothing.
+			if len(moved) == 0 {
+				if len(skipped) > 0 {
+					text := "nothing to migrate; already present: " + strings.Join(skipped, ", ") +
+						". Pass --force to overwrite."
+					return ctx.outFailed(cmd, text, map[string]any{"migrated": false, "skipped": skipped, "from": found},
+						fail("%s", text))
+				}
+				return ctx.out(cmd, "nothing to migrate (no config.json or tk.json in "+strings.Join(found, ", ")+")",
+					map[string]any{"migrated": false, "from": found})
+			}
 			_ = os.WriteFile(filepath.Join(ctx.Paths.Data, "MIGRATED"), []byte("migrated\n"), 0o600)
-			return ctx.out(cmd, fmt.Sprintf("migrated %d file(s); marker written (re-run needs --force, not yet required)", len(moved)),
-				map[string]any{"moved": moved})
+			return ctx.out(cmd, fmt.Sprintf("migrated %d file(s); marker written", len(moved)),
+				map[string]any{"moved": moved, "from": found})
 		},
 	}
 	c.Flags().StringVar(&from, "from", "", "legacy dir (default: auto-detect ~/.tk, $TK_HOME, Library)")
 	c.Flags().BoolVar(&isDry, "dry-run", false, "print without writing")
+	c.Flags().BoolVar(&force, "force", false, "overwrite an existing config.json / tk.json")
 	return c
 }
 

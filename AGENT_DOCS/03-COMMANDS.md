@@ -2,8 +2,8 @@
 id: 03-commands
 title: CLI surface — every verb, flag, alias
 status: authoritative
-date: 2026-10-02
-supersedes: [AGENT_DOCS/history/DECISIONS/2026-10-02-stderr-is-the-diagnostic-channel.md, AGENT_DOCS/history/DECISIONS/2026-10-02-picker-search-is-fuzzy-and-case-insensitive.md, AGENT_DOCS/history/DECISIONS/2026-10-02-project-routing-is-always-explicit.md, AGENT_DOCS/history/DECISIONS/2026-10-02-cross-repo-fleet-text-search.md, AGENT_DOCS/history/compatible-implementation-spec.md §8, AGENT_DOCS/history/DECISIONS/2026-09-28-failed-install-is-a-failed-command.md, AGENT_DOCS/history/DECISIONS/2026-09-28-delegate-backend-install-to-vendor.md, AGENT_DOCS/history/compatible-implementation-spec.md §8.4, AGENT_DOCS/history/DECISIONS/2026-09-25-flag-only-query-forms.md, AGENT_DOCS/history/DECISIONS/2026-09-26-select-flag-forces-project-picker.md, AGENT_DOCS/history/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
+date: 2026-10-03
+supersedes: [AGENT_DOCS/history/DECISIONS/2026-10-03-a-migration-that-migrated-nothing-failed.md, AGENT_DOCS/history/DECISIONS/2026-10-03-one-meaning-per-key.md, AGENT_DOCS/history/DECISIONS/2026-10-03-a-refused-daemon-is-a-failed-command.md, AGENT_DOCS/history/DECISIONS/2026-10-02-stderr-is-the-diagnostic-channel.md, AGENT_DOCS/history/DECISIONS/2026-10-02-picker-search-is-fuzzy-and-case-insensitive.md, AGENT_DOCS/history/DECISIONS/2026-10-02-project-routing-is-always-explicit.md, AGENT_DOCS/history/DECISIONS/2026-10-02-cross-repo-fleet-text-search.md, AGENT_DOCS/history/compatible-implementation-spec.md §8, AGENT_DOCS/history/DECISIONS/2026-09-28-failed-install-is-a-failed-command.md, AGENT_DOCS/history/DECISIONS/2026-09-28-delegate-backend-install-to-vendor.md, AGENT_DOCS/history/compatible-implementation-spec.md §8.4, AGENT_DOCS/history/DECISIONS/2026-09-25-flag-only-query-forms.md, AGENT_DOCS/history/DECISIONS/2026-09-26-select-flag-forces-project-picker.md, AGENT_DOCS/history/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
 superseded-by: null
 ---
 
@@ -18,8 +18,8 @@ purpose.
 
 stdout is the answer and nothing else; stderr is the live channel — progress,
 warnings, debug narration, engine refusals. `TK_LOG=off|error|warn|info|debug`
-(default `warn`); `--verbose` raises it to debug, `--quiet` caps it at error and
-silences progress. Neither touches stdout. Contract: `10-OUTPUT.md`.
+(default `warn`); `--verbose` raises it to debug, `--quiet` caps it at error.
+Neither touches stdout. Contract: `10-OUTPUT.md`.
 
 ## Setup and admin
 
@@ -29,13 +29,13 @@ silences progress. Neither touches stdout. Contract: `10-OUTPUT.md`.
 | `tk setup` | `--register`, `--name`, `--client`, `--tool-profile`, `--dry-run` | init + install + opt-in register + opt-in client snippet |
 | `tk install [backend...]` | `--check`, `--dry-run`, `--update`, `--version` | eight progress stages on stderr, see below; backend = `cbm`; no argument means all missing. tk downloads and checksum-verifies the pinned release itself. A replacement stops the daemon holding the binary first, and restarts it only if it was running. **Exits non-zero if any backend failed** — see below |
 | `tk register <path>` | `--name` | registers a path, never indexes it; name defaults to the directory base |
-| `tk migrate` | `--from`, `--dry-run` | moves `~/.tk`, `$TK_HOME`, or `~/Library/Application Support/true-knowledge`; writes a `MIGRATED` marker, refuses a re-run without `--force` |
-| `tk status` | — | projects, HEAD, freshness; `--json` adds `head`, `current`, `zoekt_head`, `zoekt_fresh` |
+| `tk migrate` | `--from`, `--dry-run`, `--force` | moves `~/.tk`, `$TK_HOME`, or `~/Library/Application Support/true-knowledge`; writes a `MIGRATED` marker, refuses a re-run without `--force` — a re-run that moves nothing exits `1` |
+| `tk status` | — | projects, HEAD, freshness; `--json` adds `head` (recorded), `current` (live), `fresh`, `zoekt_head`, `zoekt_fresh` — the same pair every read command carries, so a caller can compute staleness |
 | `tk completion <shell>` | — | `bash`, `zsh`, `fish`, `powershell`; prints, never installs |
 | `tk mcp-install` | `--client` (required), `--tool-profile`, `--dry-run` | prints the client snippet; `--client pi\|opencode\|claude\|codex` |
 | `tk mcp` | `--tool-profile`, `--detach` | the stdio proxy an agent client runs; stdin EOF is an instant exit. `--detach` returns immediately and leaves a resident holding one warm CBM child — see below |
 | `tk cbm <tool> [args]` | — | low-level passthrough for admin and debugging; exists so nothing else has to spawn by hand |
-| `tk daemon status` / `tk daemon stop` | — | CLI-only, never exposed over MCP |
+| `tk daemon status` / `tk daemon stop` | — | CLI-only, never MCP. A refusal exits `1` with `ok:false`; a nonzero `daemon: not running` is an answer at `0` (`10-OUTPUT.md`). `daemon start` is deliberately not a verb (`01-ARCHITECTURE.md`) |
 
 ### The resident
 
@@ -46,7 +46,9 @@ slower. Writes (`tk index`, `tk sync`) always take the one-shot path.
 
 The whole surface is the socket and a pid file under `<state>/`. No `tk session`
 verb, no subcommands, no idle timeout — the resident runs until reboot or a
-signal, and SIGTERM cleans up.
+signal, and SIGTERM cleans up. `tk resident` is the hidden foreground half
+`--detach` re-executes: it works if typed, and is in neither `--help` nor
+`__complete`.
 
 * **What uses it:** the read commands — `find`, `explain`, `trace`, `grep`,
   `outline`, `impact`, `arch`, `query`, `validate`. `tk index` and `tk sync`

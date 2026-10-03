@@ -10,6 +10,7 @@ import (
 	"github.com/ayayushsharma/true-knowledge/internal/logx"
 	"github.com/ayayushsharma/true-knowledge/internal/mcp"
 	"github.com/ayayushsharma/true-knowledge/internal/memory"
+	"github.com/ayayushsharma/true-knowledge/internal/resident"
 	"github.com/spf13/cobra"
 )
 
@@ -43,6 +44,11 @@ func cmdMCP(g *Globals) *cobra.Command {
 			s := &mcp.Server{Budget: budget, Profile: profile}
 			if ctx.CBMOK {
 				s.Run = ctx.Run
+				// A running resident is asked before the spawn. This never
+				// starts one: `tk mcp` dials a socket that may not exist, and
+				// a session with no resident behaves exactly as it did before.
+				// ctx.Run is the raw spawn, so the fallback does not dial twice.
+				s.Resident = &resident.Client{Addr: ctx.Paths.ResidentSocket()}
 			}
 			paths := ctx.Paths
 			s.ShardsFor = paths.ZoektShards

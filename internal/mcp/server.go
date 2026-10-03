@@ -374,6 +374,11 @@ var structuredCBMTools = map[string]bool{
 type Server struct {
 	Run    cbmRunner
 	Budget int
+	// Resident is an already-running resident to ask before spawning. Nil =
+	// never dial, which is every session on a machine that never detached one.
+	// It is only consulted when Run is set: with no engine installed there is
+	// nothing to dial for.
+	Resident Resident
 	// Profile selects the tool surface: scout (11) | analysis (15) | minimal (3) | memory (22).
 	Profile string
 	// ShardsFor maps project -> zoekt shard dir.
@@ -406,6 +411,9 @@ type Server struct {
 	// needs no lock; it is empty until a client initializes, and an
 	// uninitialized client is served the oldest dialect.
 	proto string
+	// backend is which path served the last engine call: "resident" or
+	// "spawn". Serial dispatch owns it — see internal/mcp/resident.go.
+	backend string
 	// In/Out override stdio (tests). Nil = os.Stdin/os.Stdout.
 	In   io.Reader
 	OutW io.Writer
@@ -560,6 +568,10 @@ func (s *Server) handle(ctx context.Context, req rpcReq) (rpcResp, bool) {
 			return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32602, "invalid params"}}, true
 		}
 		t0 := time.Now()
+		// Cleared per call: a memory tool or a failed parse must not inherit
+		// the previous call's backend, which would put "resident" on a record
+		// that never dialled.
+		s.backend = ""
 		resp := s.callTool(ctx, id, p.Name, p.Arguments)
 		s.logCall(req.Method, p.Name, p.Arguments, t0, resp)
 		// The record goes to tk.log; this line goes to the live channel, and it
@@ -620,7 +632,7 @@ func (s *Server) callTool(ctx context.Context, id any, name string, args map[str
 	}
 	// Writes and admin passthroughs answer in prose: there is no stable
 	// payload shape to hand a parser, only an outcome to read.
-	out, err := s.Run.RunJSON(ctx, cbmTool, args)
+	out, err := s.runJSON(ctx, cbmTool, args)
 	if err != nil {
 		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, err.Error()}}
 	}
@@ -648,7 +660,7 @@ func (s *Server) callTool(ctx context.Context, id any, name string, args map[str
 // The budget is spent once, on the payload, so the two encodings cannot
 // disagree about what was dropped.
 func (s *Server) callStructured(ctx context.Context, id any, tool string, args map[string]any) rpcResp {
-	res, err := s.Run.RunStructured(ctx, tool, args)
+	res, err := s.runStructured(ctx, tool, args)
 	if err != nil {
 		return rpcResp{JSONRPC: "2.0", ID: id, Error: &rpcErr{-32000, err.Error()}}
 	}
@@ -704,7 +716,7 @@ func (s *Server) callStructured(ctx context.Context, id any, tool string, args m
 // hands back the engine's coverage payload so an agent can gate on the same
 // fields tk reads, instead of on a rendered verdict string.
 func (s *Server) coverageData(ctx context.Context, project string) (any, error) {
-	res, err := s.Run.RunStructured(ctx, "check_index_coverage", map[string]any{"project": project, "scopes": []string{"."}})
+	res, err := s.runStructured(ctx, "check_index_coverage", map[string]any{"project": project, "scopes": []string{"."}})
 	if err != nil {
 		return nil, err
 	}
@@ -748,7 +760,7 @@ func isAbsenceTool(cbmTool string) bool {
 
 // coverageVerdict probes whole-project coverage (scopes=.) via CBM.
 func (s *Server) coverageVerdict(ctx context.Context, project string) (string, error) {
-	out, err := s.Run.RunJSON(ctx, "check_index_coverage",
+	out, err := s.runJSON(ctx, "check_index_coverage",
 		map[string]any{"project": project, "scopes": []string{"."}})
 	if err != nil {
 		return "", err
@@ -793,7 +805,7 @@ func (s *Server) callValidate(ctx context.Context, id any, args map[string]any) 
 	// the engine searches the leaf name, so a qualified symbol is not in the
 	// reply to be found, and a substring test would match the project row of
 	// a reply that found nothing. One call, judged on the row's first column.
-	hit, err := s.Run.RunJSON(ctx, "search_graph", map[string]any{"name_pattern": cbmexec.LeafName(sym), "project": project, "limit": limit})
+	hit, err := s.runJSON(ctx, "search_graph", map[string]any{"name_pattern": cbmexec.LeafName(sym), "project": project, "limit": limit})
 	if err != nil {
 		goto coverage
 	}
@@ -809,7 +821,7 @@ coverage:
 	}
 	cands := "(no candidates)"
 	if toks := cbmexec.NearMissTokens(sym); len(toks) > 0 {
-		if near, nerr := s.Run.RunJSON(ctx, "search_graph", map[string]any{"name_pattern": cbmexec.LeafName(toks[0]), "project": project, "limit": limit}); nerr == nil && !cbmexec.LooksEmpty(near) {
+		if near, nerr := s.runJSON(ctx, "search_graph", map[string]any{"name_pattern": cbmexec.LeafName(toks[0]), "project": project, "limit": limit}); nerr == nil && !cbmexec.LooksEmpty(near) {
 			cands = near
 		}
 	}
@@ -835,6 +847,12 @@ func (s *Server) logCall(method, tool string, args map[string]any, t0 time.Time,
 		"dur_ms": time.Since(t0).Milliseconds(),
 		"mcp":    map[string]any{"method": method, "tool": tool, "params": redactArgs(args)},
 		"exit":   0,
+	}
+	// Which path served it. Absent on memory tools and failed parses, where no
+	// engine was asked; present on every graph call, so a reader can see a
+	// 2.0s spawn and a 15ms dial in the same log without running the clock.
+	if s.backend != "" {
+		rec["backend"] = s.backend
 	}
 	if resp.Error != nil {
 		rec["exit"] = 1

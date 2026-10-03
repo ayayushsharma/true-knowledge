@@ -15,6 +15,11 @@ must verify, `dead-end` do not walk again.
 | Which lock is the 1ms poll actually on, and is it contention or a fixed retry budget? | — | **unanswered**, see the latency note |
 | Is 74ms the floor for a warm query, or does a warm store do better? | — | **unanswered**, see the latency note |
 | Does the resident pid-file test flake under `-race`? | `2026-10-02-resident-pid-file-test-race.md` | **measured: yes**, ~1 in 8, pre-existing |
+| Where should a pi extension's per-turn recall run: in the model loop or in the harness? | `2026-10-03-pi-extension-recall-in-the-harness.md` | design; `tk mcp` spawns per call (code-verified), so harness reads go over the CLI |
+| What is the build order for the resident dial, the MCP compounds, and the pi extension? | `2026-10-03-tk-pi-plan.md` | design; P0 measure, P1 resident dial, P2 compounds, P3 extension, P4 docs |
+| What do tk reads really cost, and can a nudge reach the model without an extra turn? | `2026-10-03-measured-latency-and-pi-probe-facts.md` | measured; 2.0s warm spawn vs ~15ms socket, empty `search_graph` 9.4s, in-band channel exists |
+| Which in-loop tk calls fit under 100ms, and what do the gates and `/` commands look like? | `2026-10-03-latency-budget-and-operator-surface.md` | measured; 10 of 12 tools 14–30ms over the socket, `detect_changes` 591ms and `find`'s regex route 151ms are the two that break the target |
+| Is the pi extension buildable, and what does it do in an unregistered directory? | `2026-10-03-tk-pi-prototype.md` | planned; five-state capability probe, memory needs no registration or CBM, ledger works for unregistered names, `source_search all_projects` is the cross-repo path |
 
 ## The one-line version
 
@@ -59,6 +64,17 @@ quoted fact, read past its scope, and a mechanism invented to defend against it.
 * **The wrong file treated as the store.** `05-INDEXING.md:155-156` describes the
   shareable export, which reads exactly like the query store. The queries open
   `<CBM_CACHE_DIR>/<project>.db`.
+* **"The client holds the process open" read as "the client's calls are warm."**
+  `tk mcp` is a stdio proxy that runs for a whole session and still spawned the
+  engine per tool call: `internal/mcp` had no dialer, and `Ctx.residentTry` lived
+  only on the CLI read path. A long-lived MCP connection is not a warm transport,
+  and designing a per-turn recall fan-out on top of one cost ~4.9s per call
+  instead of ~74ms. Check which dialer a path actually calls. **Resolved
+  2026-10-03:** the MCP server dials first now
+  (`history/DECISIONS/2026-10-03-mcp-dials-a-running-resident-before-it-spawns.md`),
+  measured 4411ms → 16.6ms with identical payloads. The lesson did not expire
+  with the bug — a spawn is still 2000ms wherever no dialer reaches.
+
 * **A constructor's doc comment read as a directory walk.** A throwaway note
   claimed `NewDirectorySearcher` loads every shard *below* a directory, so one
   searcher already spanned repos and the fleet was one hook. It globs

@@ -104,7 +104,8 @@ went to stdout, `output.diag` is the stderr narration.
 ```bash
 tail -n 50 tk.log | jq .                                  # recent calls
 jq -c 'select(.exit != 0)' tk.log                         # failures only
-jq -r '[.ts, (.argv|join(" "))] | @tsv' tk.log            # argv history
+jq -r 'select(.argv)|[.ts, (.argv|join(" "))] | @tsv' tk.log  # argv history
+jq -r 'select(.mcp)|[.mcp.tool,.backend,.dur_ms]|@tsv' tk.log   # MCP: resident or spawn
 jq -r 'select(.mcp.tool=="source_search") | .output.text' tk.log
 jq -r '.output.diag' tk.log                               # what it said while working
 ```

@@ -2,8 +2,8 @@
 id: 01-architecture
 title: Architecture — thin shipper over CBM, managed backends, trace log
 status: authoritative
-date: 2026-09-30
-supersedes: [AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md, AGENT_DOCS/history/DECISIONS/2026-09-29-measure-latency-not-daemon-routing.md, AGENT_DOCS/history/DECISIONS/2026-09-28-tk-owns-the-binary-and-the-quiesce.md, AGENT_DOCS/history/DECISIONS/2026-09-28-delegate-backend-install-to-vendor.md, AGENT_DOCS/history/DECISIONS/2026-09-22-thin-tk-over-cbm.md, AGENT_DOCS/history/DECISIONS/2026-09-23-tk-managed-backends.md, AGENT_DOCS/history/DECISIONS/2026-09-23-download-at-install-and-setup.md, AGENT_DOCS/history/DECISIONS/2026-09-23-zoekt-library-not-backend.md, AGENT_DOCS/history/DECISIONS/2026-09-23-explicit-source-search.md, AGENT_DOCS/history/ROADMAP.md §MVP1, AGENT_DOCS/history/DECISIONS/2026-09-27-consolidated-agent-docs.md]
+date: 2026-10-03
+supersedes: [AGENT_DOCS/history/DECISIONS/2026-10-03-mcp-dials-a-running-resident-before-it-spawns.md, AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md, AGENT_DOCS/history/DECISIONS/2026-09-29-measure-latency-not-daemon-routing.md, AGENT_DOCS/history/DECISIONS/2026-09-28-tk-owns-the-binary-and-the-quiesce.md, AGENT_DOCS/history/DECISIONS/2026-09-28-delegate-backend-install-to-vendor.md, AGENT_DOCS/history/DECISIONS/2026-09-22-thin-tk-over-cbm.md, AGENT_DOCS/history/DECISIONS/2026-09-23-tk-managed-backends.md, AGENT_DOCS/history/DECISIONS/2026-09-23-download-at-install-and-setup.md, AGENT_DOCS/history/DECISIONS/2026-09-23-zoekt-library-not-backend.md, AGENT_DOCS/history/DECISIONS/2026-09-23-explicit-source-search.md, AGENT_DOCS/history/ROADMAP.md §MVP1, AGENT_DOCS/history/DECISIONS/2026-09-27-consolidated-agent-docs.md]
 superseded-by: null
 ---
 
@@ -146,8 +146,9 @@ structured that is not.
 The CBM coordination daemon does not answer tool calls: it owns watchers,
 shared indexing *jobs*, the UI, and session lifecycle, and there is no socket or
 client flag on it. The warm transport is `tk mcp --detach` — a resident holding
-one long-lived MCP stdio child behind a local socket that reads dial first and
-fall back to a one-shot spawn. Not the daemon-*backed* path.
+one long-lived MCP stdio child behind a local socket. Reads dial it first and
+fall back to a one-shot spawn, in the CLI and `tk mcp` alike; a refusal is an
+answer, never a reason to spawn again. Not the daemon-*backed* path.
 
 Every `cli` spawn nonetheless re-runs the engine's version-cohort admission
 handshake, so cost is coordination, not query. On CBM 0.11.0 with TensorFlow
@@ -176,10 +177,9 @@ Three traps that make such a number wrong rather than imprecise:
 with Unix tools; there is no `tk log` command.
 
 ```bash
-tail -n 50 tk.log | jq .                                  # recent calls
 jq -c 'select(.exit != 0)' tk.log                         # failures only
-jq -r '[.ts, (.argv|join(" "))] | @tsv' tk.log            # argv history
-jq -r 'select(.mcp.tool=="source_search") | .output.text' tk.log
+jq -r 'select(.mcp)|[.mcp.tool,.backend,.dur_ms]|@tsv' tk.log  # MCP: who served it
+jq -r 'select(.mcp.tool=="source_search")|.output.text' tk.log
 ```
 
 Redaction: inputs broad, outputs narrow. String tool params and CLI argv get

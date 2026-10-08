@@ -63,16 +63,6 @@ while these three multiply spawns by N, up to 3N with absence probes. No envelop
 shape, `--all`, or `--cohort` surface designed. Triggers: sequential queries
 visibly hurting at a given project count, or measured agent demand.
 
-### Result cursor for fleet text search
-
-Parked on reasoning, not evidence. A page token needs a stable total order plus a
-per-project `zoekt_head` stamp, refusing rather than serving shifted ranks after a
-reindex. It helps a caller that follows protocol — a script, a CI check — not a
-model that misreads a long answer, which the scope line addresses. Before
-building: run open-ended queries with known answers on an 8B model, scope line on
-versus off, and count wrong answers.
-`AGENT_DOCS/history/DECISIONS/2026-10-02-cross-repo-fleet-text-search.md`.
-
 ### RRF tuning
 
 Parked: `k` and fusion-weight configurability. Today `k = 60`, weight-less, over
@@ -109,10 +99,9 @@ or the evals harness wanting a project-state stream.
 
 Built: the repo-root `install.sh` and `install.ps1`. Each installs tk from a
 GitHub release, verifies it against that release's `checksums.txt`, refuses an
-asset the manifest does not list, and then runs `tk install cbm`. They hold no
-CBM version input — `DefaultCBMPin` stays the only authority, so the scripts
-couple tk's release cadence to the CBM pin and that coupling is deliberate.
-They exist because tk cannot replace its own running binary.
+asset the manifest does not list, then runs `tk install cbm`. They hold no CBM
+version input — `DefaultCBMPin` stays the only authority — because tk cannot
+replace its own running binary.
 
 Still parked: `brew`, `nix`, and `npm` formulas, plus the team `.zst` cadence,
 and the release workflow that would publish the platform binaries the two
@@ -122,45 +111,56 @@ package manager, or a first tagged release.
 
 ## Open work
 
-### Spawn overhead — measured, shape decided, not built
+### Spawn overhead — diagnosed and shipped; one caveat left
 
-A read command takes **~4.9s** on CBM 0.11.0 with TensorFlow indexed, against a
-20-100ms target. Not the query (~110ms), not the store (2.3MB costs the same as
-686MB), not tk (D ≈ C). It is `nanosleep(1ms)` polling on a
-`cbm-version-cohort-*-v1.lock` admission lock that `cli` mode takes on every
-spawn and is documented never to need. A long-lived MCP child answers in
-**74ms**; a live daemon alone only cuts one-shot to ~1.8s. Method and dead ends:
+A read took **~4.9s** on CBM 0.11.0 against a 20-100ms target. Not the query
+(~110ms), not the store (2.3MB costs the same as 686MB), not tk (D ≈ C): it was
+`nanosleep(1ms)` polling on a `cbm-version-cohort-*-v1.lock` admission lock that
+`cli` mode takes on every spawn and is documented never to need. A long-lived MCP
+child answered in **74ms**. Method and dead ends:
 `AGENT_DOCS/THROWAWAY/2026-09-29-cbm-one-shot-latency.md`.
 
-**Built: one shape, `tk mcp --detach`.** A resident holds one warm CBM MCP
-child and listens on a local socket; the CLI dials it and falls back to one-shot
-on any failure, so both faces cost the same and a dead resident is not an error.
-Explicit start, no auto-spawn, no idle timeout. The resident is a transport, not
-a query layer — it forwards to the child and returns CBM's `result` verbatim, so
-the two render paths are untouched. Linux and macOS first; Windows is a named
-follow-up touching only the socket and detach files. It needs **no** freshness
-machinery: a warm child re-resolves the store per call, measured, so there is no
-poller, watcher, or generation counter. `tk install cbm` swaps the child
-underneath a live resident and never kills it. `02-BOUNDARY.md`'s no-PID/endpoint
-rule is narrowed to "a process tk started, in a directory tk chose";
-`AGENTS.md`'s no-supervisor rule needs no withdrawal: the resident watches nothing,
-restarts nothing, dies on SIGTERM. `.../DECISIONS/2026-09-30-resident-owns-its-endpoint-and-its-swap.md`.
+Shipped in two steps: a resident behind a socket with the CLI dialing it, then the
+MCP server dialing the same socket (2026-10-03, 4411ms → 16.6ms median over
+stdio, payloads byte-identical). Design and invariants live in
+`01-ARCHITECTURE.md` and the two `.../DECISIONS/` ADRs, not here.
 
-Worth doing first, and independent: `runEnvelope`'s exit-0-no-envelope fallback
-re-spawns outside every traced call, so a non-conforming engine costs double the
-spawns and `tk.log` records one. Until it is fixed, `tk.log` is a lower bound
-and no spawn-count assertion is evidence. Method:
+Left: `runEnvelope`'s exit-0-no-envelope fallback re-spawns outside every traced
+call, so a non-conforming engine costs double the spawns and `tk.log` records
+one. Until it is fixed, `tk.log` is a lower bound and no spawn-count assertion is
+evidence. Method:
 `AGENT_DOCS/history/DECISIONS/2026-09-29-measure-latency-not-daemon-routing.md`.
 
-### Stale-cursor protocol — P3, blocked
+### Concurrent reads in the MCP server — measured, parked
+
+`internal/mcp/server.go:491` runs `s.handle` inline in the read loop, so one slow
+tool delays every other request on the same connection; `detect_changes` at 591ms
+is the known offender. Parked deliberately: `detect_changes` leaves the
+small-model profile, and `find`'s index route already answers in-process, so a
+measured residual floor — not a design preference — has to justify an ADR that
+relaxes one-request-at-a-time on purpose. Reads would parallelize; writes serial.
+
+### User-configurable MCP profiles — direction decided, shape undecided
+
+The original plan was a fifth built-in `compact` profile; the direction is now
+user-defined profile sets, which is larger than a name because tool membership
+becomes data with its own validation, precedence and completion. Nothing designed;
+do not bolt configurability onto a hard-coded list of five.
+
+### Cursors — P3, blocked (tk-owned and fleet)
 
 tk issues no cursors; every tool is one-shot and bounded by `limit`. A resume
-token plus an index-moved `STALE` verdict has no consumer until pagination
-exists, and the index-moved decision is the blocker: a tk-issued token must
-survive an index generation change, which means deciding what a stale tk token
-means when the engine's own offset has silently become invalid. Until that
-exists, treat the engine's `has_more` and `next_offset` as the whole pagination
-story and do not synthesize a tk cursor on top of them.
+token has no consumer until pagination exists, and the blocker is deciding what a
+stale token means when the engine's own offset has silently become invalid
+across an index generation change. The fleet variant additionally needs a stable
+total order plus a per-project `zoekt_head` stamp, refusing rather than serving
+shifted ranks after a reindex; it is parked on reasoning, not evidence, because
+it serves a caller that follows protocol — a script, a CI check — not a model
+that misreads a long answer, which the scope line already addresses. Before
+either is built: run open-ended queries with known answers on an 8B, scope line on
+versus off, count wrong answers. Until then `has_more`/`next_offset` are the
+whole pagination story.
+`.../DECISIONS/2026-10-02-cross-repo-fleet-text-search.md`.
 
 ### Evals harness — designed, not built
 
@@ -168,13 +168,13 @@ No `tk eval` subcommand, ever; that would be a boundary violation. A committed
 frozen fixture in `tests/evals/fixture/` with its git SHA as the pin, a
 `fixture.sha` that hard-fails on drift, and a runner `tests/evals/run.sh` that
 defaults to fake-CBM with `TK_LIVE=1` opting in. Verdicts are rule-based: `PASS`
-= exit 0 plus a required output substring plus a probe-call ceiling; `PARTIAL` =
-correct but coverage-dependent, or the ceiling exceeded; `FAIL` = non-zero exit,
-a missing artifact, or budget truncation. `est_tokens = chars/4` is a proxy and
-must be labeled as one. Journeys for a 27B: who-calls, breakage, orient, grep
-route, retention across processes, secret gate, semantic recall; one for a sub-8B
-filter. `report.json` is committed as evidence, and drift is a `FAIL`. A
-self-judging 27B scorer is a possible phase 2 and must never be the default.
+= exit 0 plus a required substring plus a probe-call ceiling; `PARTIAL` =
+coverage-dependent or over ceiling; `FAIL` = non-zero exit, missing artifact, or
+truncation. `est_tokens = chars/4` is a proxy and must be labeled one. Journeys
+for a 27B: who-calls, breakage, orient, grep route, retention across processes,
+secret gate, semantic recall; one for a sub-8B filter. `report.json` is
+committed as evidence and drift is a `FAIL`. A self-judging 27B scorer is a
+possible phase 2 and must never be the default.
 
 ### Text index ignore parity — P3, standing
 

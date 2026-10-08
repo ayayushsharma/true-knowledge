@@ -3,15 +3,248 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/ayayushsharma/true-knowledge/internal/cbmexec"
+	"github.com/ayayushsharma/true-knowledge/internal/mcp"
+	"github.com/ayayushsharma/true-knowledge/internal/trace"
+	"github.com/ayayushsharma/true-knowledge/internal/zoekttext"
 	"github.com/spf13/cobra"
 )
 
 var metaChars = regexp.MustCompile(`[.*()\[\]{}+?^$|\\]`)
+
+// zoektOperatorPrefixes are the query-language keywords zoekt's parser claims
+// for itself, copied from its prefixes table (query/parse.go) rather than
+// guessed. A pattern starting with one would filter instead of search.
+var zoektOperatorPrefixes = []string{
+	"archived:", "b:", "branch:", "c:", "case:", "content:", "f:", "file:",
+	"fork:", "public:", "r:", "regex:", "repo:", "lang:", "sym:", "t:",
+	"type:", "meta.",
+}
+
+// zoektReservedWords are the bare words that change how surrounding terms
+// combine: "or" makes a query a union, where a caller writing "or" almost
+// always meant the word.
+var zoektReservedWords = map[string]bool{"or": true, "and": true, "not": true}
+
+// zoektUnsupported is the short list of constructs measured to answer
+// differently from RE2, and therefore never allowed to answer here. Each one
+// was probed against a real index, hit for hit, against Go's own regexp; the
+// evidence lives in internal/zoekttext as TestSearchAgreesWithRE2 and
+// TestUnsupportedConstructsAnswerDifferently.
+//
+//	\z   end-of-text. Always zero: `backoff\z` finds nothing in a line ending
+//	     in backoff, while `retry.*backoff$` finds it. The whole \z branch is
+//	     dropped, so an alternation keeps only its other side.
+//	\A   start-of-text. Treated as start of *line*: `\Aret` finds 1 of the 3
+//	     lines RE2 finds, `\Athis line` finds none.
+//	(?s) dot-matches-newline. The flag degrades matching to a near-match-
+//	     everything filter: `(?s)retry.*backoff` answers 18 of 19 probe lines
+//	     where RE2 answers 3. False positives, the worse direction.
+//	(?i) case-folding, in every spelling. `(?i)demo` searches case-sensitively
+//	     for the *uppercased* text, so it misses the `Demo` that is there;
+//	     `(?-i)upper` is ignored, so it over-matches the `UPPER` that RE2
+//	     would not. Any inline group naming `i` diverges, however it spells it.
+//
+// Everything else agrees with RE2 hit for hit: `^`, `$`, `\b`, `\d` and the
+// other classes, POSIX classes, Unicode scripts, counted repetition,
+// alternation, named and non-capturing groups, `\Q...\E`, and the `m` and `U`
+// flags. So this list is short because it was measured, not because regex
+// syntax is scary.
+var zoektUnsupported = []string{`\z`, `\A`}
+
+// zoektTextQuery reports whether tk's own index can answer this pattern with
+// the same meaning the engine would give it, and returns the query to run when
+// it can: one token, not an operator, not a reserved word, and none of the
+// constructs in zoektUnsupported.
+//
+// Two of the four exclusions are about zoekt's query language rather than its
+// regex engine:
+//
+//   - Two or more tokens. zoekt ANDs terms per *file*, so "retry backoff"
+//     matches a file whose two words sit on different lines, where the engine's
+//     search_code reads one pattern. That is a phrase search the caller meant.
+//   - An operator prefix (file:, repo:, case:, …), which zoekt would turn into
+//     a filter over names, and a bare combining word (or, and, not), which
+//     changes what surrounds it.
+//
+// The other two, zoektUnsupported and the flag scan, are the ones that could
+// answer "nothing is here" wrongly, and they exist because of measurement
+// rather than reading.
+func zoektTextQuery(q string) (string, bool) {
+	if len(strings.Fields(q)) != 1 {
+		return "", false
+	}
+	lower := strings.ToLower(q)
+	if zoektReservedWords[lower] {
+		return "", false
+	}
+	for _, p := range zoektOperatorPrefixes {
+		if strings.HasPrefix(lower, p) {
+			return "", false
+		}
+	}
+	// \Q...\E quotes its contents, so a \z or (?i) inside one is text.
+	for _, unquoted := range unquoteAll(q) {
+		if mentionsFoldOrDotAll(unquoted) {
+			return "", false
+		}
+		for _, bad := range zoektUnsupported {
+			if strings.Contains(unquoted, bad) {
+				return "", false
+			}
+		}
+	}
+	return q, true
+}
+
+// mentionsFoldOrDotAll reports whether any inline flag group names the `i`
+// or `s` flag. Any spelling counts — `(?i)`, `(?-i)`, `(?is:...)`, `(?s)` —
+// because every one diverges: `(?i)` searches the uppercased text sensitively,
+// `(?-i)` is ignored so the default fold stays on, `(?s)` degrades to a broad
+// over-match. The scan reads only the flag letters right after `(?`, so a group
+// name is never mistaken for a flag: `(?P<miss>...)` stops at `P`. Groups the
+// index honors (`m`, `U`, `(?:...)`, `(?P<...>...)`) pass through untouched.
+func mentionsFoldOrDotAll(q string) bool {
+	for i := 0; i+2 < len(q); i++ {
+		if q[i] != '(' || q[i+1] != '?' {
+			continue
+		}
+		for j := i + 2; j < len(q); j++ {
+			switch q[j] {
+			case 'i', 's':
+				return true
+			case 'm', 'U', '-':
+				continue
+			default:
+				// End of the flag letters: `)`, `:`, a group name, anything.
+				j = len(q)
+			}
+		}
+	}
+	return false
+}
+
+// unquoteAll splits a pattern into the spans a \Q...\E quote does not cover,
+// so a scan for anchors sees only the parts the regex engine will interpret.
+func unquoteAll(q string) []string {
+	if !strings.Contains(q, `\Q`) {
+		return []string{q}
+	}
+	var out []string
+	rest := q
+	for {
+		i := strings.Index(rest, `\Q`)
+		if i < 0 {
+			out = append(out, rest)
+			return out
+		}
+		out = append(out, rest[:i])
+		rest = rest[i+2:]
+		if j := strings.Index(rest, `\E`); j >= 0 {
+			rest = rest[j+2:]
+		}
+	}
+}
+
+// findTextScope is the absence verdict this route owes its caller, and it is
+// deliberately silent when there is nothing to judge. A hit speaks for itself
+// and a header would cost every caller a line of tokens; an empty or cut
+// result is exactly where a bare answer reads as a claim about the codebase,
+// so only those two cases speak.
+//
+// The wording names the index and the snapshot rather than a file count,
+// because zoekt does not report how many files it looked at — its FileCount is
+// files *containing a match* (verified in zoekt api.go), which would print "0
+// files searched" beside "0 matches" and verify nothing. Worktree drift above
+// this line is the disclosure that qualifies the snapshot.
+func findTextScope(res zoekttext.Result, head string) string {
+	snapshot := "the tk text index"
+	if head != "" {
+		snapshot = "the tk text index at HEAD@" + shortHead(head)
+	}
+	switch {
+	case len(res.Matches) == 0:
+		return fmt.Sprintf("[find: 0 matches in %s — absence verified against that snapshot]\n", snapshot)
+	case res.HasMore:
+		return fmt.Sprintf("[find: %s; %d matches, showing %d]\n", snapshot, res.Total, len(res.Matches))
+	}
+	return ""
+}
+
+// findText answers a text pattern from tk's own trigram index.
+//
+// Only zoektTextQuery-verified patterns arrive here; see its comment for the
+// differential test that lets regexes come here too. What this route buys is
+// the whole cost of a text search: no process spawn, no engine round trip, and
+// no engine installed at all.
+//
+// The verdict is the part that must not be lost. An empty answer used to be
+// gated on check_index_coverage so it could prove it had looked; the local index
+// makes the same proof cheaper and better, because what it searched is knowable
+// rather than probed. An empty answer says so in words; a cut one says how much
+// was withheld.
+func (c *Ctx) findText(cmd *cobra.Command, proj, q string, limit int) error {
+	text, fields, err := c.findTextRead(cmd, proj, q, limit)
+	if err != nil {
+		return err
+	}
+	return c.outFresh(cmd, proj, text, fields)
+}
+
+// findTextRead is the half of find's text route that can be tested without a
+// writer: it refreshes, searches, and returns the text a human reads beside the
+// --json fields it is paired with. Both come from this one computation, the way
+// runSourceSearchFleet builds its fields before truncating — a caller can never
+// see fields that describe a different run than the text above them.
+func (c *Ctx) findTextRead(cmd *cobra.Command, proj, q string, limit int) (string, map[string]any, error) {
+	p := c.Reg[proj]
+	// Same auto-refresh as source-search: clean HEAD is the ~1ms no-op, a
+	// moved HEAD is a delta reindex, so a search never serves stale commits.
+	if _, zerr := c.ensureZoektAndTouch(cmd.Context(), proj, p.Path, c.Cfg.IndexMode); zerr != nil {
+		return "", nil, fail("find: %v", zerr)
+	}
+	if err := c.saveReg(); err != nil {
+		return "", nil, fail("save registry: %v", err)
+	}
+	p = c.Reg[proj]
+	note, mod, untracked := zoektStaleNote(p, true, "find")
+	t0 := time.Now()
+	res, err := mcp.ZoektQuery(cmd.Context(), c.Paths.ZoektShards(proj), p.Path, q, "", limit)
+	ev := trace.Event{Backend: "zoekt", Op: "search", Ms: time.Since(t0).Milliseconds(), OK: err == nil, Detail: "find route"}
+	if err != nil {
+		ev.Error = firstLine(err.Error())
+	}
+	c.record(ev)
+	if err != nil {
+		// A missing index is a failure, never an empty result: the shards were
+		// never searched, so there is nothing to be absent from.
+		return "", nil, fail("find: %v (shards missing? run `tk index %s`)", err, proj)
+	}
+	body := ""
+	if len(res.Matches) > 0 {
+		body = mcp.RenderMatches(res.Matches, false)
+	}
+	text := note + findTextScope(res, p.ZoektHead) + body
+	return cbmexec.Truncate(text, c.budget("")), map[string]any{
+		"route":              "zoekt",
+		"backend":            "zoekt",
+		"project":            proj,
+		"query":              q,
+		"zoekt_head":         p.ZoektHead,
+		"worktree_modified":  mod,
+		"worktree_untracked": untracked,
+		"matches_found":      res.Total,
+		"matches_returned":   len(res.Matches),
+		"files_matched":      res.Files,
+		"truncated":          res.HasMore,
+	}, nil
+}
 
 // requireProject resolves the project a project-resolving command runs against,
 // or fails naming every route that exists for it.
@@ -183,11 +416,12 @@ func cmdFind(g *Globals) *cobra.Command {
 	var sel bool
 	c := &cobra.Command{
 		Use:     "find --query <query> [--project <name>]",
-		Short:   "Deterministic router: regex→grep, NL→semantic, ident→graph",
+		Short:   "Deterministic router: single-token→own index, ident→graph",
 		Aliases: []string{"kg_find"},
 		Example: `  tk find --query ProcessOrder --project demo
   tk find --query "retry.*backoff" --project demo --limit 20
-  tk find --query Handler --project demo --label Function`,
+  tk find --query Handler --project demo --label Function
+  tk find --query internal/cli/query.go --project demo`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, err := load(*g)
@@ -199,6 +433,19 @@ func cmdFind(g *Globals) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// The text route is answered in one of two places, and which one is
+			// decided before needCBM: a pattern tk's own index answers with the
+			// engine's meaning must not require an engine it never calls. A phrase
+			// or an operator-shaped pattern stays on the engine, which is where its
+			// meaning comes from. See zoektTextQuery.
+			if metaChars.MatchString(q) || strings.Contains(q, "/") {
+				if label != "" {
+					return fail("--label needs a graph route (identifier or multi-word query), not a text pattern")
+				}
+				if zq, ok := zoektTextQuery(q); ok {
+					return ctx.findText(cmd, proj, zq, limit)
+				}
+			}
 			if _, _, err := ctx.needCBM(cmd.Context()); err != nil {
 				return err
 			}
@@ -206,9 +453,6 @@ func cmdFind(g *Globals) *cobra.Command {
 			var payload map[string]any
 			switch {
 			case metaChars.MatchString(q) || strings.Contains(q, "/"):
-				if label != "" {
-					return fail("--label needs a graph route (identifier or multi-word query), not a text pattern")
-				}
 				tool, payload = "search_code", map[string]any{"pattern": q, "project": proj, "limit": limit}
 			case strings.Contains(strings.TrimSpace(q), " ") && len(strings.Fields(q)) > 2:
 				tool, payload = "search_graph", map[string]any{"semantic_query": keywords(q), "project": proj, "limit": limit}

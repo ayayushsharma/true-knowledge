@@ -2,7 +2,7 @@
 .TH "true-knowledge" "1" "Sep 2026" "true-knowledge" "tk (true-knowledge)"
 
 .SH NAME
-tk-find - Deterministic router: regex→grep, NL→semantic, ident→graph
+tk-find - Deterministic router: single-token→own index, ident→graph
 
 
 .SH SYNOPSIS
@@ -10,7 +10,7 @@ tk-find - Deterministic router: regex→grep, NL→semantic, ident→graph
 
 
 .SH DESCRIPTION
-Deterministic router: regex→grep, NL→semantic, ident→graph
+Deterministic router: single-token→own index, ident→graph
 
 
 .SH OPTIONS
@@ -64,6 +64,7 @@ Deterministic router: regex→grep, NL→semantic, ident→graph
   tk find --query ProcessOrder --project demo
   tk find --query "retry.*backoff" --project demo --limit 20
   tk find --query Handler --project demo --label Function
+  tk find --query internal/cli/query.go --project demo
 .EE
 
 

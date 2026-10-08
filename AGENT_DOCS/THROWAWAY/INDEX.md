@@ -20,6 +20,9 @@ must verify, `dead-end` do not walk again.
 | What do tk reads really cost, and can a nudge reach the model without an extra turn? | `2026-10-03-measured-latency-and-pi-probe-facts.md` | measured; 2.0s warm spawn vs ~15ms socket, empty `search_graph` 9.4s, in-band channel exists |
 | Which in-loop tk calls fit under 100ms, and what do the gates and `/` commands look like? | `2026-10-03-latency-budget-and-operator-surface.md` | measured; 10 of 12 tools 14–30ms over the socket, `detect_changes` 591ms and `find`'s regex route 151ms are the two that break the target |
 | Is the pi extension buildable, and what does it do in an unregistered directory? | `2026-10-03-tk-pi-prototype.md` | planned; five-state capability probe, memory needs no registration or CBM, ledger works for unregistered names, `source_search all_projects` is the cross-repo path |
+| What does it take to put `find` and `explain` on the MCP surface, and what breaks in the payload contract? | `2026-10-03-compounds-over-mcp.md` | planned; CLI already composes both, MCP has neither, engine cost already ~30ms so the win is round trips and tokens, not latency |
+| Can a client learn which registered project owns its cwd, with one engine-free call? | `2026-10-03-list-projects-carries-path-and-state.md` | planned; `path`/`state`/`cwd_project` added to `list_projects`, reports the scope and never defaults it |
+| Where does an MCP server put always-on prose now, and how far behind is tk's protocol version? | `2026-10-03-mcp-instructions-and-protocol-ladder.md` | measured; `initialize` is removed in `2026-07-28` and `instructions` moved to `server/discover`, tk speaks `2025-06-18`, pi offers `2025-11-25` |
 
 ## The one-line version
 

@@ -3,7 +3,7 @@ id: 03-commands
 title: CLI surface — every verb, flag, alias
 status: authoritative
 date: 2026-10-03
-supersedes: [AGENT_DOCS/history/DECISIONS/2026-10-03-a-migration-that-migrated-nothing-failed.md, AGENT_DOCS/history/DECISIONS/2026-10-03-one-meaning-per-key.md, AGENT_DOCS/history/DECISIONS/2026-10-03-a-refused-daemon-is-a-failed-command.md, AGENT_DOCS/history/DECISIONS/2026-10-02-stderr-is-the-diagnostic-channel.md, AGENT_DOCS/history/DECISIONS/2026-10-02-picker-search-is-fuzzy-and-case-insensitive.md, AGENT_DOCS/history/DECISIONS/2026-10-02-project-routing-is-always-explicit.md, AGENT_DOCS/history/DECISIONS/2026-10-02-cross-repo-fleet-text-search.md, AGENT_DOCS/history/compatible-implementation-spec.md §8, AGENT_DOCS/history/DECISIONS/2026-09-28-failed-install-is-a-failed-command.md, AGENT_DOCS/history/DECISIONS/2026-09-28-delegate-backend-install-to-vendor.md, AGENT_DOCS/history/compatible-implementation-spec.md §8.4, AGENT_DOCS/history/DECISIONS/2026-09-25-flag-only-query-forms.md, AGENT_DOCS/history/DECISIONS/2026-09-26-select-flag-forces-project-picker.md, AGENT_DOCS/history/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
+supersedes: [AGENT_DOCS/history/DECISIONS/2026-10-03-find-answers-a-single-token-pattern-from-tk-own-index.md, AGENT_DOCS/history/DECISIONS/2026-10-03-a-migration-that-migrated-nothing-failed.md, AGENT_DOCS/history/DECISIONS/2026-10-03-one-meaning-per-key.md, AGENT_DOCS/history/DECISIONS/2026-10-03-a-refused-daemon-is-a-failed-command.md, AGENT_DOCS/history/DECISIONS/2026-10-02-stderr-is-the-diagnostic-channel.md, AGENT_DOCS/history/DECISIONS/2026-10-02-picker-search-is-fuzzy-and-case-insensitive.md, AGENT_DOCS/history/DECISIONS/2026-10-02-project-routing-is-always-explicit.md, AGENT_DOCS/history/DECISIONS/2026-10-02-cross-repo-fleet-text-search.md, AGENT_DOCS/history/compatible-implementation-spec.md §8, AGENT_DOCS/history/DECISIONS/2026-09-28-failed-install-is-a-failed-command.md, AGENT_DOCS/history/DECISIONS/2026-09-28-delegate-backend-install-to-vendor.md, AGENT_DOCS/history/compatible-implementation-spec.md §8.4, AGENT_DOCS/history/DECISIONS/2026-09-25-flag-only-query-forms.md, AGENT_DOCS/history/DECISIONS/2026-09-26-select-flag-forces-project-picker.md, AGENT_DOCS/history/DECISIONS/2026-09-26-trace-verb-kg-trace-alias.md, AGENT_DOCS/history/DECISIONS/2026-09-23-mvp2-envelope-profiles-facade-validate.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
 superseded-by: null
 ---
 
@@ -103,12 +103,16 @@ register command; `source-search` also names `--all-projects`.
 `search` never shipped: the one spec verb in this family with no facade to alias.
 `kg_arch` and `kg_query` stay legacy RPC names only, since `arch` and `query` are
 first-class verbs.
-
 ### Routing and validation rules
 
 * `find` routes on the query shape: a regex goes to grep, an identifier to the
-  graph, a natural-language phrase to semantic search. `--label` filters graph
-  routes only.
+  graph, a natural-language phrase to semantic search; `--label` filters graph
+  routes only. The text route takes a single-token pattern — regexes included —
+  from tk's own Zoekt index with no engine process at all, and says so in `route`
+  and in a `[find: …]` scope line. Every other text query stays on the engine:
+  phrases, which the index would AND per file instead of reading as one line,
+  and four shapes measured to answer differently (`\z`, `\A`, `(?s)`, any `(?i)`
+  spelling). The split is by capability, not preference. `AGENT_DOCS/05-INDEXING.md`. `AGENT_DOCS/05-INDEXING.md`.
 * Local validation runs **before** the CBM gate. A bad `--direction`, `--depth`,
   or `--regex` is a hard `[tk]` error, never a silently empty traversal, and
   `--regex` fails at compile time, before any spawn.
@@ -121,7 +125,7 @@ first-class verbs.
   near-miss is reported as a near-miss, not as a hit. CLI and MCP share one
   matcher over `QualifiedNames`, never a substring test over rendered text.
 * `grep` is CBM text search. `source-search` is Zoekt. They never substitute for
-  each other under one name.
+  each other under one name, and `find`'s index route names itself.
 * `--select` without a reachable picker (non-TTY, `--json`, `ui.picker` off) is a
   hard error naming `--project`. A reachable one filters as you type, fuzzily.
 
@@ -157,21 +161,18 @@ completes `pi,opencode,claude,codex`; `--tool-profile` completes
 `0` on success, including a `PARTIAL`-style degraded render; `1` on error and on
 MCP cancellation. `tk mcp` deliberately does not propagate the cancellation `1` to
 the client. A version that cannot be resolved fails loudly, never a silent
-fallback.
-
-A mutating command that did not do its work is an error; a degraded render is the
-one exception. `tk install` therefore exits `1` when any backend failed, after
-printing its table: the table is the diagnosis, the exit code is the verdict.
-`tk setup` is the deliberate opposite — a missing backend is one `tk install`
-away and must never block an agent, so it reports the failure and exits `0`.
+fallback. A mutating command that did not do its work is an error; a degraded
+render is the one exception. `tk install` therefore exits `1` when any backend
+failed, after printing its table: the table is the diagnosis, the exit code is
+the verdict. `tk setup` is the deliberate opposite — a missing backend is one
+`tk install` away and must never block an agent, so it reports the failure and
+exits `0`.
 
 ## Reading an install failure
 
 tk writes every line of an install failure itself, so the `FAILED` line always
 names the cause. The exit status is the verdict; the line is the diagnosis. Eight
-numbered stages go to stderr first, so the trace says where it stopped.
-
-```
+numbered stages go to stderr first, so the trace says where it stopped.```
 cbm      FAILED: the CBM daemon has live sessions and refused to stop; tk did not replace the binary it holds.
   daemon: refusing to stop; committed clients: 4242 5150
   Close those sessions, then re-run `tk install` — tk cannot override the refusal, and swapping past it would leave a binary the daemon refuses to admit.
@@ -180,8 +181,8 @@ cbm      FAILED: the CBM daemon has live sessions and refused to stop; tk did no
 The refusal case is the one that matters. tk stops the daemon before it replaces
 a binary, and a CBM daemon with committed clients refuses to stop. tk surfaces
 the committed pids because those pids are the entire fix, and offers no force: a
-binary swapped under that daemon would be refused admission by the daemon's own
-build-identity gate, so every later command would fail. Nothing is downloaded and
+binary swapped under that daemon would be refused admission by its own
+build-identity gate, so every later command would fail. Nothing is downloaded,
 nothing is written.
 
 Ordinary causes name the manifest or the candidate:
@@ -196,5 +197,4 @@ A checksum is verified before the archive is opened, so a mismatch means nothing
 was written. A candidate that verifies but does not report the pin fails the same
 way, naming the version it did report. In both cases the previous binary is
 untouched, and a swap that fails after staging rolls back. `TMPDIR` points at a
-private dir inside the cache for the install, so the ~340 MB does not land on a
-small system tmpfs.
+private dir inside the cache, so the ~340 MB never lands on a small system tmpfs.

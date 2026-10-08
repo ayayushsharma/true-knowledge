@@ -98,18 +98,23 @@ func (c *Ctx) ensureZoektAndTouch(ctx context.Context, name, repoPath, mode stri
 	return zhead, nil
 }
 
-// zoektStaleNote returns a leading "[source-search: ...]" annotation when
+// zoektStaleNote returns a leading "[<label>: ...]" annotation when
 // the served shards do not cover the live tree, plus worktree change counts.
 // Git-only: committed drift (covered HEAD != live HEAD) and uncommitted
 // drift (modified/untracked counts) both annotate but never block. "" = the
 // index is as fresh as the worktree allows.
+//
+// label is the caller's own verb, not a constant: a note reading
+// "[source-search: ...]" above a `tk find` answer names a command the caller
+// never ran, which is worse than no note when someone is working out which
+// index answered.
 //
 // countWorktree is what makes the fleet cheaper: it runs `git status` over
 // every file in the worktree (measured 3ms small, ~68ms at 37k files — it
 // scales with repo size), so a fleet passes false and keeps only the committed
 // drift check. Per-project worktree counts are the least load-bearing fact in a
 // scope annotation, and the fleet already reports per-project freshness.
-func zoektStaleNote(p store.Project, countWorktree bool) (note string, modified, untracked int) {
+func zoektStaleNote(p store.Project, countWorktree bool, label string) (note string, modified, untracked int) {
 	head := gitx.Head(p.Path)
 	if head == "" {
 		return "", 0, 0
@@ -127,7 +132,7 @@ func zoektStaleNote(p store.Project, countWorktree bool) (note string, modified,
 	if len(parts) == 0 {
 		return "", 0, 0
 	}
-	return "[source-search: " + strings.Join(parts, "; ") + "]\n", modified, untracked
+	return "[" + label + ": " + strings.Join(parts, "; ") + "]\n", modified, untracked
 }
 
 // resolveSourceScope resolves what a source-search invocation covers: one
@@ -202,7 +207,7 @@ func cmdSourceSearch(g *Globals) *cobra.Command {
 			// Worktree drift (uncommitted edits are invisible to the index):
 			// counts annotate results; git-only, never blocks.
 			p = ctx.Reg[proj]
-			note, modCount, untrackedCount := zoektStaleNote(p, true)
+			note, modCount, untrackedCount := zoektStaleNote(p, true, "source-search")
 			t0 := time.Now()
 			text, err := mcp.QueryZoektLive(cmd.Context(), ctx.Paths.ZoektShards(proj), p.Path, pat, files, limit)
 			ev := trace.Event{Backend: "zoekt", Op: "search", Ms: time.Since(t0).Milliseconds(), OK: err == nil}
@@ -252,7 +257,7 @@ func runSourceSearchFleet(cmd *cobra.Command, ctx *Ctx, pat, files string, limit
 			notes = append(notes, fmt.Sprintf("[source-search: %s: index refresh failed: %s]\n", name, firstLine(err.Error())))
 			continue
 		}
-		note, _, _ := zoektStaleNote(ctx.Reg[name], false)
+		note, _, _ := zoektStaleNote(ctx.Reg[name], false, "source-search")
 		if note != "" {
 			notes = append(notes, note)
 		}

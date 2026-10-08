@@ -287,6 +287,63 @@ check status 0 $TK_BIN status
 check status-json 0 $TK_BIN status --json
 check find 0 $TK_BIN find --query Demo --project demo
 check find-label 0 $TK_BIN find --query Demo --project demo --label Function
+# find's text route has two backends and the split is load-bearing. Regex is not
+# a reason to reach for the engine: the local index answers a single-token regexp
+# with the engine's meaning, proven against RE2 in internal/zoekttext, so a
+# regex-shaped find must cost ZERO engine processes. A phrase must still cost
+# exactly one, because zoekt ANDs its terms per file rather than reading them as
+# a phrase on one line. The spawn counter proves the routing rather than trusting
+# it.
+SPAWNS="$T/find-spawns"
+: > "$SPAWNS"
+TK_FAKE_SPAWNS="$SPAWNS"; export TK_FAKE_SPAWNS
+if out=$($TK_BIN find --query 'Demo\(\)' --project demo 2>&1); then
+  n=$(wc -l < "$SPAWNS" | tr -d ' ')
+  case "$out$n" in
+    *0*) pass=$((pass+1)); printf 'ok   find-regex-uses-no-engine\n';;
+    *) fail=$((fail+1)); printf 'FAIL find-regex-uses-no-engine (spawns=%s)\n  %s\n' "$n" "$out";;
+  esac
+else
+  fail=$((fail+1)); printf 'FAIL find-regex-uses-no-engine\n  %s\n' "$out"
+fi
+# A file name, which the old metacharacter rule refused because of its dot. It
+# matches a name and no content, so the answer is the name and nothing invents a
+# line number for it.
+: > "$SPAWNS"
+if out=$($TK_BIN find --query 'main.go' --project demo 2>&1); then
+  n=$(wc -l < "$SPAWNS" | tr -d ' ')
+  case "$out$n" in
+    *main.go*0*) pass=$((pass+1)); printf 'ok   find-filename-uses-no-engine\n';;
+    *) fail=$((fail+1)); printf 'FAIL find-filename-uses-no-engine (spawns=%s)\n  %s\n' "$n" "$out";;
+  esac
+else
+  fail=$((fail+1)); printf 'FAIL find-filename-uses-no-engine\n  %s\n' "$out"
+fi
+# A fold flag is a single token the index must still refuse: `(?i)` searches
+# the uppercased text sensitively, so answering locally would lose real hits.
+# One engine, exactly.
+: > "$SPAWNS"
+if out=$($TK_BIN find --query '(?i)demo' --project demo 2>&1); then
+  n=$(wc -l < "$SPAWNS" | tr -d ' ')
+  case "$n" in
+    0) fail=$((fail+1)); printf 'FAIL find-fold-flag-stays-on-the-engine (answered locally, spawns=0)\n  %s\n' "$out";;
+    *) pass=$((pass+1)); printf 'ok   find-fold-flag-stays-on-the-engine\n';;
+  esac
+else
+  fail=$((fail+1)); printf 'FAIL find-fold-flag-stays-on-the-engine\n  %s\n' "$out"
+fi
+# Two tokens are a phrase the index must not answer: one engine, exactly.
+: > "$SPAWNS"
+if out=$($TK_BIN find --query 'Demo func' --project demo 2>&1); then
+  n=$(wc -l < "$SPAWNS" | tr -d ' ')
+  case "$n" in
+    1) pass=$((pass+1)); printf 'ok   find-phrase-stays-on-the-engine\n';;
+    *) fail=$((fail+1)); printf 'FAIL find-phrase-stays-on-the-engine (spawns=%s)\n  %s\n' "$n" "$out";;
+  esac
+else
+  fail=$((fail+1)); printf 'FAIL find-phrase-stays-on-the-engine\n  %s\n' "$out"
+fi
+unset TK_FAKE_SPAWNS
 check explain 0 $TK_BIN explain --symbol Demo --project demo
 check trace 0 $TK_BIN trace --symbol Demo --project demo
 check trace-outbound 0 $TK_BIN trace --symbol Demo --project demo --direction outbound --depth 3

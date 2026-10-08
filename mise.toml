@@ -19,7 +19,11 @@ run = "TK_E2E_REAL=1 TK_E2E_REPO=\"${REPO:?set REPO=/path/to/repo}\" go test -ta
 
 [tasks.e2e]
 description = "Fake-backend CLI + MCP suite, isolated TK_HOME, no network"
-run = "bash tests/e2e_mvp1.sh"
+# The suite runs ./tk by default, so it must be the binary this tree just
+# built. Without the dependency it silently tests whatever ./tk happened to be
+# left as, and a stale one passes while the code under test is different.
+depends = ["build"]
+run = "TK_BIN=\"${TK_BIN:-$PWD/dist/tk}\" bash tests/e2e_mvp1.sh"
 
 [tasks.bench]
 description = "Per-layer latency breakdown against a real cbm and a registered project (opt-in)"

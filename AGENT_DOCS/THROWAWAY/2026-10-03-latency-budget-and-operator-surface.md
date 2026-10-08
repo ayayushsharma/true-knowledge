@@ -28,7 +28,7 @@ served call.
 | `explain` (compound) | **28.3ms** | 2 | green |
 | `find` empty result | **28.9ms** | 2 | green |
 | `find` NL→semantic | **30.4ms** | 2 | green |
-| `search_code`, via `find`'s regex route | **116ms** | 1 | amber |
+| `search_code`, via `find`'s regex route | **116ms** | 1 | amber — historical, and still where regexes go by decision |
 | `detect_changes` | **591ms** | 1 | **red** |
 
 **The target is not engine-bound.** One socket round trip is 10–16ms, so a
@@ -48,15 +48,25 @@ cannot make this cheaper. Three options, and the design takes all three:
 * available when asked for, in `scout` and `analysis`, with its cost in the tool
   description so the model can choose to spend it.
 
-**2. `tk find`'s regex route calls the engine's `search_code`, not zoekt.**
-`tk --verbose find --query "retry.*backoff"` prints
-`resident: search_code -: answered in 116ms`, while the same pattern through
-`tk grep --pattern` — trigram zoekt, in-process — costs 28ms across 2 round
-trips. So the route labelled "regex→grep" spends 151ms to do something the
-in-process index does in 28ms. Preferring zoekt for regex-shaped queries is a
-small, local fix worth ~90ms on the single most-used compound. `04-MCP.md`
-describes the routing as regex→grep, so the code and the doc disagree about
-where that route goes.
+**2. `tk find`'s regex route calls the engine's `search_code`, not zoekt.** —
+**RESOLVED 2026-10-03, not by the fix this note proposed.**
+`tk --verbose find --query "retry.*backoff"` printed
+`resident: search_code -: answered in 116ms` against 28ms for the same pattern
+through zoekt, and `04-MCP.md` described the route as regex→grep. The proposed
+fix — prefer zoekt for regex-shaped queries — was measured before shipping and
+fails correctness: zoekt's regexp is a trigram *filter*, so a pattern it cannot
+represent returns a well-formed empty answer (`retry\.*backoff` → 0 matches in a
+file containing that exact text). The shipped rule sends only a one-token
+literal with no metacharacters to the index and leaves every regex on the
+engine, naming the route in the answer:
+`AGENT_DOCS/history/DECISIONS/2026-10-03-find-answers-a-one-token-literal-from-tk-own-index.md`.
+The 116ms and 151ms numbers here are historical and were not re-measured; the
+engine download timed out twice, so no fresh comparison exists.
+CORRECTION 2026-10-03 (later same day): the filter claim was wrong — re-probe
+showed RE2 agreement hit for hit; only `\z`, `\A`, `(?s)`, and any `(?i)`
+spelling diverge. Rule
+widened to single-token patterns including regexes:
+`AGENT_DOCS/history/DECISIONS/2026-10-03-find-answers-a-single-token-pattern-from-tk-own-index.md`.
 
 ## The constraint nobody costed: `tk mcp` dispatch is strictly serial
 

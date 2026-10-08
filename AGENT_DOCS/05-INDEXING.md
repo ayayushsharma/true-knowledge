@@ -2,8 +2,8 @@
 id: 05-indexing
 title: Indexing — modes, discovery, watcher, Zoekt text index, freshness
 status: authoritative
-date: 2026-10-02
-supersedes: [AGENT_DOCS/history/DECISIONS/2026-10-02-project-routing-is-always-explicit.md, AGENT_DOCS/history/DECISIONS/2026-10-02-cross-repo-fleet-text-search.md, AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md, AGENT_DOCS/history/compatible-implementation-spec.md §7, AGENT_DOCS/history/INDEXING.md, AGENT_DOCS/history/DECISIONS/2026-09-23-explicit-source-search.md, AGENT_DOCS/history/DECISIONS/2026-09-23-zoekt-library-not-backend.md, AGENT_DOCS/history/DECISIONS/2026-09-24-zoekt-staleness.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-25-cross-repo-contract-verified.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
+date: 2026-10-03
+supersedes: [AGENT_DOCS/history/DECISIONS/2026-10-03-find-answers-a-single-token-pattern-from-tk-own-index.md, AGENT_DOCS/history/DECISIONS/2026-10-02-project-routing-is-always-explicit.md, AGENT_DOCS/history/DECISIONS/2026-10-02-cross-repo-fleet-text-search.md, AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md, AGENT_DOCS/history/compatible-implementation-spec.md §7, AGENT_DOCS/history/INDEXING.md, AGENT_DOCS/history/DECISIONS/2026-09-23-explicit-source-search.md, AGENT_DOCS/history/DECISIONS/2026-09-23-zoekt-library-not-backend.md, AGENT_DOCS/history/DECISIONS/2026-09-24-zoekt-staleness.md, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-25-cross-repo-contract-verified.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
 superseded-by: null
 ---
 
@@ -18,11 +18,10 @@ superseded-by: null
 | `full` (CBM default) | all, safety skips only | on | `tk index --full` only, CI nightly |
 | `cross-repo-intelligence` | no extraction | protocol edges only | per-source pass, see below |
 
-There is no `slow` mode. `full` is the slow one.
-
 Perf anchors: an average repository takes milliseconds; Django about 6 seconds
-at 49k nodes; the kernel takes about 3 minutes at `full` and 1m12s at `fast`.
-Queries: Cypher under 1 ms, search and trace under 10 ms.
+at 49k nodes; the kernel about 3 minutes at `full` and 1m12s at `fast`. Queries:
+Cypher under 1 ms, search and trace under 10 ms. There is no `slow` mode;
+`full` is the slow one.
 
 ## Discovery order (fixed, engine-side)
 
@@ -31,19 +30,24 @@ Built-in skip, where `.git` and `node_modules` are non-negotiable → root
 which can un-skip a layer-1 path but never the core → global
 `core.excludesFile`. Then suffix filters, a 512 MiB single-file cap, and the
 optional `index_max_files` / `index_max_source_mb`. Exceeding a cap fails the
-whole index attempt and preserves the serving database — never a partial
-publish. Symlinks are always skipped.
+whole attempt and preserves the serving database — never a partial publish.
+Symlinks are always skipped.
 
 ## The Zoekt text index
 
 Explicit, never a silent fallback. `tk source-search` is text and only text;
-`tk find` and `tk grep` are CBM. One name never silently means the other
-backend. A missing index produces a hard error naming the fix: `run tk index`
-for absent shards, `run tk setup` when Zoekt is unavailable.
+`tk grep` is CBM. `tk find` routes on query shape and names the backend that
+answered — a single-token pattern comes from tk's own Zoekt index, regexes
+included, and its `route: zoekt` field plus a `[find: …]` scope line say so. No
+name ever silently means the other backend. A missing index produces a hard
+error naming the fix: `run tk index` for absent shards, `run tk setup` when
+Zoekt is unavailable.
 
 Served in-process by `internal/zoekttext` — no server, no ctags, no
 `zoekt-webserver`, no per-platform sidecar. Shards live at
-`<cache>/zoekt/<project>/`; `zoekt_head` is tracked in `tk.json`.
+`<cache>/zoekt/<project>/`, `zoekt_head` is tracked in `tk.json`, and
+`ZoektQuery` in `internal/mcp` is the one search entry point, so no two faces
+can drift in what they search.
 
 | Entry point | Use |
 |---|---|
@@ -55,8 +59,14 @@ Served in-process by `internal/zoekttext` — no server, no ctags, no
 Callers must not reach `gitindex` or `index` directly. Those four functions are
 the only seam.
 
+**The index answers one token, regexes included.** A single-token pattern is
+answered with the engine's meaning — `internal/zoekttext` proves it hit for hit
+against RE2, anchors included. Four shapes answer differently (`\z`, `\A`,
+`(?s)`, any `(?i)` spelling) and stay on the engine, with phrases and operator
+prefixes, which are different questions. Gate: `zoektTextQuery`, ADR `2026-10-03-find-answers-a-single-token-pattern-from-tk-own-index.md`.
+
 Mandatory safety gates, re-checked on every pin bump: an import side-effect
-audit of `query`, `index`, `gitindex`, `shards`, and the root `zoekt` package,
+audit of `query`, `index`, `gitindex`, `shards` and the root `zoekt` package,
 `recover()` middleware at the MCP handler boundary and index paths, and size
 caps before every index call.
 
@@ -66,40 +76,36 @@ Three silent-lie modes were closed: commit staleness, a dirty worktree reported
 as fresh, and shard bytes that no longer match disk.
 
 * Auto-refresh before answering: reindex when the covered `zoekt_head` differs
-  from `git HEAD`. A clean tree costs about 1 ms; a real change costs about 0.7 s
-  as a delta shard; a structural layout change falls back to a normal build of
-  roughly 19 s.
+  from `git HEAD`. A clean tree costs about 1 ms, a real change about 0.7 s as
+  a delta shard, a structural layout change a ~19 s normal build.
 * Builds are `IsDelta: true`, so a change appends a small delta instead of
-  rewriting everything. Zoekt falls back to a normal build when a delta cannot
-  apply, and existing normal-build shards keep working unmodified. Shard GC is
-  CBM's job, not tk's.
+  rewriting everything; zoekt falls back to a normal build when a delta cannot
+  apply, existing normal-build shards keep working, and shard GC is CBM's job.
 * A dirty worktree is annotated in-band, never force-rebuilt:
-  `[source-search: N modified, N untracked in worktree not indexed]`.
-  Rebuilding on save would cost 30–60 s per keystroke.
-* `Head`, `ZoektHead`, and `Fingerprint` update only when the covered HEAD
-  actually changes, never on worktree dirt alone.
+  `[source-search: N modified, N untracked in worktree not indexed]` — a rebuild
+  on save would cost 30–60 s per keystroke. `Head`, `ZoektHead`, and
+  `Fingerprint` move only when the covered HEAD changes, never on dirt alone.
 * `gitx.Dirty` caches counts for about 2 s, process-local, and never caches
   errors. `git rev-parse HEAD` is never cached, so commit visibility stays
-  immediate. An edit can therefore lag the annotation by up to 2 s, while the
-  live byte slice is always current.
-* A failed refresh still searches what it has and prepends the failure note.
-  The MCP tool never errors on refresh trouble. `EnsureIndex`, `Staleness`, and
-  `ProjectRoot` are nil-safe hooks, so a bare `Server{}` keeps static-shard
-  behavior.
+  immediate: an edit can lag the annotation by up to 2 s, while the live byte
+  slice is always current.
+* A failed refresh still searches what it has and prepends the failure note; the
+  MCP tool never errors on refresh trouble. `EnsureIndex`, `Staleness` and
+  `ProjectRoot` are nil-safe hooks, so a bare `Server{}` keeps static shards.
 
 ### Plain-directory filters
 
-`IndexDir` walks the whole tree minus an always-skipped core set:
-`.git`, `.hg`, `.svn`, `node_modules`, `vendor`, `venv`, `.venv`,
-`__pycache__`, `.tox`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.next`,
-`.nuxt`. These are unconditional. Lockfiles are deliberately not skipped: they
-are small, exactly pinned, and useful search targets.
+`IndexDir` walks the whole tree minus an always-skipped core set: `.git`, `.hg`,
+`.svn`, `node_modules`, `vendor`, `venv`, `.venv`, `__pycache__`, `.tox`,
+`.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.next`, `.nuxt`. These are
+unconditional. Lockfiles are deliberately not skipped: small, exactly pinned,
+useful search targets.
 
 On top of the core set, the optional `<config>/ignore` applies a gitignore-lite
-pattern list to plain directories only: `#` for comments, a leading `/` anchors
-to the project root, a trailing `/` targets directory subtrees, and any other
-line matches one component at any depth. No glob magic. A missing file means no
-custom filters. Git-repository indexes ignore this file entirely.
+pattern list to plain directories only: `#` comments, a leading `/` anchors to
+the project root, a trailing `/` targets subtrees, any other line matches one
+component at any depth. No glob magic, no file means no custom filters, and
+git-repository indexes ignore this file entirely.
 
 ### What the text index does *not* honor
 
@@ -108,93 +114,84 @@ This is a standing, documented divergence, not an oversight.
 * Only `.sourcegraph/ignore` is an explicit ignore file for git-repository
   indexes. `.gitignore` applies only implicitly, because ignored files are
   untracked and therefore absent from the commit tree that `gitindex` walks. A
-  **committed** `node_modules/`, `dist/`, or `*.min.js` is skipped by CBM and
-  still indexed by tk.
-* Plain directories get neither `.gitignore` nor `.cbmignore`. `<config>/ignore`
-  is the only knob.
-* CBM's 512 MiB cap, `index_max_*`, and suffix filters do not apply to the text
-  index.
-* What tk does enforce itself, because these are correctness rather than policy:
-  non-regular files and symlinks are never read — a FIFO would block the walk
-  forever, and a symlink would be indexed under its target's bytes — and files
-  above Zoekt's `SizeMax` of 2 MiB are recorded as `SkipReasonTooLarge` without
-  ever being buffered, so an oversized file costs no RAM.
+  **committed** `node_modules/` or `*.min.js` is skipped by CBM, still indexed
+  by tk. Plain directories get neither `.gitignore` nor `.cbmignore`;
+  `<config>/ignore` is the only knob.
+* CBM's 512 MiB cap, `index_max_*`, and suffix filters do not apply here.
+* tk enforces two things itself, because they are correctness rather than
+  policy: non-regular files and symlinks are never read — a FIFO would block
+  the walk forever, a symlink would be indexed under its target's bytes — and
+  files above Zoekt's 2 MiB `SizeMax` are recorded as `SkipReasonTooLarge`
+  without being buffered, so an oversized file costs no RAM.
 
-Closing this divergence would mean reimplementing the engine's filter chain
-inside tk, which `02-BOUNDARY.md` forbids. `TestIndexDirDoesNotReadGitignore`
-pins the current behavior, so a change here is deliberate and test-visible.
+Closing it would mean reimplementing the engine's filter chain inside tk, which
+`02-BOUNDARY.md` forbids; `TestIndexDirDoesNotReadGitignore` pins it.
 
 ## Fleet text search
 
-`tk source-search --all-projects` (MCP: `all_projects`) searches every
-registered project in name order, one zoekt searcher at a time. Scope is always
-explicit, and this is the only verb with a third route: omitting `--project` is
-an error naming `--project`, `--select`, and `--all-projects`.
+`tk source-search --all-projects` (MCP: `all_projects`) searches every registered
+project in name order, one zoekt searcher at a time. Scope is always explicit,
+and this is the only verb with a third route: omitting `--project` is an error
+naming `--project`, `--select`, and `--all-projects`.
 A zoekt directory searcher globs `<dir>/*.zoekt` — flat, non-recursive — while tk
 keeps shards at `<cache>/zoekt/<project>/`. A searcher opened on the cache root
-loads zero shards and answers empty with **no error**, which is why the fleet
-walks per-project directories instead.
+loads zero shards and answers empty with **no error**, which is why every
+multi-project search walks per-project directories.
 
 `--limit` is fleet-wide, not per project, and the untouched tail is named. Every
 result opens with a scope line: matches and files found, matches and files
 returned, and each withheld state named separately — truncated, skipped, not
-searched. Counts come from zoekt's per-shard `Stats`, so a truncated search still
+searched. Counts come from per-shard `Stats`, so a truncated search still
 reports true totals. Fleet hits are repo-prefixed and grouped per file.
-`AGENT_DOCS/history/DECISIONS/2026-10-02-cross-repo-fleet-text-search.md`.
 
 ## Cross-repo mode
 
 `cross-repo-intelligence` is an `index_repository` mode, not a separate tool,
-and it is per **source** project. `target_projects=["*"]` expands the target list
-only. An N-repository clique needs **N runs**, each with every member as source,
+and it is per **source** project: `target_projects=["*"]` expands the target list
+only. An N-repository clique needs **N runs** — each with every member as source,
 each after fresh bases, each wiping and rebuilding that source's `CROSS_*` edges
-bidirectionally. Preconditions are hard failures, not skips: the source must
-already be indexed and every named target must validate and exist. Upsert key
-`(source_id, target_id, type)`, so repeat runs converge.
-
-Edge types are protocol edges only: `CROSS_HTTP_CALLS`, `CROSS_ASYNC_CALLS`,
-`CROSS_CHANNEL`, `CROSS_GRPC_CALLS`, `CROSS_GRAPHQL_CALLS`, `CROSS_TRPC_CALLS`.
-Generic cross-repo function call edges do not exist yet — upstream issues #56
-and #398. Matcher holes are extractor-driven: an empty `Route.path` yields zero
-edges, which is the FastAPI #678 and Go Fiber #686 case.
+bidirectionally. Preconditions are hard failures, not skips: the source must be
+indexed, every named target must validate and exist. Upsert key
+`(source_id, target_id, type)`, so repeat runs converge. Edge types are protocol
+edges only: `CROSS_HTTP_CALLS`, `CROSS_ASYNC_CALLS`, `CROSS_CHANNEL`,
+`CROSS_GRPC_CALLS`, `CROSS_GRAPHQL_CALLS`, `CROSS_TRPC_CALLS` — generic cross-repo
+function-call edges do not exist yet (upstream #56, #398). Matcher holes are
+extractor-driven: an empty `Route.path` yields zero edges, the FastAPI #678 and
+Go Fiber #686 case.
 
 Fleet orchestration is parked indefinitely; see `08-BACKLOG.md`.
 
 ## The watcher
 
 Daemon-owned, which is why tk has none. `mtime+size` poll, 1 s on small trees up
-to 60 s on large ones, content-hash re-parse of changed files only, about 4×
-faster than a full re-parse, and non-blocking: it skips a cycle when a manual
-index is running. Knobs reach CBM through `tk config` then `cbm config`:
-`auto_index`, `auto_watch`, `watcher_enabled`, and CBM's `auto_index_limit`
-(50000). `watcher_enabled` is read once at daemon start, so flipping it needs
+to 60 s on large ones, content-hash re-parse of changed files only (~4× faster
+than a full re-parse), and non-blocking: it skips a cycle when a manual index is
+running. Knobs reach CBM through `tk config` then `cbm config`: `auto_index`,
+`auto_watch`, `watcher_enabled`, and CBM's `auto_index_limit` (50000).
+`watcher_enabled` is read once at daemon start, so flipping it needs
 `tk daemon stop` first.
 
 Two different files, and this section used to conflate them. **The store queries
-open is `<CBM_CACHE_DIR>/<project>.db`** — for tk, `<cache>/`, which is one root
-per tk home shared by every tk process under it. **`<repo>/.codebase-memory/` is
-a shareable export**, gitignored, that a teammate imports to skip a cold index;
-no query reads it, and tk must not watch or name it. An explicit index exports
-`Best (VACUUM INTO + zstd -9)`, the watcher exports `Fast (zstd -3)`. Commit
-deliberately on a release cadence, never on every save.
+open is `<CBM_CACHE_DIR>/<project>.db`** — for tk, `<cache>/`, one root per tk
+home shared by every tk process under it. **`<repo>/.codebase-memory/` is a
+shareable export**, gitignored, imported by a teammate to skip a cold index; no
+query reads it and tk must not watch or name it. An explicit index exports
+`Best (VACUUM INTO + zstd -9)`, the watcher `Fast (zstd -3)`. Commit on a release
+cadence, never on every save.
 
 ## The tk freshness contract
 
 `tk sync` means **both backends are fresh**. A git repository is clean when
-`HEAD == head && zoekt_head == HEAD`. A plain directory is clean when its
-fingerprint matches **and** `zoekt_head == "files"`. A project indexed before
-Zoekt existed is dirty and gets a text-index backfill on the next sync. No
-recorded state is ever reported clean while `source-search` would serve a stale
-index.
+`HEAD == head && zoekt_head == HEAD`; a plain directory when its fingerprint
+matches **and** `zoekt_head == "files"`. A project indexed before Zoekt existed
+is dirty and gets a text-index backfill on the next sync. No recorded state is
+ever reported clean while `source-search` would serve a stale index.
 
-Clean is a no-op. Dirty means the watcher handles it — and that is about
-**zoekt only**. `head`, `current`, and `fresh` are registry-versus-git
-comparisons, so they say nothing about whether the graph store covers a commit.
-The graph is refreshed by `tk index`, by the watcher, or by whoever indexed it,
-and tk verifies none of them; a non-empty answer carries no freshness signal at
-all. Follow `AGENT_DOCS/09-CHECKLIST.md` rule 4 before any negative claim.
-
-One thing that *is* guaranteed, by measurement: a long-lived CBM child
-re-resolves the store per call, so it serves the current graph after another
-process republishes. No tk-side invalidation exists or is needed.
-`AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md`.
+Clean is a no-op. Dirty means the watcher handles it — about **zoekt only**.
+`head`, `current`, and `fresh` are registry-versus-git comparisons, so they say
+nothing about whether the graph store covers a commit: the graph is refreshed by
+`tk index`, the watcher, or whoever indexed it, tk verifies none of them, and a
+non-empty answer carries no freshness signal. Follow `09-CHECKLIST.md` rule 4
+before any negative claim. One thing that *is* guaranteed, by measurement: a
+long-lived CBM child re-resolves the store per call, so it serves the current
+graph after another process republishes. No tk-side invalidation exists.

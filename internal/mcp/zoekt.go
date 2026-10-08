@@ -9,6 +9,19 @@ import (
 	"github.com/ayayushsharma/true-knowledge/internal/zoekttext"
 )
 
+// ZoektQuery runs one query against a project's shards and returns the raw
+// Result, so a caller can report what was searched as well as what matched:
+// Total and Files are zoekt's own Stats and stay true even when Matches is
+// bounded by limit. An empty root searches shard bytes without the live
+// reconcile. This is the single zoekt entry point; the render-only helpers
+// below are it plus rendering, so no two faces can drift in what they search.
+func ZoektQuery(ctx context.Context, shardsDir, root, query, files string, limit int) (zoekttext.Result, error) {
+	if root != "" {
+		return zoekttext.SearchLive(ctx, shardsDir, root, query, files, limit)
+	}
+	return zoekttext.Search(ctx, shardsDir, query, files, limit)
+}
+
 // QueryZoekt runs one trigram query against a project's shards and returns
 // rendered `file:line: text` output, bounded to limit matches (<=0 = all).
 // The library is always linked in — there is no absent-backend case; a
@@ -263,6 +276,15 @@ func writeMatch(b *strings.Builder, m zoekttext.Match, grouped bool) {
 	file := m.File
 	if grouped && m.Repo != "" {
 		file = m.Repo + ":" + m.File
+	}
+	// A pattern that matches a file *name* rather than its content has no line,
+	// and zoekt says so with line 0. Printing `file:0:` would invent a location
+	// the index does not have, so a name match prints as the name — which is the
+	// whole answer, since the matched text is the file name.
+	if m.Line <= 0 {
+		b.WriteString(file)
+		b.WriteString("\n")
+		return
 	}
 	fmt.Fprintf(b, "%s:%d: %s\n", file, m.Line, strings.TrimRight(m.Text, "\n"))
 }

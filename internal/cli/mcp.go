@@ -73,7 +73,11 @@ func cmdMCP(g *Globals) *cobra.Command {
 				if !ok {
 					return ""
 				}
-				note, _, _ := zoektStaleNote(p, !fleet)
+				// Label stays "source-search" for the MCP face on purpose: it is the name
+				// the freshness contract is documented under (05-INDEXING.md) and
+				// the e2e suite asserts. Only a route with a genuinely different
+				// name — `find` — labels itself.
+				note, _, _ := zoektStaleNote(p, !fleet, "source-search")
 				return note
 			}
 			s.ProjectRoot = func(project string) string {

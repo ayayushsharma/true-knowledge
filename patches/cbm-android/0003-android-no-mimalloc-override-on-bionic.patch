@@ -1,0 +1,18 @@
+--- a/Makefile.cbm
++++ b/Makefile.cbm
+@@ -469,9 +483,15 @@ MIMALLOC_SRC = vendored/mimalloc/src/static.c
+ MIMALLOC_OVERRIDE_DEFINE :=
+ GLOBAL_OVERRIDE_DEFINE :=
+ ifneq ($(filter yes,$(IS_MINGW) $(IS_LINUX)),)
++# Android links bionic, not glibc: with the global override on, the C++
++# exit flush (ios_base::Init teardown) runs after mimalloc process teardown
++# and aborts via emutls into dead malloc (exit 134). A dev-only binary
++# prefers a clean exit over a faster allocator: bionic malloc on Android.
++ifeq ($(IS_ANDROID),no)
+ MIMALLOC_OVERRIDE_DEFINE := -DMI_MALLOC_OVERRIDE=1
+ GLOBAL_OVERRIDE_DEFINE := -DCBM_MEM_GLOBAL_OVERRIDE=1
+ endif
++endif
+ MIMALLOC_CFLAGS = -std=c11 -O2 -w \
+                   -Ivendored/mimalloc/include \
+                   -Ivendored/mimalloc/src \

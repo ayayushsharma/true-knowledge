@@ -1,0 +1,32 @@
+diff --git a/Makefile.cbm b/Makefile.cbm
+index 066d337..a5c370f 100644
+--- a/Makefile.cbm
++++ b/Makefile.cbm
+@@ -157,6 +157,11 @@ MIMALLOC_WRAP_FLAGS_POSIX :=
+ ifeq ($(IS_LINUX),yes)
+ MIMALLOC_WRAP_FLAGS_POSIX := $(foreach sym,$(MIMALLOC_WRAP_SYMS_POSIX),-Wl,--wrap=$(sym))
+ endif
++# Android runs the Linux kernel but links against bionic, not glibc/musl, and
++# uname -s reports Linux there — so IS_LINUX is also true on Android. Detect
++# the C library from the compiler instead, the same way IS_MINGW is derived
++# from $(CC) rather than uname. Termux clang predefines __ANDROID__.
++IS_ANDROID := $(shell echo | $(CC) -dM -E - 2>/dev/null | grep -q 'define __ANDROID__ ' && echo yes || echo no)
+ ifeq ($(IS_MINGW),yes)
+ # --no-insert-timestamp: the PE header otherwise carries the link wall clock, so
+ # two Windows builds of identical source are never byte-identical and every
+@@ -169,6 +174,15 @@ endif
+ ifeq ($(STATIC),1)
+ STATIC_FLAGS := -static
+ endif
++# Android links against bionic, which ships no static libc (no
++# crtbegin_static.o, no static -lc): STATIC=1 fails at link time with a
++# cryptic lld error, so refuse it here with the reason attached. Android
++# builds are always dynamic; omit STATIC=1.
++ifeq ($(IS_ANDROID),yes)
++ifeq ($(STATIC),1)
++$(error STATIC=1 cannot link on Android: bionic has no static libc; build dynamically by omitting STATIC=1)
++endif
++endif
+ 
+ # W^X: demand a non-executable stack on ELF. This is belt to the braces of the
+ # .note.GNU-stack annotation in vendored/nomic/code_vectors_blob.S — that note

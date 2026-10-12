@@ -2,8 +2,8 @@
 id: 09-checklist
 title: Operating rules and the PR gate for agents and humans
 status: authoritative
-date: 2026-10-02
-supersedes: [AGENT_DOCS/history/DECISIONS/2026-10-02-stderr-is-the-diagnostic-channel.md, AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md, AGENT_DOCS/history/DECISIONS/2026-09-29-measure-latency-not-daemon-routing.md, AGENTS.md, AGENT_DOCS/history/DECISIONS/2026-09-28-failed-install-is-a-failed-command.md, AGENT_DOCS/history/ROADMAP.md §Remaining-work backlog, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
+date: 2026-10-11
+supersedes: [AGENT_DOCS/history/DECISIONS/2026-10-11-android-dev-machine-not-a-target.md, AGENT_DOCS/history/DECISIONS/2026-10-02-stderr-is-the-diagnostic-channel.md, AGENT_DOCS/history/DECISIONS/2026-09-30-resident-warm-child-needs-no-freshness.md, AGENT_DOCS/history/DECISIONS/2026-09-29-measure-latency-not-daemon-routing.md, AGENTS.md, AGENT_DOCS/history/DECISIONS/2026-09-28-failed-install-is-a-failed-command.md, AGENT_DOCS/history/ROADMAP.md §Remaining-work backlog, AGENT_DOCS/history/DECISIONS/2026-09-25-comments-pass-fixes.md, AGENT_DOCS/history/DECISIONS/2026-09-27-comments-pass-2.md]
 superseded-by: null
 ---
 
@@ -97,6 +97,9 @@ superseded-by: null
       `mise run e2e-real REPO=<a real repository>` passes.
 * [ ] `go test ./internal/docs` passes: no forbidden pre-consolidation path, no
       untouched history file, no file over 200 lines.
+* [ ] `third_party/` stayed untracked and script-owned. Upstream source enters only
+      through `scripts/vendor-cbm-android.sh`, and patches live in
+      `patches/cbm-android/`, never as local edits nobody can re-apply.
 
 ## Things that are already decided — do not relitigate
 

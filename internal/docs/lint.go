@@ -158,7 +158,7 @@ func checkRefs(root string) []string {
 		}
 		if d.IsDir() {
 			rel, _ := filepath.Rel(root, path)
-			if rel == ".git" || rel == "dist" || rel == HistoryDir {
+			if rel == ".git" || rel == "dist" || rel == "third_party" || rel == HistoryDir {
 				return filepath.SkipDir
 			}
 			return nil

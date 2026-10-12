@@ -1,0 +1,48 @@
+diff --git a/src/foundation/compat_fs.c b/src/foundation/compat_fs.c
+index 71ab16b..30dbf93 100644
+--- a/src/foundation/compat_fs.c
++++ b/src/foundation/compat_fs.c
+@@ -1012,6 +1012,43 @@ bool cbm_mkdir_p_ex(const char *path, int mode, unsigned int policy) {
+     flags |= O_CLOEXEC;
+ #endif
+     int directory = open(path[0] == '/' ? "/" : ".", flags);
++#ifdef __ANDROID__
++    /* open("/", O_DIRECTORY) fails with EACCES under the app sandbox, so the
++     * fd walk cannot start for absolute paths. Fall back to a plain
++     * component-wise mkdir: ancestors are sandbox-protected (no other uid
++     * can swap a component), so the fd-walk symlink hardening buys nothing
++     * here. Skips "." and refuses ".." exactly like the walk below. */
++    if (directory < 0 && path[0] == '/') {
++        bool made = true;
++        char *cursor = tmp;
++        while (*cursor == '/') {
++            cursor++;
++        }
++        while (made && *cursor) {
++            char *separator = strchr(cursor, '/');
++            if (separator) {
++                *separator = '\0';
++            }
++            if (cursor[0] != '\0' && strcmp(cursor, ".") != 0) {
++                if (strcmp(cursor, "..") == 0) {
++                    made = false;
++                } else if (mkdir(tmp, (mode_t)mode) != 0 && errno != EEXIST) {
++                    made = false;
++                }
++            }
++            if (!separator) {
++                break;
++            }
++            *separator = '/';
++            cursor = separator + 1;
++            while (*cursor == '/') {
++                cursor++;
++            }
++        }
++        free(tmp);
++        return made;
++    }
++#endif
+     if (directory < 0) {
+         free(tmp);
+         return false;

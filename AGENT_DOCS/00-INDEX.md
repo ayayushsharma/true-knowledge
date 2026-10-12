@@ -2,8 +2,8 @@
 id: 00-index
 title: Docs index, precedence law, and the doc-writing contract
 status: authoritative
-date: 2026-09-29
-supersedes: [AGENT_DOCS/history/00-AUTHORITY.md, AGENT_DOCS/history/AGENT-PROFILES.md, AGENT_DOCS/history/CBM-BOUNDARY.md, AGENT_DOCS/history/INDEXING.md, AGENT_DOCS/history/PATHS-CONFIG.md, AGENT_DOCS/history/REMAINING-WORK.md, AGENT_DOCS/history/ROADMAP.md]
+date: 2026-10-11
+supersedes: [AGENT_DOCS/history/DECISIONS/2026-10-11-android-dev-machine-not-a-target.md, AGENT_DOCS/history/00-AUTHORITY.md, AGENT_DOCS/history/AGENT-PROFILES.md, AGENT_DOCS/history/CBM-BOUNDARY.md, AGENT_DOCS/history/INDEXING.md, AGENT_DOCS/history/PATHS-CONFIG.md, AGENT_DOCS/history/REMAINING-WORK.md, AGENT_DOCS/history/ROADMAP.md]
 superseded-by: null
 ---
 
@@ -123,14 +123,17 @@ one. Stated once here so no individual ADR has to repeat it:
 4. A file over 200 lines is a bug: split it or write an ADR. `docs-lint` fails.
 5. Stale paths are bugs. Every pre-consolidation doc path is forbidden outside
    `history/`, and the exact list is declared in `manifest.json` under
-   `enforcement.forbidden_paths_outside_history`. `docs-lint` fails.
+   `enforcement.forbidden_paths_outside_history`. Foreign trees are not tk's
+   words: `third_party/` (script-owned upstream source) and `dist/` (build
+   output) are excepted. `docs-lint` fails.
 
 ## Enforcement
 
 `go test ./internal/docs` is the doc gate. It checks: front-matter on every
 `NN-*.md`; `id` equals the filename stem; ids unique; every `supersedes` and
 `superseded-by` path resolves; no forbidden pre-consolidation path anywhere in
-the repo outside `history/`; `history/` blobs byte-identical to `git HEAD`;
+the repo outside `history/`, except foreign trees (`third_party/`, `dist/`) that
+carry no tk words; `history/` blobs byte-identical to `git HEAD`;
 `manifest.json` lists exactly the files on disk; the frozen v1 spec is in
 `history/` and not at the repo root; no file over 200 lines.
 

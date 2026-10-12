@@ -1,0 +1,28 @@
+diff --git a/src/daemon/ipc.c b/src/daemon/ipc.c
+index a92befb..c8e5f73 100644
+--- a/src/daemon/ipc.c
++++ b/src/daemon/ipc.c
+@@ -1725,6 +1725,23 @@ static bool posix_directory_transition_secure(int parent_fd, int child_fd) {
+ }
+ 
+ static int private_directory_tree_open(const char *directory_path) {
++#ifdef __ANDROID__
++    /* Android app sandbox: open("/", O_DIRECTORY) fails with EACCES, so the
++     * component-wise walk from / cannot start. The walk exists to catch a
++     * swapped path component, but on Android no other app can write any
++     * ancestor (OS-owned above the app dir, 0700 app-owned below) -- the
++     * sandbox provides the guarantee the walk tries to establish. Open the
++     * target directly (O_NOFOLLOW still refuses a squatted symlink leaf)
++     * and let private_runtime_snapshot below (0700, euid-owned, same
++     * dev/ino via fd and path) remain the real enforcement. */
++    {
++        (void)mkdir(directory_path, 0700);
++        int direct = open(directory_path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
++        if (direct >= 0 && fd_set_cloexec(direct)) return direct;
++        if (direct >= 0) close(direct);
++        return -1;
++    }
++#endif
+     if (!directory_path || !directory_path[0] || O_DIRECTORY == 0 || O_NOFOLLOW == 0) {
+         return -1;
+     }

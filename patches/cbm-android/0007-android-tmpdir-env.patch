@@ -1,0 +1,19 @@
+diff --git a/src/foundation/compat.h b/src/foundation/compat.h
+index 821d901..51dfb5b 100644
+--- a/src/foundation/compat.h
++++ b/src/foundation/compat.h
+@@ -221,6 +221,14 @@ static inline const char *cbm_tmpdir(void) {
+     if (!t)
+         t = getenv("TMP");
+     return t ? t : ".";
++#elif defined(__ANDROID__)
++    /* No /tmp on Android; Termux provides $TMPDIR ($PREFIX/tmp). */
++    const char *t = getenv("TMPDIR");
++    if (!t || !t[0])
++        t = getenv("TEMP");
++    if (!t || !t[0])
++        t = getenv("TMP");
++    return (t && t[0]) ? t : "/tmp";
+ #else
+     return "/tmp";
+ #endif

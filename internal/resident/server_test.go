@@ -173,6 +173,38 @@ func TestResidentPreservesCallerFormat(t *testing.T) {
 	}
 }
 
+// TestResidentDropsEmptyStringArgs: the spawn path drops empty strings in
+// writeArgs, so the resident must too — otherwise the two paths ask different
+// questions. A present file_pattern:"" makes the engine filter every file
+// out (search_code answers empty), while an absent key means unfiltered.
+func TestResidentDropsEmptyStringArgs(t *testing.T) {
+	for _, structured := range []bool{false, true} {
+		eng := newStub()
+		addr := startServer(t, func() (resident.Engine, error) { return eng, nil })
+		if _, err := (&resident.Client{Addr: addr}).Call(resident.Request{
+			Tool: "search_code",
+			Args: map[string]any{
+				"project":      "demo",
+				"pattern":      "Greeter",
+				"file_pattern": "",
+			},
+			Structured: structured,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		eng.mu.Lock()
+		got := eng.calls[0].Args
+		eng.mu.Unlock()
+		if _, ok := got["file_pattern"]; ok {
+			t.Errorf("structured=%v: file_pattern reached the engine as %q, want absent",
+				structured, got["file_pattern"])
+		}
+		if got["project"] != "demo" || got["pattern"] != "Greeter" {
+			t.Errorf("structured=%v: non-empty args mangled: %v", structured, got)
+		}
+	}
+}
+
 // TestResidentSerialisesRequests: the engine is driven one call at a time.
 // A second request that ran concurrently would interleave bytes on one
 // child's pipes, and the reply loop would match the wrong id.

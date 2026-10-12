@@ -1,0 +1,5 @@
+# Hide the Android dev upstream tree from CBM indexing.
+# third_party/ is script-owned (scripts/vendor-cbm-android.sh) and gitignored;
+# a ~100MB upstream source tree must never enter the graph when this repo
+# itself is registered as a project.
+third_party/

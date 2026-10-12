@@ -202,7 +202,12 @@ func (s *Server) serveConn(conn net.Conn) {
 		return
 	}
 
-	args := req.Args
+	// Drop empty strings before the engine sees them: writeArgs does the same
+	// on the spawn path, so without this the two paths ask different
+	// questions. The engine reads a present "" as a real filter —
+	// file_pattern:"" matches no basename, so search_code answers empty —
+	// while an absent key means unfiltered.
+	args := dropEmptyStrings(req.Args)
 	if req.Structured {
 		// The resident does not own the dialect: the caller's Structured
 		// flag becomes the same argument the one-shot path sends, so both
@@ -318,6 +323,23 @@ func writeReply(w io.Writer, r Reply) error {
 	}
 	_, err = w.Write(raw)
 	return err
+}
+
+// dropEmptyStrings mirrors writeArgs on the spawn path: optional fields
+// never reach the engine as "". A nil map stays nil; otherwise the result
+// is a copy, so the caller's map is never mutated.
+func dropEmptyStrings(payload map[string]any) map[string]any {
+	if payload == nil {
+		return nil
+	}
+	out := make(map[string]any, len(payload))
+	for k, v := range payload {
+		if s, ok := v.(string); ok && s == "" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // withFormat sets format:"json" unless the caller already chose one, matching

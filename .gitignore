@@ -14,3 +14,10 @@
 
 # harness editor config (local only)
 opencode.json
+
+# Android dev upstream tree (script-owned, never tracked).
+# scripts/vendor-cbm-android.sh clones the pinned CBM tag here and applies
+# patches/cbm-android/*.patch. Kept out of git, grep, and (via .cbmignore)
+# the index. NOT ./vendor/: the go tool treats a top-level vendor/ as a
+# module vendor directory and fails everything with "inconsistent vendoring".
+/third_party/

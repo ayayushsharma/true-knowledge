@@ -49,3 +49,7 @@ export TK_CBM_BIN="$B" TK_BIN="$TK" TK_PROJECT="$(basename "$REPO")"
 "$TK" index "$TK_PROJECT"
 TK_BENCH_N="${TK_BENCH_N:-15}" go run ./tests/bench
 """
+
+[tasks.vendor-android]
+description = "Android-only: fetch pinned CBM source into third_party/, patch, and build (dev machines; Linux/macOS stay the targets)"
+run = "bash scripts/vendor-cbm-android.sh"

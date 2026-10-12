@@ -6,7 +6,10 @@
 > `AGENT_DOCS/00-INDEX.md`.
 
 `tk` is a thin Go shipper over `codebase-memory-mcp` (CBM). Linux and macOS
-first; Windows a follow-up. tk owns paths, config, one spawn, and render; CBM
+first; Windows a follow-up. Android (Termux) is a dev machine, never a
+deployment target: `tk` builds there unmodified, CBM builds from a
+script-owned `third_party/` tree (`scripts/vendor-cbm-android.sh`), and
+`tk install cbm` has no Android asset by design. tk owns paths, config, one spawn, and render; CBM
 owns the graph, the store, the daemon, and the watcher. `tk` installs every
 external dependency itself — no apt, brew, npm, or toolchain at runtime. There is no `tk`
 supervisor daemon; the CBM coordination daemon is shared per account. The

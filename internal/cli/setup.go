@@ -55,12 +55,9 @@ func cmdSetup(g *Globals) *cobra.Command {
 	c := &cobra.Command{
 		Use:   "setup",
 		Short: "Make this machine ready: init + install backends (+ optional register/client)",
-		Long: `Idempotent fresh-machine setup. Re-running changes nothing when up-to-date.
-Steps: init dirs/config → install all backends at pins → (opt-in) register cwd → (opt-in) client snippet.`,
+		Long:  `Idempotent fresh-machine setup: init, install backends at pins, optional register/client.`,
 		Example: `  tk setup
-  tk setup --dry-run
-  tk setup --register --name demo
-  tk setup --client opencode`,
+  tk setup --register --name demo`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if client == "" && profile != "" {
 				return fail("--tool-profile needs --client")

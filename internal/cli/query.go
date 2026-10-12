@@ -419,8 +419,6 @@ func cmdFind(g *Globals) *cobra.Command {
 		Short:   "Deterministic router: single-token→own index, ident→graph",
 		Aliases: []string{"kg_find"},
 		Example: `  tk find --query ProcessOrder --project demo
-  tk find --query "retry.*backoff" --project demo --limit 20
-  tk find --query Handler --project demo --label Function
   tk find --query internal/cli/query.go --project demo`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

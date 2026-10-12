@@ -142,8 +142,7 @@ func cmdMigrate(g *Globals) *cobra.Command {
 		Use:   "migrate",
 		Short: "Move legacy ~/.tk / $TK_HOME / Library tree into XDG true-knowledge dirs",
 		Example: `  tk migrate --dry-run
-  tk migrate --from ~/.tk
-  tk migrate --force`,
+  tk migrate --from ~/.tk`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, err := load(*g)
 			if err != nil {
@@ -252,14 +251,9 @@ func cmdInstall(g *Globals) *cobra.Command {
 		Use:   "install [backend...]",
 		Short: "Install/update managed indexing backends (default: all)",
 		Long: `Installs missing backends and updates stale ones to their pins.
-Backends live in <cache>/bin (== CBM_CACHE_DIR/bin); checksums verified before any write.
-Replacing a managed binary stops the daemon holding it first, and a daemon with
-live sessions refuses to stop — close them, then retry. No flag overrides that.
-Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DECISIONS.`,
+Checksums verified before any write; a daemon with live sessions refuses to stop — close them, then retry.`,
 		Example: `  tk install                  # install all missing backends
-  tk install cbm --update     # (re)install cbm at its pin
-  tk install --check          # report only, no network
-  tk install cbm --version 0.12.0 --dry-run`,
+  tk install cbm --update     # (re)install cbm at its pin`,
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
 			out := []string{}
 			for _, b := range backends.All() {

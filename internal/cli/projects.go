@@ -45,11 +45,10 @@ func cmdInit(g *Globals) *cobra.Command {
 func cmdRegister(g *Globals) *cobra.Command {
 	var name string
 	c := &cobra.Command{
-		Use:   "register <path>",
-		Short: "Register a repo path (no auto-index)",
-		Args:  cobra.ExactArgs(1),
-		Example: `  tk register ./myrepo --name demo
-  tk register /abs/path`,
+		Use:     "register <path>",
+		Short:   "Register a repo path (no auto-index)",
+		Args:    cobra.ExactArgs(1),
+		Example: `  tk register ./myrepo --name demo`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, err := load(*g)
 			if err != nil {
@@ -94,7 +93,6 @@ func cmdIndex(g *Globals) *cobra.Command {
 		Use:   "index [project]",
 		Short: "Index a project via CBM (default: moderate)",
 		Example: `  tk index demo
-  tk index demo --full
   tk index  # all registered`,
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, _ string) ([]string, cobra.ShellCompDirective) {
 			if len(args) == 0 {

@@ -1,0 +1,64 @@
+.nh
+.TH "true-knowledge" "1" "Oct 2026" "true-knowledge" "tk (true-knowledge)"
+
+.SH NAME
+tk-completion-fish - Generate the autocompletion script for fish
+
+
+.SH SYNOPSIS
+\fBtk completion fish [flags]\fP
+
+
+.SH DESCRIPTION
+Generate the autocompletion script for the fish shell.
+
+.PP
+To load completions in your current shell session:
+
+.EX
+tk completion fish | source
+.EE
+
+.PP
+To load completions for every new session, execute once:
+
+.EX
+tk completion fish > ~/.config/fish/completions/tk.fish
+.EE
+
+.PP
+You will need to start a new shell for this setup to take effect.
+
+
+.SH OPTIONS
+\fB-h\fP, \fB--help\fP[=false]
+	help for fish
+
+.PP
+\fB--no-descriptions\fP[=false]
+	disable completion descriptions
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB--budget\fP=0
+	char budget override (0 = config defaults)
+
+.PP
+\fB--home\fP=""
+	override base home (TK_HOME equivalent)
+
+.PP
+\fB--json\fP[=false]
+	stable JSON envelope output
+
+.PP
+\fB--quiet\fP[=false]
+	errors only on stderr; suppress progress
+
+.PP
+\fB--verbose\fP[=false]
+	debug narration on stderr
+
+
+.SH SEE ALSO
+\fBtk-completion(1)\fP

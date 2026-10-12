@@ -29,11 +29,11 @@ All graph work = codebase-memory-mcp cli <tool> --json via one wrapper.`,
 		logx.Configure(g.Verbose, g.Quiet)
 		return nil
 	}
-	root.PersistentFlags().StringVar(&g.Home, "home", "", "override base home (TK_HOME equivalent: config+data+cache+state under it)")
+	root.PersistentFlags().StringVar(&g.Home, "home", "", "override base home (TK_HOME equivalent)")
 	root.PersistentFlags().BoolVar(&g.JSON, "json", false, "stable JSON envelope output")
 	root.PersistentFlags().IntVar(&g.Budget, "budget", 0, "char budget override (0 = config defaults)")
-	root.PersistentFlags().BoolVar(&g.Verbose, "verbose", false, "debug narration on stderr (TK_LOG=debug)")
-	root.PersistentFlags().BoolVar(&g.Quiet, "quiet", false, "stderr carries errors only; suppress progress (TK_LOG=error)")
+	root.PersistentFlags().BoolVar(&g.Verbose, "verbose", false, "debug narration on stderr")
+	root.PersistentFlags().BoolVar(&g.Quiet, "quiet", false, "errors only on stderr; suppress progress")
 
 	root.AddCommand(
 		cmdInit(g),
@@ -78,7 +78,50 @@ All graph work = codebase-memory-mcp cli <tool> --json via one wrapper.`,
 	currentSinks = inv
 	root.SetOut(io.MultiWriter(os.Stdout, inv.out))
 	wrapAll(root, inv)
+	compactSubcommandHelp(root)
 	return root
+}
+
+// compactHelpTemplate is cobra's default help template with one change: the
+// inherited Global Flags block is replaced by a one-line pointer to the root
+// help. Five persistent flags repeated on ~28 commands cost ~140 lines of
+// context to every agent that reads --help; the flags still exist, still
+// parse, and are still documented once on `tk --help` and in every man page
+// (cobra/doc renders from command fields, not from this template).
+const compactHelpTemplate = `{{with (or .Long .Short)}}{{. | trimTrailingWhitespaces}}
+
+{{end}}Usage:{{if .Runnable}}
+  {{.UseLine}}{{end}}{{if .HasAvailableSubCommands}}
+  {{.CommandPath}} [command]{{end}}{{if gt (len .Aliases) 0}}
+
+Aliases:
+  {{.NameAndAliases}}{{end}}{{if .HasExample}}
+
+Examples:
+{{.Example}}{{end}}{{if .HasAvailableSubCommands}}
+
+Available Commands:{{range .Commands}}{{if (or .IsAvailableCommand (eq .Name "help"))}}
+  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableLocalFlags}}
+
+Flags:
+{{.LocalFlags.FlagUsages | trimTrailingWhitespaces}}{{end}}
+Global flags: see "tk --help" (--budget, --home, --json, --quiet, --verbose).{{if .HasHelpSubCommands}}
+
+Additional help topics:{{range .Commands}}{{if .IsAdditionalHelpTopicCommand}}
+  {{rpad .Name .NamePadding }} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableSubCommands}}
+
+Use "{{.CommandPath}} [command] --help" for more information about a command.{{end}}
+`
+
+// compactSubcommandHelp applies the compact template to every command but
+// the root. The stock help/completion commands are initialized first so they
+// are covered too; anything cobra adds later keeps the default template.
+func compactSubcommandHelp(root *cobra.Command) {
+	root.InitDefaultHelpCmd()
+	root.InitDefaultCompletionCmd()
+	for _, cmd := range root.Commands() {
+		cmd.SetHelpTemplate(compactHelpTemplate)
+	}
 }
 
 // sinks holds the per-invocation record buffers for one root command tree.

@@ -1,0 +1,44 @@
+.nh
+.TH "true-knowledge" "1" "Oct 2026" "true-knowledge" "tk (true-knowledge)"
+
+.SH NAME
+tk-completion - Generate the autocompletion script for the specified shell
+
+
+.SH SYNOPSIS
+\fBtk completion [flags]\fP
+
+
+.SH DESCRIPTION
+Generate the autocompletion script for tk for the specified shell.
+See each sub-command's help for details on how to use the generated script.
+
+
+.SH OPTIONS
+\fB-h\fP, \fB--help\fP[=false]
+	help for completion
+
+
+.SH OPTIONS INHERITED FROM PARENT COMMANDS
+\fB--budget\fP=0
+	char budget override (0 = config defaults)
+
+.PP
+\fB--home\fP=""
+	override base home (TK_HOME equivalent)
+
+.PP
+\fB--json\fP[=false]
+	stable JSON envelope output
+
+.PP
+\fB--quiet\fP[=false]
+	errors only on stderr; suppress progress
+
+.PP
+\fB--verbose\fP[=false]
+	debug narration on stderr
+
+
+.SH SEE ALSO
+\fBtk(1)\fP, \fBtk-completion-bash(1)\fP, \fBtk-completion-fish(1)\fP, \fBtk-completion-powershell(1)\fP, \fBtk-completion-zsh(1)\fP

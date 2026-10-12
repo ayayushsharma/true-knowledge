@@ -1,5 +1,5 @@
 .nh
-.TH "true-knowledge" "1" "Sep 2026" "true-knowledge" "tk (true-knowledge)"
+.TH "true-knowledge" "1" "Oct 2026" "true-knowledge" "tk (true-knowledge)"
 
 .SH NAME
 tk-install - Install/update managed indexing backends (default: all)
@@ -11,10 +11,7 @@ tk-install - Install/update managed indexing backends (default: all)
 
 .SH DESCRIPTION
 Installs missing backends and updates stale ones to their pins.
-Backends live in /bin (== CBM_CACHE_DIR/bin); checksums verified before any write.
-Replacing a managed binary stops the daemon holding it first, and a daemon with
-live sessions refuses to stop — close them, then retry. No flag overrides that.
-Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DECISIONS.
+Checksums verified before any write; a daemon with live sessions refuses to stop — close them, then retry.
 
 
 .SH OPTIONS
@@ -44,7 +41,7 @@ Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DE
 
 .PP
 \fB--home\fP=""
-	override base home (TK_HOME equivalent: config+data+cache+state under it)
+	override base home (TK_HOME equivalent)
 
 .PP
 \fB--json\fP[=false]
@@ -52,19 +49,17 @@ Adding a backend is one entry in internal/backends — see AGENT_DOCS/history/DE
 
 .PP
 \fB--quiet\fP[=false]
-	stderr carries errors only; suppress progress (TK_LOG=error)
+	errors only on stderr; suppress progress
 
 .PP
 \fB--verbose\fP[=false]
-	debug narration on stderr (TK_LOG=debug)
+	debug narration on stderr
 
 
 .SH EXAMPLE
 .EX
   tk install                  # install all missing backends
   tk install cbm --update     # (re)install cbm at its pin
-  tk install --check          # report only, no network
-  tk install cbm --version 0.12.0 --dry-run
 .EE
 
 

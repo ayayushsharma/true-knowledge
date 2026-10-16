@@ -25,6 +25,7 @@ must verify, `dead-end` do not walk again.
 | Where does an MCP server put always-on prose now, and how far behind is tk's protocol version? | `2026-10-03-mcp-instructions-and-protocol-ladder.md` | measured; `initialize` is removed in `2026-07-28` and `instructions` moved to `server/discover`, tk speaks `2025-06-18`, pi offers `2025-11-25` |
 | Why is the evals harness parked — LLM cost? | `2026-10-11-evals-parked-for-stability-not-llm-cost.md` | design; parked for surface stability, phase 1 as designed is LLM-free (scripted contract tests), phase-2 scorer stays deferred and never default |
 | How do N pi sessions share one tk (resident, lifecycle, failures)? | `2026-10-11-pi-extension-multi-session-design.md` | design; one detached resident per TK_HOME, per-session tk mcp, session-keyed extension state, never stop the shared resident, quiesce refuses loudly |
+| How to affirm Linux tests without a Linux runner? | `2026-10-12-linux-tests-on-android-kernel.md` | measured; static GOOS=linux test binaries run on the Android kernel, cli flakes pass as linux, docs SIGSYS is seccomp not code |
 
 ## The one-line version
 
